@@ -137,6 +137,25 @@ constexpr bool built_with_address_sanitizer() {
 
 /// Runs `crash` in a child process with the reporter installed, and returns
 /// how the child died.
+/// Dereferences a null pointer, and keeps doing it after the optimiser has had
+/// its say.
+///
+/// `int* volatile p = nullptr; *p = 1;` is not enough. The volatile is on the
+/// pointer, so the read has to happen, but the store through it does not, and
+/// GCC 13 at -O2 deletes the store as undefined behaviour that need not occur.
+/// The child then returns from the crash and exits normally, and a test about
+/// what a segmentation fault leaves behind stops involving one.
+///
+/// The empty asm makes the pointer's value opaque: the compiler has to assume
+/// the register came back changed, so it can no longer prove the store is
+/// unreachable. Reproduced against the CI's exact compiler before writing this.
+[[noreturn]] void dereference_null() {
+  int* nowhere = nullptr;
+  asm volatile("" : "+r"(nowhere));
+  *static_cast<volatile int*>(nowhere) = 1;
+  ::_exit(3);  // Not reached. Present so the signature can promise it.
+}
+
 int crash_in_a_child(const CrashReporterOptions& options, void (*crash)()) {
   const pid_t child = ::fork();
   if (child == 0) {
@@ -158,12 +177,7 @@ TEST_F(CrashReporterTest, ASegmentationFaultLeavesAReportBehind) {
     GTEST_SKIP() << "AddressSanitizer reports the fault itself and never lets the handler run";
   }
 
-  const int status = crash_in_a_child(options(), [] {
-    // Volatile so that the compiler writes through the pointer instead of
-    // deciding that undefined behaviour need not happen at all.
-    int* volatile nowhere = nullptr;
-    *nowhere = 1;
-  });
+  const int status = crash_in_a_child(options(), dereference_null);
 
   EXPECT_TRUE(WIFSIGNALED(status)) << "the child did not die of a signal";
   EXPECT_EQ(WTERMSIG(status), SIGSEGV)
@@ -202,10 +216,7 @@ TEST_F(CrashReporterTest, TheReportSurvivesACrashInsideTheHandler) {
 
   // The second crash must not produce a second report, and must not recurse:
   // the process has to die instead of spinning in its own handler.
-  const int status = crash_in_a_child(options(), [] {
-    int* volatile nowhere = nullptr;
-    *nowhere = 1;
-  });
+  const int status = crash_in_a_child(options(), dereference_null);
 
   EXPECT_TRUE(WIFSIGNALED(status));
   EXPECT_LE(crash_reports(directory_).size(), 1U);

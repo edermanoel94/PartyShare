@@ -1,7 +1,7 @@
 // End to end tests for the application core of the client.
 //
 // The signaling and the server are real. The media is not: a stand-in
-// AudioSession records what it was asked to do and answers as libwebrtc would.
+// MediaSession records what it was asked to do and answers as libwebrtc would.
 // That is the point of the interface, and it is what lets the whole order of
 // operations of a call be tested without a sound card or a second machine.
 
@@ -26,7 +26,7 @@ using dv::client::app::CallSession;
 using dv::client::app::Participant;
 using dv::server::SignalingServer;
 
-namespace audio = dv::client::audio;
+namespace media = dv::client::media;
 namespace proto = dv::protocol;
 
 constexpr auto kTimeout = 5000ms;
@@ -48,10 +48,10 @@ template <typename Predicate>
 /// leave() destroys the media session, so anything the test wants to assert
 /// afterwards has to outlive it. That is not a detail of the fake: it is how
 /// the real session behaves too.
-struct FakeAudioState {
+struct FakeMediaState {
   std::mutex mutex;
   std::vector<std::string> offers;
-  std::vector<audio::IceCandidate> candidates;
+  std::vector<media::IceCandidate> candidates;
   std::unordered_map<std::string, double> volumes;
   std::string input_device;
   std::string output_device;
@@ -85,9 +85,9 @@ struct FakeAudioState {
 /// Stands in for the libwebrtc session. It answers immediately and reports the
 /// connection as established, which is the sequence the real one follows once
 /// ICE is done.
-class FakeAudioSession : public audio::AudioSession {
+class FakeMediaSession : public media::MediaSession {
  public:
-  FakeAudioSession(Callbacks callbacks, std::shared_ptr<FakeAudioState> state)
+  FakeMediaSession(Callbacks callbacks, std::shared_ptr<FakeMediaState> state)
       : callbacks_(std::move(callbacks)), state_(std::move(state)) {}
 
   dv::Result<std::monostate> apply_remote_offer(const std::string& sdp) override {
@@ -100,15 +100,15 @@ class FakeAudioSession : public audio::AudioSession {
     }
     if (callbacks_.on_local_candidate) {
       callbacks_.on_local_candidate(
-          audio::IceCandidate{"candidate:1 1 UDP 100 127.0.0.1 40000 typ host", "0", 0});
+          media::IceCandidate{"candidate:1 1 UDP 100 127.0.0.1 40000 typ host", "0", 0});
     }
     if (callbacks_.on_state) {
-      callbacks_.on_state(audio::MediaState::Connected);
+      callbacks_.on_state(media::MediaState::Connected);
     }
     return std::monostate{};
   }
 
-  dv::Result<std::monostate> add_remote_candidate(const audio::IceCandidate& candidate) override {
+  dv::Result<std::monostate> add_remote_candidate(const media::IceCandidate& candidate) override {
     const std::lock_guard<std::mutex> lock(state_->mutex);
     state_->candidates.push_back(candidate);
     return std::monostate{};
@@ -137,22 +137,22 @@ class FakeAudioSession : public audio::AudioSession {
   }
 
   /// Reports levels the way the real session does, from its own thread.
-  void report_levels(std::vector<audio::AudioLevel> levels) {
+  void report_levels(std::vector<media::AudioLevel> levels) {
     if (callbacks_.on_levels) {
       callbacks_.on_levels(std::move(levels));
     }
   }
 
-  [[nodiscard]] audio::AudioStats stats() const override {
-    audio::AudioStats stats;
+  [[nodiscard]] media::AudioStats stats() const override {
+    media::AudioStats stats;
     stats.round_trip_time_ms = 12;
     stats.jitter_ms = 3;
     stats.packets_received = 100;
     return stats;
   }
 
-  [[nodiscard]] audio::MediaState state() const override {
-    return state_->closed ? audio::MediaState::Closed : audio::MediaState::Connected;
+  [[nodiscard]] media::MediaState state() const override {
+    return state_->closed ? media::MediaState::Closed : media::MediaState::Connected;
   }
 
   void close() override { state_->closed = true; }
@@ -166,7 +166,7 @@ class FakeAudioSession : public audio::AudioSession {
 
  private:
   Callbacks callbacks_;
-  std::shared_ptr<FakeAudioState> state_;
+  std::shared_ptr<FakeMediaState> state_;
 };
 
 /// Owns a CallSession plus everything its callbacks reach into, so that the
@@ -175,23 +175,23 @@ class Client {
  public:
   Client(std::uint16_t port, std::string username)
       : username_(std::move(username)),
-        audio_state_(std::make_shared<FakeAudioState>()),
+        media_state_(std::make_shared<FakeMediaState>()),
         session_(std::make_unique<CallSession>(
             make_options(port),
-            [this](const audio::AudioSessionOptions&, audio::AudioSession::Callbacks callbacks)
-                -> dv::Result<std::unique_ptr<audio::AudioSession>> {
+            [this](const media::MediaSessionOptions&, media::MediaSession::Callbacks callbacks)
+                -> dv::Result<std::unique_ptr<media::MediaSession>> {
               {
                 const std::lock_guard<std::mutex> lock(mutex_);
                 remote_audio_ = callbacks.on_remote_audio;
               }
-              auto fake = std::make_unique<FakeAudioSession>(std::move(callbacks), audio_state_);
+              auto fake = std::make_unique<FakeMediaSession>(std::move(callbacks), media_state_);
               {
                 const std::lock_guard<std::mutex> lock(mutex_);
-                levels_ = [raw = fake.get()](std::vector<audio::AudioLevel> levels) {
+                levels_ = [raw = fake.get()](std::vector<media::AudioLevel> levels) {
                   raw->report_levels(std::move(levels));
                 };
               }
-              return std::unique_ptr<audio::AudioSession>(std::move(fake));
+              return std::unique_ptr<media::MediaSession>(std::move(fake));
             })) {
     session_->on_events({
         .on_state = [this](CallSession::State state, std::string) { last_state_ = state; },
@@ -200,7 +200,7 @@ class Client {
               const std::lock_guard<std::mutex> lock(mutex_);
               participants_ = std::move(list);
             },
-        .on_metrics = [this](audio::AudioStats) { metrics_reports_.fetch_add(1); },
+        .on_metrics = [this](media::AudioStats) { metrics_reports_.fetch_add(1); },
         .on_local_level =
             [this](double level, bool speaking) {
               local_level_ = level;
@@ -258,13 +258,13 @@ class Client {
 
   [[nodiscard]] CallSession& session() { return *session_; }
   /// Outlives the media session, so it can still be read after leave().
-  [[nodiscard]] FakeAudioState& audio() { return *audio_state_; }
+  [[nodiscard]] FakeMediaState& audio() { return *media_state_; }
 
   /// Reports audio levels, the way the media layer does during a call.
   ///
   /// Only valid while the media session exists: leave() destroys it.
-  void report_levels(std::vector<audio::AudioLevel> levels) {
-    std::function<void(std::vector<audio::AudioLevel>)> handler;
+  void report_levels(std::vector<media::AudioLevel> levels) {
+    std::function<void(std::vector<media::AudioLevel>)> handler;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       handler = levels_;
@@ -321,9 +321,9 @@ class Client {
   std::atomic<double> local_level_{0};
   std::atomic<bool> local_speaking_{false};
   std::function<void(std::string, bool)> remote_audio_;
-  std::function<void(std::vector<audio::AudioLevel>)> levels_;
+  std::function<void(std::vector<media::AudioLevel>)> levels_;
   /// Declared before the session so that it outlives it.
-  std::shared_ptr<FakeAudioState> audio_state_;
+  std::shared_ptr<FakeMediaState> media_state_;
   std::unique_ptr<CallSession> session_;
 };
 
@@ -579,8 +579,8 @@ TEST_F(CallSessionTest, LevelsMarkWhoIsSpeaking) {
 
   const std::string bruno_id = bruno.session().local_user().id;
   ana.report_levels({
-      audio::AudioLevel{{}, 0.7, true},
-      audio::AudioLevel{bruno_id, 0.3, true},
+      media::AudioLevel{{}, 0.7, true},
+      media::AudioLevel{bruno_id, 0.3, true},
   });
 
   EXPECT_TRUE(wait_until([&] {

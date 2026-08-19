@@ -6,7 +6,7 @@
 #include <QApplication>
 
 #include "app/call_session.hpp"
-#include "audio/audio_session.hpp"
+#include "media/media_session.hpp"
 #include "ui/main_window.hpp"
 
 int main(int argc, char* argv[]) {
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
   session_options.audio.input_device = config.audio.input_device;
   session_options.audio.output_device = config.audio.output_device;
 
-  if (!dv::client::audio::media_is_available()) {
+  if (!dv::client::media::media_is_available()) {
     DV_LOG_WARN(
         "This build has no media layer, so calls will have no audio. "
         "Rebuild with -DDV_BUILD_CLIENT_MEDIA=ON, see docs/build.md.");

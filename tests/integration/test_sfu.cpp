@@ -20,7 +20,7 @@
 #include <rtc/rtc.hpp>
 
 #include "network/signaling_client.hpp"
-#include "sfu/audio_router.hpp"
+#include "sfu/media_router.hpp"
 #include "signaling/server.hpp"
 
 namespace {
@@ -280,7 +280,7 @@ class SfuTest : public ::testing::Test {
     }
     server_->start();
     ASSERT_NE(server_->port(), 0);
-    ASSERT_NE(server_->audio_router(), nullptr);
+    ASSERT_NE(server_->media_router(), nullptr);
   }
 
   void TearDown() override {
@@ -305,12 +305,12 @@ TEST_F(SfuTest, TheServerOffersAsSoonAsAParticipantJoins) {
   ASSERT_TRUE(ana.join(ana.created_room_id()));
 
   // One session, and the offer that carries the participant's own microphone.
-  EXPECT_TRUE(wait_until([&] { return server_->audio_router()->session_count() == 1; }));
+  EXPECT_TRUE(wait_until([&] { return server_->media_router()->session_count() == 1; }));
   EXPECT_TRUE(wait_until([&] { return !ana.last_offer_sdp().empty(); }));
   EXPECT_TRUE(wait_until([&] { return ana.has_outgoing_track(); }));
 
   // Alone in the room, there is nobody to listen to yet.
-  EXPECT_EQ(server_->audio_router()->outbound_track_count(ana.user().id), 0U);
+  EXPECT_EQ(server_->media_router()->outbound_track_count(ana.user().id), 0U);
   EXPECT_TRUE(ana.wait_until_media_connected());
 }
 
@@ -327,7 +327,7 @@ TEST_F(SfuTest, EachParticipantGetsOneTrackPerOtherParticipant) {
   ASSERT_TRUE(bruno.join(room));
   ASSERT_TRUE(bruno.wait_until_media_connected());
 
-  auto* router = server_->audio_router();
+  auto* router = server_->media_router();
   EXPECT_TRUE(wait_until([&] { return router->session_count() == 2; }));
   EXPECT_TRUE(wait_until([&] { return router->outbound_track_count(ana.user().id) == 1; }));
   EXPECT_TRUE(wait_until([&] { return router->outbound_track_count(bruno.user().id) == 1; }));
@@ -358,9 +358,9 @@ TEST_F(SfuTest, AudioReachesTheOtherParticipant) {
   ASSERT_TRUE(ana.send_audio(50));
 
   EXPECT_TRUE(wait_until([&] { return bruno.received_rtp() > 0; }))
-      << "no audio arrived. The SFU received " << server_->audio_router()->packets_received()
-      << " packets and forwarded " << server_->audio_router()->packets_forwarded();
-  EXPECT_GT(server_->audio_router()->packets_forwarded(), 0U);
+      << "no audio arrived. The SFU received " << server_->media_router()->audio_packets_received()
+      << " packets and forwarded " << server_->media_router()->audio_packets_forwarded();
+  EXPECT_GT(server_->media_router()->audio_packets_forwarded(), 0U);
 
   // The sender must not hear themselves: forwarding to the source would be an
   // echo the client cannot cancel.
@@ -384,7 +384,7 @@ TEST_F(SfuTest, FiveParticipantsEachGetFourTracks) {
     everyone.push_back(&participant);
   }
 
-  auto* router = server_->audio_router();
+  auto* router = server_->media_router();
   EXPECT_TRUE(wait_until([&] { return router->session_count() == 5; }));
 
   for (Participant* participant : everyone) {
@@ -399,8 +399,8 @@ TEST_F(SfuTest, FiveParticipantsEachGetFourTracks) {
   ASSERT_TRUE(wait_until([&] { return everyone.back()->has_outgoing_track(); }));
   ASSERT_TRUE(everyone.back()->send_audio(50));
 
-  EXPECT_TRUE(wait_until([&] { return router->packets_forwarded() >= 4; }))
-      << "forwarded " << router->packets_forwarded();
+  EXPECT_TRUE(wait_until([&] { return router->audio_packets_forwarded() >= 4; }))
+      << "forwarded " << router->audio_packets_forwarded();
 }
 
 TEST_F(SfuTest, LeavingTakesTheSessionAndTheTracksAway) {
@@ -414,7 +414,7 @@ TEST_F(SfuTest, LeavingTakesTheSessionAndTheTracksAway) {
   ASSERT_TRUE(bruno.login());
   ASSERT_TRUE(bruno.join(room));
 
-  auto* router = server_->audio_router();
+  auto* router = server_->media_router();
   ASSERT_TRUE(wait_until([&] { return router->outbound_track_count(bruno.user().id) == 1; }));
 
   ASSERT_TRUE(ana.leave());

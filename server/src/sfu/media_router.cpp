@@ -1,4 +1,4 @@
-#include "sfu/audio_router.hpp"
+#include "sfu/media_router.hpp"
 
 #include <cstring>
 #include <utility>
@@ -41,11 +41,11 @@ constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc
 
 }  // namespace
 
-AudioRouter::AudioRouter(Options options) : options_(std::move(options)) {
+MediaRouter::MediaRouter(Options options) : options_(std::move(options)) {
   worker_thread_ = std::thread([this] { worker_loop(); });
 }
 
-AudioRouter::~AudioRouter() {
+MediaRouter::~MediaRouter() {
   {
     const std::lock_guard<std::mutex> lock(worker_mutex_);
     stopping_ = true;
@@ -67,12 +67,12 @@ AudioRouter::~AudioRouter() {
   }
 }
 
-void AudioRouter::on_signal(SignalHandler handler) {
+void MediaRouter::on_signal(SignalHandler handler) {
   const std::lock_guard<std::mutex> lock(worker_mutex_);
   signal_handler_ = std::move(handler);
 }
 
-void AudioRouter::on_participant_joined(const std::string& room_id, const models::User& user) {
+void MediaRouter::on_participant_joined(const std::string& room_id, const models::User& user) {
   const std::lock_guard<std::mutex> lock(mutex_);
 
   if (sessions_.contains(user.id)) {
@@ -171,7 +171,7 @@ void AudioRouter::on_participant_joined(const std::string& room_id, const models
   DV_LOG_INFO("SFU: session for {} in room {} ({} sessions)", user.id, room_id, sessions_.size());
 }
 
-void AudioRouter::on_participant_left(const std::string& room_id, const std::string& user_id) {
+void MediaRouter::on_participant_left(const std::string& room_id, const std::string& user_id) {
   std::shared_ptr<rtc::PeerConnection> closing;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -204,7 +204,7 @@ void AudioRouter::on_participant_left(const std::string& room_id, const std::str
   DV_LOG_INFO("SFU: session of {} in room {} closed", user_id, room_id);
 }
 
-void AudioRouter::on_media_signal(const std::string& room_id, const std::string& from_user_id,
+void MediaRouter::on_media_signal(const std::string& room_id, const std::string& from_user_id,
                                   const protocol::Message& message) {
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -245,28 +245,28 @@ void AudioRouter::on_media_signal(const std::string& room_id, const std::string&
       message);
 }
 
-std::size_t AudioRouter::session_count() const {
+std::size_t MediaRouter::session_count() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return sessions_.size();
 }
 
-std::size_t AudioRouter::outbound_track_count(const std::string& user_id) const {
+std::size_t MediaRouter::outbound_track_count(const std::string& user_id) const {
   const std::lock_guard<std::mutex> lock(mutex_);
   const Session* session = find_session(user_id);
   return session == nullptr ? 0 : session->outbound.size();
 }
 
-AudioRouter::Session* AudioRouter::find_session(const std::string& user_id) {
+MediaRouter::Session* MediaRouter::find_session(const std::string& user_id) {
   const auto it = sessions_.find(user_id);
   return it == sessions_.end() ? nullptr : &it->second;
 }
 
-const AudioRouter::Session* AudioRouter::find_session(const std::string& user_id) const {
+const MediaRouter::Session* MediaRouter::find_session(const std::string& user_id) const {
   const auto it = sessions_.find(user_id);
   return it == sessions_.end() ? nullptr : &it->second;
 }
 
-void AudioRouter::add_outbound_track(Session& session, const std::string& source_user_id) {
+void MediaRouter::add_outbound_track(Session& session, const std::string& source_user_id) {
   if (session.outbound.contains(source_user_id)) {
     return;
   }
@@ -297,7 +297,7 @@ void AudioRouter::add_outbound_track(Session& session, const std::string& source
   session.renegotiation_pending = true;
 }
 
-void AudioRouter::negotiate(Session& session) {
+void MediaRouter::negotiate(Session& session) {
   if (!session.renegotiation_pending && session.connection->localDescription().has_value()) {
     return;
   }
@@ -318,7 +318,7 @@ void AudioRouter::negotiate(Session& session) {
   }
 }
 
-void AudioRouter::forward_audio(const std::string& from_user_id, const std::string& room_id,
+void MediaRouter::forward_audio(const std::string& from_user_id, const std::string& room_id,
                                 rtc::binary packet) {
   if (rtc::IsRtcp(packet)) {
     // Handled by the track's own RTCP session, not something to forward.
@@ -327,7 +327,7 @@ void AudioRouter::forward_audio(const std::string& from_user_id, const std::stri
   if (packet.size() < sizeof(rtc::RtpHeader)) {
     return;
   }
-  packets_received_.fetch_add(1, std::memory_order_relaxed);
+  audio_packets_received_.fetch_add(1, std::memory_order_relaxed);
 
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -348,11 +348,11 @@ void AudioRouter::forward_audio(const std::string& from_user_id, const std::stri
     header->setPayloadType(static_cast<std::uint8_t>(it->second.payload_type));
 
     it->second.track->send(std::move(copy));
-    packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
+    audio_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
-void AudioRouter::enqueue(const std::string& user_id, protocol::Message message) {
+void MediaRouter::enqueue(const std::string& user_id, protocol::Message message) {
   post([this, user_id, message = std::move(message)]() mutable {
     SignalHandler handler;
     {
@@ -365,13 +365,13 @@ void AudioRouter::enqueue(const std::string& user_id, protocol::Message message)
   });
 }
 
-void AudioRouter::post(std::function<void()> task) {
+void MediaRouter::post(std::function<void()> task) {
   const std::lock_guard<std::mutex> lock(worker_mutex_);
   tasks_.push_back(std::move(task));
   worker_changed_.notify_one();
 }
 
-void AudioRouter::worker_loop() {
+void MediaRouter::worker_loop() {
   while (true) {
     std::function<void()> task;
     {

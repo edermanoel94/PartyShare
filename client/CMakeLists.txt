@@ -13,15 +13,15 @@
 # not link with Qt. See docs/webrtc-toolchain.md.
 #
 # Off by default so that the server, the tests and a CI runner without the
-# toolchain still build the client library. With it off, create_audio_session
+# toolchain still build the client library. With it off, create_media_session
 # fails with media_unavailable and everything above it still works.
 option(DV_BUILD_CLIENT_MEDIA "Build the client media layer on libwebrtc" OFF)
 
 add_library(dv_client_core STATIC
   src/app/call_session.cpp
   src/app/call_session.hpp
-  src/audio/audio_session.cpp
-  src/audio/audio_session.hpp
+  src/media/media_session.cpp
+  src/media/media_session.hpp
   src/network/signaling_client.cpp
   src/network/signaling_client.hpp
 )
@@ -42,14 +42,14 @@ if(DV_BUILD_CLIENT_MEDIA)
 
   # A target of its own because the strict warning set cannot be applied to a
   # translation unit that includes libwebrtc headers.
-  add_library(dv_client_media STATIC src/webrtc/libwebrtc_audio_session.cpp)
+  add_library(dv_client_media STATIC src/webrtc/libwebrtc_media_session.cpp)
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(dv_client_media PUBLIC dv::shared libwebrtc::libwebrtc)
   dv_enable_sanitizers(dv_client_media)
 
-  # DV_WITH_LIBWEBRTC compiles out the stub in audio/audio_session.cpp, so that
-  # exactly one definition of create_audio_session exists.
+  # DV_WITH_LIBWEBRTC compiles out the stub in media/media_session.cpp, so that
+  # exactly one definition of create_media_session exists.
   target_compile_definitions(dv_client_core PRIVATE DV_WITH_LIBWEBRTC)
   target_link_libraries(dv_client_core PUBLIC dv_client_media)
 

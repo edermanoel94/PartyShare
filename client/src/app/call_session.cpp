@@ -43,11 +43,11 @@ std::string_view to_string(CallSession::State state) noexcept {
 }
 
 CallSession::CallSession(Options options)
-    : CallSession(std::move(options), audio::create_audio_session) {}
+    : CallSession(std::move(options), media::create_media_session) {}
 
-CallSession::CallSession(Options options, AudioSessionFactory factory)
+CallSession::CallSession(Options options, MediaSessionFactory factory)
     : options_(std::move(options)),
-      audio_factory_(std::move(factory)),
+      media_factory_(std::move(factory)),
       signaling_(SignalingClient::Options{options_.signaling_url}) {
   signaling_.on_message([this](protocol::Message message) { handle_signal(std::move(message)); });
   signaling_.on_state([this](SignalingClient::State state, const std::string& detail) {
@@ -124,7 +124,7 @@ Result<std::monostate> CallSession::join(const std::string& room_id,
 Result<std::monostate> CallSession::leave() {
   std::string user_id;
   std::string room;
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     user_id = local_user_.id;
@@ -150,7 +150,7 @@ Result<std::monostate> CallSession::leave() {
 Result<std::monostate> CallSession::set_muted(bool muted) {
   std::string user_id;
   std::string room;
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     user_id = local_user_.id;
@@ -182,7 +182,7 @@ bool CallSession::muted() const {
 
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     volumes_[user_id] = volume;
@@ -197,7 +197,7 @@ Result<std::monostate> CallSession::set_participant_volume(const std::string& us
 }
 
 Result<std::monostate> CallSession::set_input_device(const std::string& device_id) {
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     options_.audio.input_device = device_id;
@@ -210,7 +210,7 @@ Result<std::monostate> CallSession::set_input_device(const std::string& device_i
 }
 
 Result<std::monostate> CallSession::set_output_device(const std::string& device_id) {
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     options_.audio.output_device = device_id;
@@ -227,7 +227,7 @@ void CallSession::disconnect() {
     metrics_thread_.join();
   }
 
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     session.swap(audio_);
@@ -262,13 +262,13 @@ std::vector<Participant> CallSession::participants() const {
   return sorted(participants_);
 }
 
-audio::AudioStats CallSession::stats() const {
-  std::shared_ptr<audio::AudioSession> session;
+media::AudioStats CallSession::stats() const {
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     session = audio_;
   }
-  return session ? session->stats() : audio::AudioStats{};
+  return session ? session->stats() : media::AudioStats{};
 }
 
 void CallSession::handle_signaling_state(SignalingClient::State state, const std::string& detail) {
@@ -415,12 +415,12 @@ void CallSession::handle_offer(const protocol::Offer& offer) {
     return;
   }
 
-  if (auto ready = ensure_audio_session(); !ready) {
+  if (auto ready = ensure_media_session(); !ready) {
     report(ready.error());
     return;
   }
 
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     session = audio_;
@@ -441,7 +441,7 @@ void CallSession::handle_ice_candidate(const protocol::IceCandidate& candidate) 
     return;
   }
 
-  std::shared_ptr<audio::AudioSession> session;
+  std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     session = audio_;
@@ -454,14 +454,14 @@ void CallSession::handle_ice_candidate(const protocol::IceCandidate& candidate) 
     return;
   }
 
-  const audio::IceCandidate value{candidate.candidate, candidate.sdp_mid,
+  const media::IceCandidate value{candidate.candidate, candidate.sdp_mid,
                                   candidate.sdp_mline_index};
   if (auto added = session->add_remote_candidate(value); !added) {
     report(added.error());
   }
 }
 
-Result<std::monostate> CallSession::ensure_audio_session() {
+Result<std::monostate> CallSession::ensure_media_session() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (audio_) {
@@ -469,7 +469,7 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     }
   }
 
-  audio::AudioSession::Callbacks callbacks;
+  media::MediaSession::Callbacks callbacks;
 
   callbacks.on_local_answer = [this](std::string sdp) {
     std::string room;
@@ -486,7 +486,7 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     }
   };
 
-  callbacks.on_local_candidate = [this](audio::IceCandidate candidate) {
+  callbacks.on_local_candidate = [this](media::IceCandidate candidate) {
     std::string room;
     std::string user_id;
     {
@@ -512,11 +512,11 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     publish_participants();
   };
 
-  callbacks.on_levels = [this](std::vector<audio::AudioLevel> levels) {
+  callbacks.on_levels = [this](std::vector<media::AudioLevel> levels) {
     Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
-      for (const audio::AudioLevel& level : levels) {
+      for (const media::AudioLevel& level : levels) {
         // An empty user id is the local microphone. It is reported on its own
         // below, for the level meter, and also lands on the local participant:
         // a room where everyone is marked as speaking except you reads as a
@@ -530,7 +530,7 @@ Result<std::monostate> CallSession::ensure_audio_session() {
       handlers = callbacks_;
     }
 
-    for (const audio::AudioLevel& level : levels) {
+    for (const media::AudioLevel& level : levels) {
       if (level.user_id.empty() && handlers.on_local_level) {
         handlers.on_local_level(level.level, level.speaking);
       }
@@ -538,28 +538,28 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     publish_participants();
   };
 
-  callbacks.on_state = [this](audio::MediaState state) {
+  callbacks.on_state = [this](media::MediaState state) {
     switch (state) {
-      case audio::MediaState::Connected:
+      case media::MediaState::Connected:
         set_state(State::InCall, "media connected");
         break;
-      case audio::MediaState::Failed:
+      case media::MediaState::Failed:
         set_state(State::Failed, "the media connection failed");
         break;
-      case audio::MediaState::New:
-      case audio::MediaState::Connecting:
-      case audio::MediaState::Disconnected:
-      case audio::MediaState::Closed:
+      case media::MediaState::New:
+      case media::MediaState::Connecting:
+      case media::MediaState::Disconnected:
+      case media::MediaState::Closed:
         break;
     }
   };
 
-  auto created = audio_factory_(options_.audio, std::move(callbacks));
+  auto created = media_factory_(options_.audio, std::move(callbacks));
   if (!created) {
     return Result<std::monostate>::failure(created.error());
   }
 
-  std::shared_ptr<audio::AudioSession> session = std::move(created).take();
+  std::shared_ptr<media::MediaSession> session = std::move(created).take();
 
   bool muted = false;
   {
@@ -657,7 +657,7 @@ void CallSession::metrics_loop() {
     }
     next_report = std::chrono::steady_clock::now() + options_.metrics_interval;
 
-    std::shared_ptr<audio::AudioSession> session;
+    std::shared_ptr<media::MediaSession> session;
     Callbacks callbacks;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -668,7 +668,7 @@ void CallSession::metrics_loop() {
       continue;
     }
 
-    const audio::AudioStats stats = session->stats();
+    const media::AudioStats stats = session->stats();
     DV_LOG_INFO(
         "Audio: rtt {:.0f} ms, jitter {:.1f} ms, lost {} packets, up {:.0f} kbps, down {:.0f} kbps",
         stats.round_trip_time_ms, stats.jitter_ms, stats.packets_lost, stats.send_bitrate_kbps,

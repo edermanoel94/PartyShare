@@ -19,7 +19,11 @@
 
 namespace dv::server::sfu {
 
-/// Forwards audio between the participants of a room, section 12 of SPEC.md.
+/// Forwards media between the participants of a room, section 12 of SPEC.md.
+///
+/// Audio today, video from M6. Both travel on the same connection per
+/// participant, because a second one would be a second ICE negotiation and a
+/// second DTLS handshake for no gain.
 ///
 /// Topology: every participant has one PeerConnection with the server, never
 /// with each other. A room of five participants is five connections, not
@@ -39,7 +43,7 @@ namespace dv::server::sfu {
 /// Nothing is transcoded. Opus packets are forwarded as they arrive, with the
 /// SSRC and the payload type rewritten to the ones negotiated on the outgoing
 /// track.
-class AudioRouter : public MediaSignals {
+class MediaRouter : public MediaSignals {
  public:
   struct Options {
     /// STUN and TURN URLs, in libdatachannel form, for example
@@ -55,13 +59,13 @@ class AudioRouter : public MediaSignals {
   /// thread, so it is free to take whatever locks the transport needs.
   using SignalHandler = std::function<void(const std::string& user_id, protocol::Message)>;
 
-  explicit AudioRouter(Options options);
-  ~AudioRouter() override;
+  explicit MediaRouter(Options options);
+  ~MediaRouter() override;
 
-  AudioRouter(const AudioRouter&) = delete;
-  AudioRouter& operator=(const AudioRouter&) = delete;
-  AudioRouter(AudioRouter&&) = delete;
-  AudioRouter& operator=(AudioRouter&&) = delete;
+  MediaRouter(const MediaRouter&) = delete;
+  MediaRouter& operator=(const MediaRouter&) = delete;
+  MediaRouter(MediaRouter&&) = delete;
+  MediaRouter& operator=(MediaRouter&&) = delete;
 
   void on_signal(SignalHandler handler);
 
@@ -78,11 +82,13 @@ class AudioRouter : public MediaSignals {
   /// Number of outgoing tracks a participant has, one per other participant.
   [[nodiscard]] std::size_t outbound_track_count(const std::string& user_id) const;
   /// Audio packets received from participants since startup.
-  [[nodiscard]] std::uint64_t packets_received() const noexcept { return packets_received_.load(); }
+  [[nodiscard]] std::uint64_t audio_packets_received() const noexcept {
+    return audio_packets_received_.load();
+  }
   /// Audio packets forwarded since startup. One received packet becomes one
   /// forwarded packet per other participant in the room.
-  [[nodiscard]] std::uint64_t packets_forwarded() const noexcept {
-    return packets_forwarded_.load();
+  [[nodiscard]] std::uint64_t audio_packets_forwarded() const noexcept {
+    return audio_packets_forwarded_.load();
   }
 
  private:
@@ -148,8 +154,8 @@ class AudioRouter : public MediaSignals {
   bool stopping_ = false;
   std::thread worker_thread_;
 
-  std::atomic<std::uint64_t> packets_received_{0};
-  std::atomic<std::uint64_t> packets_forwarded_{0};
+  std::atomic<std::uint64_t> audio_packets_received_{0};
+  std::atomic<std::uint64_t> audio_packets_forwarded_{0};
 };
 
 }  // namespace dv::server::sfu

@@ -25,7 +25,7 @@
 #include <gtest/gtest.h>
 
 #include "app/call_session.hpp"
-#include "sfu/audio_router.hpp"
+#include "sfu/media_router.hpp"
 #include "signaling/server.hpp"
 
 namespace {
@@ -35,7 +35,7 @@ using dv::client::app::CallSession;
 using dv::client::app::Participant;
 using dv::server::SignalingServer;
 
-namespace audio = dv::client::audio;
+namespace media = dv::client::media;
 
 /// Media takes longer than signaling: ICE has to gather, DTLS has to
 /// handshake, and the first packets only follow after that.
@@ -66,7 +66,7 @@ class Client {
               const std::lock_guard<std::mutex> lock(mutex_);
               participants_ = std::move(list);
             },
-        .on_metrics = [this](audio::AudioStats stats) { last_stats_ = stats; },
+        .on_metrics = [this](media::AudioStats stats) { last_stats_ = stats; },
         .on_local_level =
             [this](double level, bool speaking) {
               highest_local_level_ = std::max(highest_local_level_.load(), level);
@@ -115,7 +115,7 @@ class Client {
   }
 
   [[nodiscard]] CallSession& session() { return *session_; }
-  [[nodiscard]] audio::AudioStats last_stats() const { return last_stats_; }
+  [[nodiscard]] media::AudioStats last_stats() const { return last_stats_; }
   [[nodiscard]] double highest_local_level() const { return highest_local_level_.load(); }
   [[nodiscard]] bool local_speaking_seen() const { return local_speaking_seen_.load(); }
   [[nodiscard]] std::uint64_t errors() const { return errors_.load(); }
@@ -155,7 +155,7 @@ class Client {
   std::vector<Participant> participants_;
   std::string created_room_;
   std::atomic<CallSession::State> state_{CallSession::State::Idle};
-  std::atomic<audio::AudioStats> last_stats_{};
+  std::atomic<media::AudioStats> last_stats_{};
   std::atomic<std::uint64_t> errors_{0};
   std::atomic<double> highest_local_level_{0};
   std::atomic<bool> local_speaking_seen_{false};
@@ -165,7 +165,7 @@ class Client {
 class MediaEndToEndTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    if (!audio::media_is_available()) {
+    if (!media::media_is_available()) {
       GTEST_SKIP() << "libwebrtc could not start on this machine";
     }
 
@@ -232,7 +232,7 @@ TEST_F(MediaEndToEndTest, TwoClientsShareARoomAndTheSfuForwardsTheirAudio) {
   ASSERT_TRUE(wait_until([&] { return ana.participants().size() == 2; }));
   ASSERT_TRUE(wait_until([&] { return bruno.participants().size() == 2; }));
 
-  auto* router = server_->audio_router();
+  auto* router = server_->media_router();
   ASSERT_NE(router, nullptr);
 
   // One track each way, carrying the other participant.
@@ -243,9 +243,9 @@ TEST_F(MediaEndToEndTest, TwoClientsShareARoomAndTheSfuForwardsTheirAudio) {
 
   // Audio itself. A machine with no working capture device still encodes and
   // sends, because libwebrtc falls back to silence rather than to nothing.
-  EXPECT_TRUE(wait_until([&] { return router->packets_received() > 0; }))
+  EXPECT_TRUE(wait_until([&] { return router->audio_packets_received() > 0; }))
       << "no audio reached the SFU";
-  EXPECT_TRUE(wait_until([&] { return router->packets_forwarded() > 0; }))
+  EXPECT_TRUE(wait_until([&] { return router->audio_packets_forwarded() > 0; }))
       << "the SFU received audio but forwarded none";
 }
 
@@ -319,12 +319,12 @@ TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {
     GTEST_SKIP() << "no virtual device: run scripts/virtual_audio.sh start first";
   }
 
-  const auto inputs = audio::input_devices();
+  const auto inputs = media::input_devices();
   ASSERT_TRUE(inputs.ok()) << inputs.error().message;
 
   std::string listed;
   bool present = false;
-  for (const audio::AudioDevice& device : inputs.value()) {
+  for (const media::AudioDevice& device : inputs.value()) {
     listed += "\n  " + device.id;
     present = present || device.id == virtual_input;
   }
@@ -343,8 +343,8 @@ TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {
   ASSERT_TRUE(bruno.join(room));
   ASSERT_TRUE(bruno.wait_until_in_call());
 
-  auto* router = server_->audio_router();
-  EXPECT_TRUE(wait_until([&] { return router->packets_forwarded() > 0; }))
+  auto* router = server_->media_router();
+  EXPECT_TRUE(wait_until([&] { return router->audio_packets_forwarded() > 0; }))
       << "no audio made it through the SFU from the virtual device";
 
   // The script keeps a tone playing into the virtual microphone, so unlike a
@@ -375,17 +375,17 @@ TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {
 }
 
 TEST_F(MediaEndToEndTest, TheSystemAudioDevicesCanBeListed) {
-  const auto inputs = audio::input_devices();
+  const auto inputs = media::input_devices();
   ASSERT_TRUE(inputs.ok()) << inputs.error().message;
 
-  const auto outputs = audio::output_devices();
+  const auto outputs = media::output_devices();
   ASSERT_TRUE(outputs.ok()) << outputs.error().message;
 
   if (inputs.value().empty() && outputs.value().empty()) {
     GTEST_SKIP() << "this machine has no audio devices";
   }
 
-  for (const audio::AudioDevice& device : inputs.value()) {
+  for (const media::AudioDevice& device : inputs.value()) {
     EXPECT_FALSE(device.id.empty());
     EXPECT_FALSE(device.name.empty());
   }
@@ -397,7 +397,7 @@ TEST_F(MediaEndToEndTest, TheSystemAudioDevicesCanBeListed) {
 }
 
 TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
-  const auto inputs = audio::input_devices();
+  const auto inputs = media::input_devices();
   ASSERT_TRUE(inputs.ok()) << inputs.error().message;
   if (inputs.value().empty()) {
     GTEST_SKIP() << "this machine has no capture device";
@@ -415,13 +415,13 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
   ASSERT_TRUE(bruno.join(room));
   ASSERT_TRUE(bruno.wait_until_in_call());
 
-  auto* router = server_->audio_router();
-  ASSERT_TRUE(wait_until([&] { return router->packets_received() > 0; }));
+  auto* router = server_->media_router();
+  ASSERT_TRUE(wait_until([&] { return router->audio_packets_received() > 0; }));
 
   // The second device when there is one, otherwise the same device again:
   // either way the capture is stopped and started, which is what has to stay
   // quick. Section 9 of SPEC.md allows 500 ms.
-  const audio::AudioDevice& target =
+  const media::AudioDevice& target =
       inputs.value().size() > 1 ? inputs.value()[1] : inputs.value()[0];
 
   const auto switched_at = std::chrono::steady_clock::now();
@@ -429,8 +429,8 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
 
   // The gap is measured from the audio the server actually receives, which is
   // the only place where an interruption is real rather than assumed.
-  std::uint64_t before = router->packets_received();
-  ASSERT_TRUE(wait_until([&] { return router->packets_received() > before + 5; }, 3000ms))
+  std::uint64_t before = router->audio_packets_received();
+  ASSERT_TRUE(wait_until([&] { return router->audio_packets_received() > before + 5; }, 3000ms))
       << "audio never came back after the switch";
 
   const auto gap = std::chrono::steady_clock::now() - switched_at;
@@ -480,7 +480,7 @@ TEST_F(MediaEndToEndTest, MutingStopsTheOutgoingAudio) {
   ASSERT_TRUE(bruno.join(room));
   ASSERT_TRUE(bruno.wait_until_in_call());
 
-  ASSERT_TRUE(wait_until([&] { return server_->audio_router()->packets_received() > 0; }));
+  ASSERT_TRUE(wait_until([&] { return server_->media_router()->audio_packets_received() > 0; }));
   ASSERT_TRUE(ana.session().set_muted(true).ok());
 
   // Muting disables the track rather than renegotiating, so the connection

@@ -14,7 +14,7 @@ SignalingServer::SignalingServer(Options options)
     return;
   }
 
-  router_ = std::make_unique<sfu::AudioRouter>(options_.sfu);
+  router_ = std::make_unique<sfu::MediaRouter>(options_.sfu);
   router_->on_signal([this](const std::string& user_id, protocol::Message message) {
     send_to_user(user_id, message);
   });

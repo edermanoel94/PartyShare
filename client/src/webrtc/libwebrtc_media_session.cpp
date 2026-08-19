@@ -1,12 +1,12 @@
-// The libwebrtc side of audio::AudioSession.
+// The libwebrtc side of media::MediaSession.
 //
 // This is the only file in the client that includes a libwebrtc header. Above
-// it there is the interface in client/src/audio/audio_session.hpp, and below it
+// it there is the interface in client/src/media/media_session.hpp, and below it
 // nothing else in the project depends on the toolchain described in
 // docs/webrtc-toolchain.md.
 //
 // Built only when DV_BUILD_CLIENT_MEDIA is on. The stub that takes its place
-// otherwise lives in client/src/audio/audio_session.cpp.
+// otherwise lives in client/src/media/media_session.cpp.
 
 #include <algorithm>
 #include <atomic>
@@ -52,9 +52,9 @@
 
 #include <dv/logging/logger.hpp>
 
-#include "audio/audio_session.hpp"
+#include "media/media_session.hpp"
 
-namespace dv::client::audio {
+namespace dv::client::media {
 namespace {
 
 /// The libwebrtc runtime: three threads, the factory, and SSL.
@@ -335,7 +335,7 @@ constexpr auto kSpeakingHold = std::chrono::milliseconds(600);
   return MediaState::New;
 }
 
-class LibwebrtcAudioSession;
+class LibwebrtcMediaSession;
 
 /// Applies the answer libwebrtc just produced and hands the SDP up.
 class LocalDescriptionObserver : public webrtc::SetLocalDescriptionObserverInterface {
@@ -371,11 +371,11 @@ class StatsObserver : public webrtc::RTCStatsCollectorCallback {
   Handler handler_;
 };
 
-class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConnectionObserver {
+class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConnectionObserver {
  public:
-  explicit LibwebrtcAudioSession(Callbacks callbacks) : callbacks_(std::move(callbacks)) {}
+  explicit LibwebrtcMediaSession(Callbacks callbacks) : callbacks_(std::move(callbacks)) {}
 
-  ~LibwebrtcAudioSession() override {
+  ~LibwebrtcMediaSession() override {
     close();
     if (stats_thread_.joinable()) {
       stats_thread_.join();
@@ -385,7 +385,7 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
     }
   }
 
-  [[nodiscard]] Result<std::monostate> start(const AudioSessionOptions& options) {
+  [[nodiscard]] Result<std::monostate> start(const MediaSessionOptions& options) {
     Engine& engine = Engine::instance();
     if (engine.factory() == nullptr) {
       return Result<std::monostate>::failure("media_unavailable", engine.failure());
@@ -445,7 +445,7 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
     return std::monostate{};
   }
 
-  // --- AudioSession ----------------------------------------------------------
+  // --- MediaSession ----------------------------------------------------------
 
   Result<std::monostate> apply_remote_offer(const std::string& sdp) override {
     webrtc::SdpParseError parse_error;
@@ -857,17 +857,17 @@ Result<std::vector<AudioDevice>> output_devices() {
   return Engine::instance().devices(/*input=*/false);
 }
 
-Result<std::unique_ptr<AudioSession>> create_audio_session(const AudioSessionOptions& options,
-                                                           AudioSession::Callbacks callbacks) {
-  auto session = std::make_unique<LibwebrtcAudioSession>(std::move(callbacks));
+Result<std::unique_ptr<MediaSession>> create_media_session(const MediaSessionOptions& options,
+                                                           MediaSession::Callbacks callbacks) {
+  auto session = std::make_unique<LibwebrtcMediaSession>(std::move(callbacks));
   if (auto started = session->start(options); !started) {
-    return Result<std::unique_ptr<AudioSession>>::failure(started.error());
+    return Result<std::unique_ptr<MediaSession>>::failure(started.error());
   }
-  return std::unique_ptr<AudioSession>(std::move(session));
+  return std::unique_ptr<MediaSession>(std::move(session));
 }
 
 bool media_is_available() noexcept {
   return Engine::instance().factory() != nullptr;
 }
 
-}  // namespace dv::client::audio
+}  // namespace dv::client::media

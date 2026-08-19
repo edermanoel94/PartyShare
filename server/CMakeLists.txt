@@ -4,7 +4,7 @@ find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 # both with and without a real socket.
 add_library(dv_server_core STATIC
   src/rooms/room_manager.cpp
-  src/sfu/audio_router.cpp
+  src/sfu/media_router.cpp
   src/signaling/authenticator.cpp
   src/signaling/hub.cpp
   src/signaling/server.cpp

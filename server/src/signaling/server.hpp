@@ -10,7 +10,7 @@
 
 #include <rtc/rtc.hpp>
 
-#include "sfu/audio_router.hpp"
+#include "sfu/media_router.hpp"
 #include "signaling/hub.hpp"
 
 namespace dv::server {
@@ -36,7 +36,7 @@ class SignalingServer {
     /// what the M2 tests drive and what a deployment that relays nothing but
     /// negotiation would run.
     bool enable_sfu = true;
-    sfu::AudioRouter::Options sfu;
+    sfu::MediaRouter::Options sfu;
   };
 
   explicit SignalingServer(Options options);
@@ -61,7 +61,7 @@ class SignalingServer {
   [[nodiscard]] std::size_t connection_count();
 
   /// Null when the server was configured without media routing.
-  [[nodiscard]] sfu::AudioRouter* audio_router() noexcept { return router_.get(); }
+  [[nodiscard]] sfu::MediaRouter* media_router() noexcept { return router_.get(); }
 
  private:
   void on_client(std::shared_ptr<rtc::WebSocket> socket);
@@ -76,7 +76,7 @@ class SignalingServer {
   Hub hub_;
   /// Declared after the Hub so that it is destroyed first: the Hub holds a
   /// pointer to it while media routing is on.
-  std::unique_ptr<sfu::AudioRouter> router_;
+  std::unique_ptr<sfu::MediaRouter> router_;
 
   mutable std::mutex mutex_;
   std::unique_ptr<rtc::WebSocketServer> server_;

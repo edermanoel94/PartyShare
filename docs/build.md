@@ -43,7 +43,7 @@ cmake --preset linux-release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsys
 ## Camada de mídia do cliente
 
 O cliente compila sem a libwebrtc por padrão.
-Nesse modo tudo funciona menos o áudio: `create_audio_session` falha com `media_unavailable`, e a interface e o signaling continuam inteiros.
+Nesse modo tudo funciona menos o áudio: `create_media_session` falha com `media_unavailable`, e a interface e o signaling continuam inteiros.
 
 Para compilar com mídia é preciso a árvore que o `scripts/build_webrtc.sh` produz, pelos motivos da seção 5 de [webrtc-toolchain.md](webrtc-toolchain.md):
 

@@ -10,7 +10,7 @@
 
 #include <dv/core/result.hpp>
 
-namespace dv::client::audio {
+namespace dv::client::media {
 
 /// One ICE candidate, in the shape the signaling protocol carries it.
 struct IceCandidate {
@@ -111,7 +111,7 @@ enum class MediaState : std::uint8_t {
 /// Implementations are thread safe, and every callback arrives on a media
 /// thread, never on the caller's. Whatever the callbacks capture has to outlive
 /// the session.
-class AudioSession {
+class MediaSession {
  public:
   struct Callbacks {
     /// The answer to send back to the SFU.
@@ -127,13 +127,13 @@ class AudioSession {
     std::function<void(std::vector<AudioLevel> levels)> on_levels;
   };
 
-  AudioSession() = default;
-  virtual ~AudioSession() = default;
+  MediaSession() = default;
+  virtual ~MediaSession() = default;
 
-  AudioSession(const AudioSession&) = delete;
-  AudioSession& operator=(const AudioSession&) = delete;
-  AudioSession(AudioSession&&) = delete;
-  AudioSession& operator=(AudioSession&&) = delete;
+  MediaSession(const MediaSession&) = delete;
+  MediaSession& operator=(const MediaSession&) = delete;
+  MediaSession(MediaSession&&) = delete;
+  MediaSession& operator=(MediaSession&&) = delete;
 
   /// Applies the SFU's offer and produces the answer, which arrives through
   /// `on_local_answer`. Fails with `invalid_sdp` when the offer cannot be
@@ -169,7 +169,7 @@ class AudioSession {
   virtual void close() = 0;
 };
 
-struct AudioSessionOptions {
+struct MediaSessionOptions {
   /// STUN and TURN URLs. TURN credentials go in `turn_username` and
   /// `turn_password` rather than inside the URL, so the password does not end
   /// up in a log line.
@@ -196,8 +196,8 @@ struct AudioSessionOptions {
 /// Fails with `media_unavailable` in a build made without libwebrtc, which is
 /// how the server, the tests and a CI runner without the toolchain still get a
 /// working client library.
-[[nodiscard]] Result<std::unique_ptr<AudioSession>> create_audio_session(
-    const AudioSessionOptions& options, AudioSession::Callbacks callbacks);
+[[nodiscard]] Result<std::unique_ptr<MediaSession>> create_media_session(
+    const MediaSessionOptions& options, MediaSession::Callbacks callbacks);
 
 /// True when this build can actually create a session.
 [[nodiscard]] bool media_is_available() noexcept;
@@ -210,4 +210,4 @@ struct AudioSessionOptions {
 [[nodiscard]] Result<std::vector<AudioDevice>> input_devices();
 [[nodiscard]] Result<std::vector<AudioDevice>> output_devices();
 
-}  // namespace dv::client::audio
+}  // namespace dv::client::media

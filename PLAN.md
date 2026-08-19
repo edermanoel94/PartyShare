@@ -223,7 +223,7 @@ O participante só responde.
 Isso deixa mids, SSRCs e payload types sob controle do SFU, e reduz o encaminhamento a reescrever um cabeçalho em vez de traduzir entre duas negociações independentes.
 O identificador reservado `sfu` é o endereço desse ponto de mídia, e uma mensagem endereçada a ele é consumida pelo servidor em vez de retransmitida.
 
-A camada de mídia do cliente fica atrás da interface `audio::AudioSession`, e a implementação sobre a libwebrtc é uma biblioteca à parte, ligada por `-DDV_BUILD_CLIENT_MEDIA=ON`.
+A camada de mídia do cliente fica atrás da interface `media::MediaSession`, e a implementação sobre a libwebrtc é uma biblioteca à parte, ligada por `-DDV_BUILD_CLIENT_MEDIA=ON`.
 Sem ela o cliente ainda compila e roda, e é isso que mantém o servidor, os testes e o CI livres de uma biblioteca de 66 MB que precisa ser construída do fonte.
 Também é o que permite testar toda a ordem de operações de uma chamada com uma mídia de mentira, sem placa de som.
 

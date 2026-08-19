@@ -22,7 +22,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-#include "audio/audio_session.hpp"
+#include "media/media_session.hpp"
 
 namespace dv::ui {
 namespace {
@@ -235,7 +235,7 @@ void MainWindow::wire_session() {
                                       Q_ARG(QStringList, names));
           },
       .on_metrics =
-          [this](client::audio::AudioStats stats) {
+          [this](client::media::AudioStats stats) {
             const QString summary =
                 QStringLiteral("rtt %1 ms · jitter %2 ms · perdidos %3 · %4 kbps ↑ · %5 kbps ↓")
                     .arg(stats.round_trip_time_ms, 0, 'f', 0)
@@ -466,8 +466,8 @@ void MainWindow::load_devices() {
   const QSignalBlocker input_blocker(input_device_);
   const QSignalBlocker output_blocker(output_device_);
 
-  if (auto found = client::audio::input_devices(); found) {
-    for (const client::audio::AudioDevice& device : found.value()) {
+  if (auto found = client::media::input_devices(); found) {
+    for (const client::media::AudioDevice& device : found.value()) {
       input_device_->addItem(QString::fromStdString(device.name),
                              QString::fromStdString(device.id));
     }
@@ -476,8 +476,8 @@ void MainWindow::load_devices() {
     input_device_->setEnabled(false);
   }
 
-  if (auto found = client::audio::output_devices(); found) {
-    for (const client::audio::AudioDevice& device : found.value()) {
+  if (auto found = client::media::output_devices(); found) {
+    for (const client::media::AudioDevice& device : found.value()) {
       output_device_->addItem(QString::fromStdString(device.name),
                               QString::fromStdString(device.id));
     }

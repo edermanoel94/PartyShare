@@ -57,6 +57,12 @@ struct FakeMediaState {
   std::string output_device;
   std::atomic<bool> muted{false};
   std::atomic<bool> closed{false};
+  std::atomic<bool> sharing{false};
+  std::string shared_monitor;
+  /// Set to make start_screen_share fail, the way a refused permission does.
+  std::string share_failure;
+  std::atomic<int> share_starts{0};
+  std::atomic<int> share_stops{0};
 
   [[nodiscard]] double volume_of(const std::string& user_id) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -66,6 +72,10 @@ struct FakeMediaState {
   [[nodiscard]] std::string input() {
     const std::lock_guard<std::mutex> lock(mutex);
     return input_device;
+  }
+  [[nodiscard]] std::string monitor() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return shared_monitor;
   }
 
   [[nodiscard]] std::size_t offer_count() {
@@ -143,6 +153,50 @@ class FakeMediaSession : public media::MediaSession {
     }
   }
 
+  dv::Result<std::monostate> start_screen_share(const std::string& monitor_id) override {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    if (!state_->share_failure.empty()) {
+      return dv::Result<std::monostate>::failure("capture_unavailable", state_->share_failure);
+    }
+    state_->shared_monitor = monitor_id;
+    state_->sharing = true;
+    state_->share_starts.fetch_add(1);
+    return std::monostate{};
+  }
+
+  void stop_screen_share() override {
+    state_->sharing = false;
+    state_->share_stops.fetch_add(1);
+  }
+
+  [[nodiscard]] bool sharing_screen() const override { return state_->sharing.load(); }
+
+  [[nodiscard]] media::VideoStats video_stats() const override {
+    media::VideoStats stats;
+    stats.send_width = 1280;
+    stats.send_height = 720;
+    stats.frames_sent = state_->sharing ? 30 : 0;
+    return stats;
+  }
+
+  /// Reports a decoded frame of somebody else's screen.
+  void report_remote_video(int width, int height) {
+    if (callbacks_.on_remote_video) {
+      const auto bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+                         static_cast<std::size_t>(dv::client::video::VideoFrame::kBytesPerPixel);
+      callbacks_.on_remote_video(
+          dv::client::video::VideoFrame{width, height, std::vector<std::uint8_t>(bytes)});
+    }
+  }
+
+  /// Reports that the capture ended on its own.
+  void report_share_ended(dv::Error reason) {
+    state_->sharing = false;
+    if (callbacks_.on_screen_share_ended) {
+      callbacks_.on_screen_share_ended(std::move(reason));
+    }
+  }
+
   [[nodiscard]] media::AudioStats stats() const override {
     media::AudioStats stats;
     stats.round_trip_time_ms = 12;
@@ -210,6 +264,17 @@ class Client {
             [this](dv::Error error) {
               const std::lock_guard<std::mutex> lock(mutex_);
               errors_.push_back(std::move(error));
+            },
+        .on_remote_video =
+            [this](dv::client::video::VideoFrame frame) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              ++remote_frames_;
+              last_frame_size_ = {frame.width(), frame.height()};
+            },
+        .on_screen_share =
+            [this](std::string user_id) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              sharer_ = std::move(user_id);
             },
     });
     session_->on_room_created([this](std::string room_id) {
@@ -286,6 +351,19 @@ class Client {
     }
   }
 
+  [[nodiscard]] std::uint64_t remote_frames() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return remote_frames_;
+  }
+  [[nodiscard]] dv::client::video::Size last_frame_size() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return last_frame_size_;
+  }
+  [[nodiscard]] std::string sharer() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return sharer_;
+  }
+
   [[nodiscard]] std::vector<Participant> participants() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return participants_;
@@ -320,6 +398,9 @@ class Client {
   std::atomic<std::uint64_t> metrics_reports_{0};
   std::atomic<double> local_level_{0};
   std::atomic<bool> local_speaking_{false};
+  std::uint64_t remote_frames_ = 0;
+  dv::client::video::Size last_frame_size_;
+  std::string sharer_;
   std::function<void(std::string, bool)> remote_audio_;
   std::function<void(std::vector<media::AudioLevel>)> levels_;
   /// Declared before the session so that it outlives it.

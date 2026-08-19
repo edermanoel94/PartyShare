@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -52,6 +53,9 @@ class MediaRouter : public MediaSignals {
     /// Opus at 48 kHz, as section 9 of SPEC.md requires. 111 is the payload
     /// type every browser and libwebrtc build uses for it.
     int opus_payload_type = 111;
+    /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
+    /// what everything in this space uses for it.
+    int h264_payload_type = 96;
   };
 
   /// Delivers one protocol frame to one participant. Called from the router's
@@ -79,8 +83,13 @@ class MediaRouter : public MediaSignals {
   // --- introspection, used by the tests and by the metrics log ---------------
 
   [[nodiscard]] std::size_t session_count() const;
-  /// Number of outgoing tracks a participant has, one per other participant.
+  /// Number of outgoing audio tracks a participant has, one per other
+  /// participant.
   [[nodiscard]] std::size_t outbound_track_count(const std::string& user_id) const;
+
+  /// True once the participant has both video m-lines, the one that carries
+  /// their own screen up and the one that brings the shared screen down.
+  [[nodiscard]] bool has_video_tracks(const std::string& user_id) const;
   /// Audio packets received from participants since startup.
   [[nodiscard]] std::uint64_t audio_packets_received() const noexcept {
     return audio_packets_received_.load();
@@ -89,6 +98,19 @@ class MediaRouter : public MediaSignals {
   /// forwarded packet per other participant in the room.
   [[nodiscard]] std::uint64_t audio_packets_forwarded() const noexcept {
     return audio_packets_forwarded_.load();
+  }
+  /// Video packets received from whoever is sharing a screen.
+  [[nodiscard]] std::uint64_t video_packets_received() const noexcept {
+    return video_packets_received_.load();
+  }
+  [[nodiscard]] std::uint64_t video_packets_forwarded() const noexcept {
+    return video_packets_forwarded_.load();
+  }
+  /// Keyframe requests passed from a viewer up to the sharer. Section 5.2 of
+  /// SPEC.md needs these: a participant who joins mid transmission sees
+  /// nothing until the sender produces an intra frame.
+  [[nodiscard]] std::uint64_t keyframe_requests_forwarded() const noexcept {
+    return keyframe_requests_forwarded_.load();
   }
 
  private:
@@ -105,6 +127,19 @@ class MediaRouter : public MediaSignals {
     std::shared_ptr<rtc::Track> inbound;
     /// Keyed by the user whose audio the track carries.
     std::unordered_map<std::string, Outbound> outbound;
+
+    /// This participant's own screen, coming up. Present from the moment the
+    /// session exists, and silent until they start sharing.
+    std::shared_ptr<rtc::Track> video_inbound;
+    /// The shared screen, going down. There is one of these rather than one
+    /// per participant because section 5.2 of SPEC.md allows a single sharer
+    /// at a time, and RoomManager enforces it.
+    ///
+    /// Both exist from the start so that starting or stopping a share needs no
+    /// renegotiation. That is what makes "parar e reiniciar o compartilhamento
+    /// funciona sem reiniciar a chamada" true by construction rather than by
+    /// getting a mid-call offer right.
+    std::optional<Outbound> video_outbound;
     /// Mids are assigned by us because we write the offer. 0 is the inbound
     /// track, everything after it is an outbound one.
     unsigned next_mid = 0;
@@ -121,12 +156,24 @@ class MediaRouter : public MediaSignals {
   /// a renegotiation. Must be called with `mutex_` held.
   void add_outbound_track(Session& session, const std::string& source_user_id);
 
+  /// Adds the sendonly video track that carries the shared screen. Must be
+  /// called with `mutex_` held, before the session is negotiated for the first
+  /// time.
+  void add_video_outbound_track(Session& session);
+
   /// Produces an offer when the session is in a state that allows it. Must be
   /// called with `mutex_` held.
   void negotiate(Session& session);
 
   void forward_audio(const std::string& from_user_id, const std::string& room_id,
                      rtc::binary packet);
+
+  void forward_video(const std::string& from_user_id, const std::string& room_id,
+                     rtc::binary packet);
+
+  /// A viewer asked for an intra frame. Passes the request up to whoever is
+  /// sending video in that room.
+  void request_keyframe_from_sharer(const std::string& room_id);
 
   /// Queues a frame for the signal handler. Safe to call with `mutex_` held:
   /// the handler runs on the worker thread, with no lock of ours taken.
@@ -156,6 +203,9 @@ class MediaRouter : public MediaSignals {
 
   std::atomic<std::uint64_t> audio_packets_received_{0};
   std::atomic<std::uint64_t> audio_packets_forwarded_{0};
+  std::atomic<std::uint64_t> video_packets_received_{0};
+  std::atomic<std::uint64_t> video_packets_forwarded_{0};
+  std::atomic<std::uint64_t> keyframe_requests_forwarded_{0};
 };
 
 }  // namespace dv::server::sfu

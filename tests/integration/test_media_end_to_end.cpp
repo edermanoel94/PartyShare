@@ -27,6 +27,7 @@
 #include "app/call_session.hpp"
 #include "sfu/media_router.hpp"
 #include "signaling/server.hpp"
+#include "video/screen_capturer.hpp"
 
 namespace {
 
@@ -75,6 +76,17 @@ class Client {
               }
             },
         .on_error = [this](dv::Error) { errors_.fetch_add(1); },
+        .on_remote_video =
+            [this](dv::client::video::VideoFrame frame) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              ++remote_frames_;
+              remote_frame_size_ = dv::client::video::Size{frame.width(), frame.height()};
+            },
+        .on_screen_share =
+            [this](std::string user_id) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              sharer_ = std::move(user_id);
+            },
     });
     session_->on_room_created([this](std::string room_id) {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -120,6 +132,19 @@ class Client {
   [[nodiscard]] bool local_speaking_seen() const { return local_speaking_seen_.load(); }
   [[nodiscard]] std::uint64_t errors() const { return errors_.load(); }
 
+  [[nodiscard]] std::uint64_t remote_frames() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return remote_frames_;
+  }
+  [[nodiscard]] dv::client::video::Size remote_frame_size() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return remote_frame_size_;
+  }
+  [[nodiscard]] std::string sharer() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return sharer_;
+  }
+
   [[nodiscard]] std::vector<Participant> participants() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return participants_;
@@ -159,6 +184,9 @@ class Client {
   std::atomic<std::uint64_t> errors_{0};
   std::atomic<double> highest_local_level_{0};
   std::atomic<bool> local_speaking_seen_{false};
+  std::uint64_t remote_frames_ = 0;
+  dv::client::video::Size remote_frame_size_;
+  std::string sharer_;
   std::unique_ptr<CallSession> session_;
 };
 
@@ -465,6 +493,118 @@ TEST_F(MediaEndToEndTest, AudioLevelsAreReported) {
     }
     return false;
   }));
+}
+
+TEST_F(MediaEndToEndTest, AScreenSharedByOneClientArrivesDecodedAtTheOther) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  const auto shared = ana.session().start_screen_share("");
+  ASSERT_TRUE(shared.ok()) << shared.error().message;
+  EXPECT_TRUE(ana.session().sharing_screen());
+
+  // The room is told over signaling, because the video track carries whoever
+  // holds the floor rather than one fixed participant.
+  EXPECT_TRUE(wait_until([&] { return bruno.sharer() == ana.session().local_user().id; }))
+      << "the other client was never told who is sharing";
+
+  // And the pixels arrive, encoded in H.264 by one libwebrtc, forwarded as RTP
+  // by libdatachannel, and decoded by the other libwebrtc.
+  EXPECT_TRUE(wait_until([&] { return bruno.remote_frames() > 0; }, 30000ms))
+      << "no frame of the shared screen arrived. The SFU received "
+      << server_->media_router()->video_packets_received() << " video packets and forwarded "
+      << server_->media_router()->video_packets_forwarded();
+
+  // Section 5.2 of SPEC.md: 1280x720.
+  const dv::client::video::Size size = bruno.remote_frame_size();
+  EXPECT_GT(size.width, 0);
+  EXPECT_LE(size.width, 1280);
+  EXPECT_LE(size.height, 720);
+
+  // Nobody watches their own screen come back.
+  EXPECT_EQ(ana.remote_frames(), 0U);
+}
+
+TEST_F(MediaEndToEndTest, StoppingAndStartingAShareLeavesTheCallAlone) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  ASSERT_TRUE(ana.session().start_screen_share("").ok());
+  ASSERT_TRUE(wait_until([&] { return bruno.remote_frames() > 0; }, 30000ms));
+
+  ASSERT_TRUE(ana.session().stop_screen_share().ok());
+  EXPECT_FALSE(ana.session().sharing_screen());
+  EXPECT_TRUE(wait_until([&] { return bruno.sharer().empty(); }));
+
+  // The audio never stopped, which is the point: starting and stopping a share
+  // needs no renegotiation, so the call carries on through it.
+  EXPECT_EQ(ana.session().state(), CallSession::State::InCall);
+  EXPECT_EQ(bruno.session().state(), CallSession::State::InCall);
+  const std::uint64_t audio_before = server_->media_router()->audio_packets_forwarded();
+  EXPECT_TRUE(wait_until([&] {
+    return server_->media_router()->audio_packets_forwarded() > audio_before + 10;
+  })) << "the audio stopped when the screen share did";
+
+  // And it can start again.
+  const std::uint64_t frames_before = bruno.remote_frames();
+  ASSERT_TRUE(ana.session().start_screen_share("").ok());
+  EXPECT_TRUE(wait_until([&] { return bruno.remote_frames() > frames_before; }, 30000ms))
+      << "the second share produced nothing";
+}
+
+TEST_F(MediaEndToEndTest, OnlyOneParticipantCanShareAtATime) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  ASSERT_TRUE(ana.session().start_screen_share("").ok());
+  ASSERT_TRUE(wait_until([&] { return !bruno.sharer().empty(); }));
+
+  // Section 5.2 of SPEC.md has one screen at a time. The second client is
+  // refused before anything is captured, so it never takes the floor from the
+  // first by accident.
+  const auto refused = bruno.session().start_screen_share("");
+  EXPECT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "screen_share_busy");
+  EXPECT_FALSE(bruno.session().sharing_screen());
 }
 
 TEST_F(MediaEndToEndTest, MutingStopsTheOutgoingAudio) {

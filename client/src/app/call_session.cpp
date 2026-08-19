@@ -180,6 +180,81 @@ bool CallSession::muted() const {
   return muted_;
 }
 
+Result<std::monostate> CallSession::start_screen_share(const std::string& monitor_id) {
+  std::string user_id;
+  std::string room;
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    user_id = local_user_.id;
+    room = room_id_;
+    session = audio_;
+    if (!screen_sharer_.empty() && screen_sharer_ != user_id) {
+      return Result<std::monostate>::failure(
+          "screen_share_busy", screen_sharer_ + " is already sharing a screen in this room");
+    }
+  }
+
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room",
+                                           "there is no room to share a screen with");
+  }
+  if (!session) {
+    return Result<std::monostate>::failure("media_unavailable",
+                                           "there is no media session to send a screen on");
+  }
+
+  // Capture first, announcement second. The other way round would tell the
+  // room about a share that a refused permission is about to cancel.
+  if (auto started = session->start_screen_share(monitor_id); !started) {
+    return started;
+  }
+
+  if (auto sent = signaling_.send(protocol::ScreenShareStarted{room, user_id}); !sent) {
+    session->stop_screen_share();
+    return sent;
+  }
+  return std::monostate{};
+}
+
+Result<std::monostate> CallSession::stop_screen_share() {
+  std::string user_id;
+  std::string room;
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    user_id = local_user_.id;
+    room = room_id_;
+    session = audio_;
+  }
+
+  if (session) {
+    session->stop_screen_share();
+  }
+  if (room.empty()) {
+    return std::monostate{};
+  }
+  return signaling_.send(protocol::ScreenShareStopped{room, user_id});
+}
+
+bool CallSession::sharing_screen() const {
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    session = audio_;
+  }
+  return session && session->sharing_screen();
+}
+
+std::string CallSession::screen_sharer() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return screen_sharer_;
+}
+
+Result<std::vector<video::Monitor>> CallSession::monitors() const {
+  return video::monitors();
+}
+
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
   std::shared_ptr<media::MediaSession> session;
@@ -370,22 +445,36 @@ void CallSession::handle_signal(protocol::Message message) {
   }
 
   if (const auto* sharing = std::get_if<protocol::ScreenShareStarted>(&message)) {
+    Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(sharing->user_id); it != participants_.end()) {
         it->second.sharing_screen = true;
       }
+      screen_sharer_ = sharing->user_id;
+      handlers = callbacks_;
+    }
+    if (handlers.on_screen_share) {
+      handlers.on_screen_share(sharing->user_id);
     }
     publish_participants();
     return;
   }
 
   if (const auto* stopped = std::get_if<protocol::ScreenShareStopped>(&message)) {
+    Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(stopped->user_id); it != participants_.end()) {
         it->second.sharing_screen = false;
       }
+      if (screen_sharer_ == stopped->user_id) {
+        screen_sharer_.clear();
+      }
+      handlers = callbacks_;
+    }
+    if (handlers.on_screen_share) {
+      handlers.on_screen_share(std::string{});
     }
     publish_participants();
     return;
@@ -536,6 +625,33 @@ Result<std::monostate> CallSession::ensure_media_session() {
       }
     }
     publish_participants();
+  };
+
+  callbacks.on_remote_video = [this](video::VideoFrame frame) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_remote_video) {
+      handlers.on_remote_video(std::move(frame));
+    }
+  };
+
+  callbacks.on_screen_share_ended = [this](Error reason) {
+    // The capture stopped by itself, so the room still thinks a share is on.
+    // Telling it is what keeps every client's view of who holds the floor
+    // right, and the local user gets the reason.
+    (void)stop_screen_share();
+
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_error) {
+      handlers.on_error(std::move(reason));
+    }
   };
 
   callbacks.on_state = [this](media::MediaState state) {

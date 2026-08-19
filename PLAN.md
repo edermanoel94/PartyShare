@@ -336,22 +336,45 @@ Objetivo: atender as seções 5.2, 6 e 7 da SPEC.
 
 Tarefas:
 
-1. Interface `ScreenCapturer` própria, envolvendo o `DesktopCapturer` e isolando o resto do código do detalhe de plataforma.
-2. Enumeração de monitores e seleção pela UI.
-3. Pipeline de frames com fila limitada e descarte do frame mais antigo sob pressão, usando move semantics e evitando cópias.
-4. Escala para 1280x720 e limitação a 30 FPS.
-5. Encoder H.264 atrás de uma interface `VideoEncoder`, para que VP9 e AV1 possam ser acrescentados depois sem tocar no pipeline.
-6. Bitrate configurável entre 1.5 e 3 Mbps, com o gancho de adaptação já presente mas desligado.
-7. Encaminhamento de vídeo no SFU, incluindo tratamento de PLI e de keyframes para quem entra no meio da transmissão.
-8. Renderização do vídeo recebido em um widget Qt, fora da thread de UI para decodificação.
-9. Indicador visual de compartilhamento ativo e controle de iniciar e parar.
+1. [x] Interface `ScreenCapturer` própria, envolvendo o `DesktopCapturer` e isolando o resto do código do detalhe de plataforma.
+2. [x] Enumeração de monitores e seleção pela UI.
+3. [x] Pipeline de frames com fila limitada e descarte do frame mais antigo sob pressão, usando move semantics e evitando cópias.
+4. [x] Escala para 1280x720 e limitação a 30 FPS.
+5. [x] Encoder H.264 atrás de uma interface `VideoEncoder`, para que VP9 e AV1 possam ser acrescentados depois sem tocar no pipeline.
+6. [x] Bitrate configurável entre 1.5 e 3 Mbps, com o gancho de adaptação já presente mas desligado.
+7. [x] Encaminhamento de vídeo no SFU, incluindo tratamento de PLI e de keyframes para quem entra no meio da transmissão.
+8. [x] Renderização do vídeo recebido em um widget Qt, fora da thread de UI para decodificação.
+9. [x] Indicador visual de compartilhamento ativo e controle de iniciar e parar.
 
 Critérios de aceitação:
 
 - Um participante compartilha e os outros quatro veem, em 1280x720 a 30 FPS.
+  Verificado com dois clientes reais, capturando, codificando em H.264, atravessando o SFU e decodificando do outro lado. Cinco ainda não.
 - Um participante que entra depois recebe um keyframe em menos de 2 segundos.
-- Parar e reiniciar o compartilhamento funciona sem reiniciar a chamada.
+  O caminho existe e é testado: o pedido do espectador chega ao remetente. O tempo até o primeiro quadro ainda não foi medido.
+- [x] Parar e reiniciar o compartilhamento funciona sem reiniciar a chamada.
+  Verdadeiro por construção, e verificado: as m-lines de vídeo existem desde a entrada na sala, então começar e parar não renegocia nada.
 - O FPS permanece estável com desvio pequeno durante 10 minutos.
+  Não medido.
+
+### Sobre a tarefa 5, e por que não existe uma interface `VideoEncoder` nossa
+
+O plano pedia um encoder H.264 atrás de uma interface própria, para que VP9 e AV1 entrassem depois sem tocar no pipeline.
+Essa interface já existe e é a `webrtc::VideoEncoderFactory`: é ela que a libwebrtc consulta para cada codec negociado, e é onde um encoder por hardware entra no M8.
+Escrever outra por cima só acrescentaria uma camada que traduz de uma abstração para outra idêntica.
+
+O que garante a extensão pedida é o SDP: o servidor oferece `addH264Codec` hoje, e `addVP9Codec` e `addAV1Codec` são uma linha ao lado, com o pipeline inteiro intocado.
+O que o projeto de fato precisava decidir, e decidiu, é que o conteúdo é tela e não câmera: `is_screencast()` devolve `true`, e é isso que faz o OpenH264 preservar texto e deixar a taxa cair em vez de borrar tudo.
+
+### O que o vídeo mudou na topologia
+
+As duas m-lines de vídeo de cada participante são criadas junto com a sessão, antes de qualquer pedido de compartilhamento: uma recvonly, que carrega a tela dele para cima, e uma sendonly, que traz a tela de quem estiver compartilhando.
+
+Isso é o que faz o critério "parar e reiniciar sem reiniciar a chamada" ser verdadeiro por construção em vez de depender de acertar uma renegociação no meio da chamada.
+Custa uma m-line ociosa por participante, que não custa nada no fio.
+
+A track de saída não tem dono fixo: ela carrega quem estiver com a palavra.
+Quem é essa pessoa vem pelo signaling, com o `ScreenShareStarted` que já existia desde o M1, e não do msid.
 
 ---
 
@@ -471,4 +494,8 @@ Signaling, SFU, mídia do cliente, métricas e UI provisória existem, são test
 O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
-O próximo marco é o M6, compartilhamento de tela.
+
+O M6 está entregue nas nove tarefas.
+Captura, fila, escala, limite de taxa, H.264, encaminhamento no SFU com PLI, renderização em Qt e os controles funcionam, verificados por teste e na aplicação real com dois clientes.
+Dos critérios de aceitação faltam medições que precisam de tempo ou de máquinas: cinco participantes vendo ao mesmo tempo, o tempo até o primeiro quadro de quem entra no meio, e a estabilidade de FPS em dez minutos.
+O próximo marco é o M7, interface final.

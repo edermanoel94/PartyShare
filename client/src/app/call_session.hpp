@@ -19,6 +19,7 @@
 
 #include "media/media_session.hpp"
 #include "network/signaling_client.hpp"
+#include "video/screen_capturer.hpp"
 
 namespace dv::client::app {
 
@@ -73,6 +74,14 @@ class CallSession {
     /// levels of the other participants arrive through `on_participants`.
     std::function<void(double level, bool speaking)> on_local_level;
     std::function<void(Error error)> on_error;
+
+    /// A decoded frame of the screen somebody else is sharing. Arrives on a
+    /// media thread, several times a second, and must not be blocked on.
+    std::function<void(video::VideoFrame frame)> on_remote_video;
+    /// Who is sharing a screen in this room, or an empty id when nobody is.
+    /// Comes from signaling rather than from the track, because the video
+    /// track carries whoever holds the floor.
+    std::function<void(std::string user_id)> on_screen_share;
   };
 
   /// Creates the media session. Injectable so that the tests can drive the
@@ -109,6 +118,23 @@ class CallSession {
 
   [[nodiscard]] Result<std::monostate> set_muted(bool muted);
   [[nodiscard]] bool muted() const;
+
+  /// Starts sharing `monitor_id`, or the primary monitor when empty.
+  ///
+  /// Two things have to happen and both can fail: the capture has to start,
+  /// and the room has to be told. The capture goes first, so that a refused
+  /// permission does not announce a share that is not happening.
+  ///
+  /// Fails with `screen_share_busy` when somebody else already holds the
+  /// floor, and with what the capture layer reports otherwise.
+  [[nodiscard]] Result<std::monostate> start_screen_share(const std::string& monitor_id = {});
+  [[nodiscard]] Result<std::monostate> stop_screen_share();
+  [[nodiscard]] bool sharing_screen() const;
+  /// Who is sharing right now, empty when nobody is.
+  [[nodiscard]] std::string screen_sharer() const;
+
+  /// The monitors this machine can share.
+  [[nodiscard]] Result<std::vector<video::Monitor>> monitors() const;
 
   /// Playback volume for one participant, from 0 to 1, with up to 10 allowed
   /// as amplification. Remembered and reapplied if their audio arrives later.
@@ -157,6 +183,10 @@ class CallSession {
   models::User local_user_;
   std::string room_id_;
   bool muted_ = false;
+  /// Who holds the screen share floor in this room, empty when nobody does.
+  /// Kept from the ScreenShareStarted and ScreenShareStopped the server
+  /// broadcasts, so every client agrees on it.
+  std::string screen_sharer_;
   std::unordered_map<std::string, Participant> participants_;
   /// Per participant playback volume, kept here so that a choice made before
   /// the call survives into it.

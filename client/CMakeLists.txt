@@ -94,6 +94,8 @@ qt_add_executable(dv_client
   src/main.cpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
+  src/ui/screen_view.cpp
+  src/ui/screen_view.hpp
 )
 
 target_link_libraries(dv_client PRIVATE

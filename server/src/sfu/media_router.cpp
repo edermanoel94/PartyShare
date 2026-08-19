@@ -1,8 +1,10 @@
 #include "sfu/media_router.hpp"
 
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <dv/logging/logger.hpp>
 
@@ -21,6 +23,9 @@ constexpr int kOpusClockRate = 48000;
 /// same id.
 constexpr int kAudioLevelExtensionId = 1;
 constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
+
+/// H.264 RTP runs on a 90 kHz clock, which is what every video profile uses.
+constexpr int kVideoClockRate = 90000;
 
 [[nodiscard]] rtc::Configuration make_configuration(const std::vector<std::string>& ice_servers) {
   rtc::Configuration configuration;
@@ -154,6 +159,22 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
         // Text on a media track is not part of anything we speak.
       });
 
+  // The participant's own screen, coming up. Created now and left silent, so
+  // that starting to share later costs no renegotiation.
+  rtc::Description::Video video_inbound(std::to_string(session.next_mid++),
+                                        rtc::Description::Direction::RecvOnly);
+  video_inbound.addH264Codec(options_.h264_payload_type);
+  session.video_inbound = session.connection->addTrack(video_inbound);
+  session.video_inbound->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
+  session.video_inbound->onMessage(
+      [this, user_id, room_id](rtc::binary packet) {
+        forward_video(user_id, room_id, std::move(packet));
+      },
+      [](const rtc::string&) {});
+
+  // The shared screen, going down.
+  add_video_outbound_track(session);
+
   auto [it, inserted] = sessions_.emplace(user.id, std::move(session));
   Session& created = it->second;
 
@@ -256,6 +277,13 @@ std::size_t MediaRouter::outbound_track_count(const std::string& user_id) const 
   return session == nullptr ? 0 : session->outbound.size();
 }
 
+bool MediaRouter::has_video_tracks(const std::string& user_id) const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  const Session* session = find_session(user_id);
+  return session != nullptr && session->video_inbound != nullptr &&
+         session->video_outbound.has_value();
+}
+
 MediaRouter::Session* MediaRouter::find_session(const std::string& user_id) {
   const auto it = sessions_.find(user_id);
   return it == sessions_.end() ? nullptr : &it->second;
@@ -315,6 +343,95 @@ void MediaRouter::negotiate(Session& session) {
     session.connection->setLocalDescription(rtc::Description::Type::Offer);
   } catch (const std::exception& error) {
     DV_LOG_ERROR("SFU: could not offer to {}: {}", session.user_id, error.what());
+  }
+}
+
+void MediaRouter::add_video_outbound_track(Session& session) {
+  const std::uint32_t ssrc = next_ssrc_++;
+
+  rtc::Description::Video media(std::to_string(session.next_mid++),
+                                rtc::Description::Direction::SendOnly);
+  media.addH264Codec(options_.h264_payload_type);
+
+  // A fixed msid, because unlike audio this track does not belong to one
+  // participant: it carries whoever happens to be sharing. Who that is comes
+  // over signaling, as ScreenShareStarted, which the hub already broadcasts.
+  const std::string label = "sfu-screen";
+  media.addSSRC(ssrc, label, label, label);
+
+  Outbound outbound;
+  outbound.ssrc = ssrc;
+  outbound.payload_type = options_.h264_payload_type;
+  outbound.track = session.connection->addTrack(media);
+
+  auto rtp_config = std::make_shared<rtc::RtpPacketizationConfig>(
+      ssrc, label, static_cast<std::uint8_t>(options_.h264_payload_type), kVideoClockRate);
+  auto reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
+
+  // A viewer that needs an intra frame says so on the track it is receiving
+  // on, and the only place that can produce one is the sender. Nothing between
+  // the two decodes anything, so the request has to be carried across.
+  const std::string room_id = session.room_id;
+  reporter->addToChain(std::make_shared<rtc::PliHandler>(
+      [this, room_id] { request_keyframe_from_sharer(room_id); }));
+  outbound.track->setMediaHandler(reporter);
+
+  session.video_outbound = std::move(outbound);
+  session.renegotiation_pending = true;
+}
+
+void MediaRouter::forward_video(const std::string& from_user_id, const std::string& room_id,
+                                rtc::binary packet) {
+  if (rtc::IsRtcp(packet)) {
+    return;
+  }
+  if (packet.size() < sizeof(rtc::RtpHeader)) {
+    return;
+  }
+  video_packets_received_.fetch_add(1, std::memory_order_relaxed);
+
+  const std::lock_guard<std::mutex> lock(mutex_);
+
+  for (auto& [user_id, session] : sessions_) {
+    if (user_id == from_user_id || session.room_id != room_id) {
+      continue;
+    }
+    if (!session.video_outbound.has_value() || !session.video_outbound->track->isOpen()) {
+      continue;
+    }
+
+    rtc::binary copy = packet;
+    auto* header = reinterpret_cast<rtc::RtpHeader*>(copy.data());
+    header->setSsrc(session.video_outbound->ssrc);
+    header->setPayloadType(static_cast<std::uint8_t>(session.video_outbound->payload_type));
+
+    session.video_outbound->track->send(std::move(copy));
+    video_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void MediaRouter::request_keyframe_from_sharer(const std::string& room_id) {
+  // Collected under the lock and asked for outside it: requestKeyframe sends,
+  // and sending under our own mutex is how a deadlock starts.
+  std::vector<std::shared_ptr<rtc::Track>> ask;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [user_id, session] : sessions_) {
+      if (session.room_id == room_id && session.video_inbound != nullptr &&
+          session.video_inbound->isOpen()) {
+        ask.push_back(session.video_inbound);
+      }
+    }
+  }
+
+  // Asked of everyone in the room rather than of the sharer alone. The router
+  // does not track who is sharing, and does not need to: a participant who is
+  // not sending video has nothing to produce an intra frame from, so the
+  // request costs them one ignored RTCP packet.
+  for (const auto& track : ask) {
+    if (track->requestKeyframe()) {
+      keyframe_requests_forwarded_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 }
 

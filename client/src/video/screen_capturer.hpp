@@ -20,9 +20,13 @@ struct Monitor {
   /// identifiers are not stable across reboots on any platform, so this is
   /// remembered for the length of a session and no longer.
   std::string id;
-  /// What to put in front of the user, for example "Monitor 1 (1920x1080)".
+  /// What to put in front of the user, for example "DP-2" or "Monitor 1".
+  ///
+  /// There is no size here on purpose. No backend reports one in its source
+  /// list, and the only way to find out is to capture a frame from each
+  /// monitor, which on Wayland means a permission prompt per monitor just to
+  /// fill in a menu label.
   std::string name;
-  Size size;
   bool is_primary = false;
 
   friend bool operator==(const Monitor&, const Monitor&) = default;

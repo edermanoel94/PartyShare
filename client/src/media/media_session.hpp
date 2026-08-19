@@ -10,6 +10,9 @@
 
 #include <dv/core/result.hpp>
 
+#include "video/screen_capturer.hpp"
+#include "video/video_frame.hpp"
+
 namespace dv::client::media {
 
 /// One ICE candidate, in the shape the signaling protocol carries it.
@@ -64,6 +67,25 @@ struct AudioStats {
   /// How much of the echo the canceller is removing, in dB. Zero when it is
   /// not running, or when there is no echo to remove.
   double echo_return_loss_db = 0;
+};
+
+/// What the screen share is doing, section 22 of SPEC.md.
+struct VideoStats {
+  std::uint64_t frames_captured = 0;
+  std::uint64_t frames_sent = 0;
+  std::uint64_t frames_received = 0;
+  /// Frames thrown away because the encoder could not keep up. See
+  /// video::FrameQueue.
+  std::uint64_t frames_dropped = 0;
+  std::uint64_t keyframes_sent = 0;
+  /// The size actually being sent, which is the monitor fitted into the
+  /// configured ceiling.
+  int send_width = 0;
+  int send_height = 0;
+  double send_fps = 0;
+  double receive_fps = 0;
+  double send_bitrate_kbps = 0;
+  double receive_bitrate_kbps = 0;
 };
 
 enum class MediaState : std::uint8_t {
@@ -125,6 +147,19 @@ class MediaSession {
     /// times a second. Section 8 of SPEC.md asks for the indicator; this is
     /// what feeds it.
     std::function<void(std::vector<AudioLevel> levels)> on_levels;
+
+    /// A frame of the screen somebody else is sharing, already decoded and in
+    /// BGRA. Arrives on a media thread, so whoever draws it has to get itself
+    /// onto its own thread first.
+    ///
+    /// Who is sharing does not come from here. It arrives over signaling, as
+    /// ScreenShareStarted, because the track carries whoever holds the floor
+    /// rather than one fixed participant.
+    std::function<void(video::VideoFrame frame)> on_remote_video;
+
+    /// The screen share stopped without being asked to: permission refused,
+    /// the monitor unplugged, the compositor gone.
+    std::function<void(Error reason)> on_screen_share_ended;
   };
 
   MediaSession() = default;
@@ -160,9 +195,30 @@ class MediaSession {
   [[nodiscard]] virtual Result<std::monostate> set_input_device(const std::string& device_id) = 0;
   [[nodiscard]] virtual Result<std::monostate> set_output_device(const std::string& device_id) = 0;
 
+  /// Starts sending `monitor_id`, or the primary monitor when it is empty.
+  ///
+  /// Needs no renegotiation: the m-line that carries the screen is part of the
+  /// session from the moment it is created, and starting a share only starts
+  /// filling it. That is what lets a share stop and start again without
+  /// interrupting the call.
+  ///
+  /// Fails with `monitor_not_found` and `capture_unavailable`. A refusal that
+  /// only arrives later, such as declining a Wayland portal, comes through
+  /// `on_screen_share_ended`.
+  [[nodiscard]] virtual Result<std::monostate> start_screen_share(
+      const std::string& monitor_id) = 0;
+
+  /// Stops capturing. The track stays in place and simply carries nothing,
+  /// which is the same thing muting does to audio.
+  virtual void stop_screen_share() = 0;
+
+  [[nodiscard]] virtual bool sharing_screen() const = 0;
+
   /// The last stats snapshot. Collection is asynchronous, so this returns what
   /// was gathered most recently rather than blocking for a fresh reading.
   [[nodiscard]] virtual AudioStats stats() const = 0;
+
+  [[nodiscard]] virtual VideoStats video_stats() const = 0;
 
   [[nodiscard]] virtual MediaState state() const = 0;
 
@@ -185,6 +241,14 @@ struct MediaSessionOptions {
   bool echo_cancellation = true;
   bool noise_suppression = true;
   bool automatic_gain_control = true;
+
+  /// Section 5.2 of SPEC.md: 1280x720 at 30 FPS.
+  video::ScreenCaptureOptions capture;
+  /// Section 6 of SPEC.md: 1.5 to 3 Mbps for the screen. The encoder is left
+  /// to move inside the range on its own; the hook for driving it from the
+  /// congestion estimate is M8.
+  int video_min_bitrate_kbps = 1500;
+  int video_max_bitrate_kbps = 3000;
 
   /// Empty means the system default.
   std::string input_device;

@@ -227,11 +227,14 @@ gn args "${OUT}" --list --short --overrides-only
 # The umbrella "webrtc" target does not carry everything an application needs.
 # CreateBuiltinVideoEncoderFactory and CreateBuiltinVideoDecoderFactory live in
 # GN targets of their own, and a consumer that calls them fails to link against
-# obj/libwebrtc.a alone. They are built here and merged in during packaging,
-# together with whatever they pull in transitively.
+# obj/libwebrtc.a alone. AdaptedVideoTrackSource, which is the base class for
+# feeding captured frames into a peer connection, is another. They are built
+# here and merged in during packaging, together with whatever they pull in
+# transitively.
 EXTRA_TARGETS=(
   "//api/video_codecs:builtin_video_encoder_factory"
   "//api/video_codecs:builtin_video_decoder_factory"
+  "//api/video:adapted_video_track_source"
 )
 
 echo "==> building"

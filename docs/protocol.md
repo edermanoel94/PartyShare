@@ -106,11 +106,25 @@ ambos os sentidos:         ice_candidate
 ```
 
 O servidor reoferece sempre que o conjunto de participantes muda, acrescentando ou removendo uma linha de mídia.
-Cada linha `sendonly` que o servidor oferece traz `a=msid:<user_id>`, e é assim que o cliente sabe de quem é a voz que chega naquela track.
+Cada linha `sendonly` de áudio que o servidor oferece traz `a=msid:<user_id>`, e é assim que o cliente sabe de quem é a voz que chega naquela track.
 
-O participante que envia áudio precisa declarar seu SSRC no `answer`, com `a=ssrc`.
+Cada participante recebe também duas linhas de vídeo, criadas junto com a sessão e não quando alguém pede para compartilhar:
+
+```text
+recvonly, H.264   a tela do próprio participante, subindo
+sendonly, H.264   a tela de quem estiver compartilhando, descendo
+```
+
+Elas existem desde a entrada na sala, vazias, porque assim começar e parar de compartilhar não renegocia nada.
+
+A linha de vídeo `sendonly` não tem `a=msid:<user_id>`: ela carrega quem estiver com a palavra, e não um participante fixo.
+Quem está compartilhando é dito por `screen_share_started`, e é de lá que o cliente tira o nome.
+
+O participante que envia mídia precisa declarar seu SSRC no `answer`, com `a=ssrc`, em cada linha que ele envia.
 Todas as tracks compartilham um transporte, então é o SSRC que diz ao servidor a qual track pertence cada pacote que chega.
-Sem ele o áudio é descartado silenciosamente na chegada.
+Sem ele a mídia é descartada silenciosamente na chegada.
+
+Pedidos de keyframe atravessam o SFU. Um espectador que precisa de um quadro intra manda PLI na track em que recebe, e o servidor repassa o pedido para as tracks de vídeo que sobem naquela sala, porque nada no meio decodifica o vídeo para produzir um.
 
 Um servidor sem roteamento de mídia responde `media_unavailable` a qualquer mensagem endereçada a `sfu`.
 

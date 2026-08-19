@@ -44,8 +44,14 @@
 #include <api/stats/rtc_stats_report.h>
 #include <api/stats/rtcstats_objects.h>
 #include <api/transport/rtp/rtp_source.h>
+#include <api/video/adapted_video_track_source.h>
+#include <api/video/i420_buffer.h>
+#include <api/video/video_frame.h>
+#include <api/video/video_sink_interface.h>
 #include <api/video_codecs/builtin_video_decoder_factory.h>
 #include <api/video_codecs/builtin_video_encoder_factory.h>
+#include <libyuv/convert.h>
+#include <libyuv/convert_argb.h>
 #include <rtc_base/logging.h>
 #include <rtc_base/ssl_adapter.h>
 #include <rtc_base/thread.h>
@@ -53,6 +59,8 @@
 #include <dv/logging/logger.hpp>
 
 #include "media/media_session.hpp"
+#include "video/frame_queue.hpp"
+#include "video/screen_capturer.hpp"
 
 namespace dv::client::media {
 namespace {
@@ -316,6 +324,98 @@ constexpr double kSpeakingThreshold = 0.02;
 /// How long someone keeps counting as speaking after their last loud packet.
 constexpr auto kSpeakingHold = std::chrono::milliseconds(600);
 
+/// The video track source the screen capture feeds.
+///
+/// AdaptedVideoTrackSource rather than a plain source, because the adapter is
+/// what lets the encoder ask for a smaller frame or a slower rate when the
+/// connection cannot carry what is being produced. Nothing drives it yet, and
+/// that hook is the M8 work; declaring the source this way is what makes it
+/// possible without touching the pipeline.
+class ScreenTrackSource : public webrtc::AdaptedVideoTrackSource {
+ public:
+  /// True is not cosmetic here. It tells the encoder this is screen content,
+  /// so it keeps text sharp and lets the frame rate drop instead of blurring
+  /// everything, which is the opposite of what it does for a camera.
+  [[nodiscard]] bool is_screencast() const override { return true; }
+
+  [[nodiscard]] std::optional<bool> needs_denoising() const override { return false; }
+
+  [[nodiscard]] webrtc::MediaSourceInterface::SourceState state() const override {
+    return webrtc::MediaSourceInterface::kLive;
+  }
+
+  [[nodiscard]] bool remote() const override { return false; }
+
+  /// Converts one captured BGRA frame and hands it to the encoder.
+  ///
+  /// Called from the pump thread, never from the capture thread: the colour
+  /// conversion is the expensive part of this pipeline and doing it where the
+  /// frames are produced would cost capture rate.
+  void deliver(const video::VideoFrame& frame, std::int64_t timestamp_us) {
+    int adapted_width = 0;
+    int adapted_height = 0;
+    int crop_width = 0;
+    int crop_height = 0;
+    int crop_x = 0;
+    int crop_y = 0;
+    if (!AdaptFrame(frame.width(), frame.height(), timestamp_us, &adapted_width, &adapted_height,
+                    &crop_width, &crop_height, &crop_x, &crop_y)) {
+      // Nobody is watching, or the adapter decided to drop this one.
+      return;
+    }
+
+    webrtc::scoped_refptr<webrtc::I420Buffer> buffer =
+        webrtc::I420Buffer::Create(frame.width(), frame.height());
+    if (libyuv::ARGBToI420(frame.data(), frame.stride(), buffer->MutableDataY(), buffer->StrideY(),
+                           buffer->MutableDataU(), buffer->StrideU(), buffer->MutableDataV(),
+                           buffer->StrideV(), frame.width(), frame.height()) != 0) {
+      return;
+    }
+
+    OnFrame(webrtc::VideoFrame::Builder()
+                .set_video_frame_buffer(buffer)
+                .set_timestamp_us(timestamp_us)
+                .set_rotation(webrtc::kVideoRotation_0)
+                .build());
+  }
+};
+
+/// Receives the decoded screen somebody else is sharing.
+class RemoteVideoSink final : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
+ public:
+  using Handler = std::function<void(video::VideoFrame)>;
+
+  explicit RemoteVideoSink(Handler handler) : handler_(std::move(handler)) {}
+
+  void OnFrame(const webrtc::VideoFrame& frame) override {
+    if (!handler_) {
+      return;
+    }
+    webrtc::scoped_refptr<webrtc::I420BufferInterface> buffer =
+        frame.video_frame_buffer()->ToI420();
+    if (buffer == nullptr) {
+      return;
+    }
+
+    const int width = buffer->width();
+    const int height = buffer->height();
+    const auto bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+                       static_cast<std::size_t>(video::VideoFrame::kBytesPerPixel);
+    std::vector<std::uint8_t> pixels(bytes);
+
+    if (libyuv::I420ToARGB(buffer->DataY(), buffer->StrideY(), buffer->DataU(), buffer->StrideU(),
+                           buffer->DataV(), buffer->StrideV(), pixels.data(),
+                           width * video::VideoFrame::kBytesPerPixel, width, height) != 0) {
+      return;
+    }
+
+    handler_(video::VideoFrame{width, height, std::move(pixels)});
+  }
+
+ private:
+  Handler handler_;
+};
+
 [[nodiscard]] MediaState to_media_state(
     webrtc::PeerConnectionInterface::PeerConnectionState state) {
   switch (state) {
@@ -386,6 +486,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   }
 
   [[nodiscard]] Result<std::monostate> start(const MediaSessionOptions& options) {
+    options_ = options;
     Engine& engine = Engine::instance();
     if (engine.factory() == nullptr) {
       return Result<std::monostate>::failure("media_unavailable", engine.failure());
@@ -438,6 +539,26 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       return Result<std::monostate>::failure("media_unavailable",
                                              std::string(added.error().message()));
     }
+
+    // The screen track goes in now too, and stays empty until somebody starts
+    // sharing. The server offers a video m-line to every participant from the
+    // moment they join for the same reason: with the transceiver already
+    // paired, starting and stopping a share needs no renegotiation, and a
+    // share that comes and goes cannot disturb the call.
+    video_source_ = webrtc::make_ref_counted<ScreenTrackSource>();
+    local_video_track_ = engine.factory()->CreateVideoTrack(video_source_, "dv-screen");
+    if (local_video_track_ == nullptr) {
+      return Result<std::monostate>::failure("media_unavailable",
+                                             "could not create the screen track");
+    }
+
+    auto video_added = connection_->AddTrack(local_video_track_, {"dv-screen"});
+    if (!video_added.ok()) {
+      return Result<std::monostate>::failure("media_unavailable",
+                                             std::string(video_added.error().message()));
+    }
+    video_sender_ = video_added.value();
+    apply_video_bitrate();
 
     running_ = true;
     stats_thread_ = std::thread([this] { stats_loop(); });
@@ -519,6 +640,82 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     return Engine::instance().select_device(/*input=*/false, device_id);
   }
 
+  Result<std::monostate> start_screen_share(const std::string& monitor_id) override {
+    stop_screen_share();
+
+    auto created = video::create_screen_capturer(
+        options_.capture,
+        [this](video::VideoFrame frame) {
+          // Straight into the queue, and back to capturing. Everything
+          // expensive happens on the pump thread.
+          if (!frame_queue_.push(std::move(frame))) {
+            const std::lock_guard<std::mutex> lock(video_mutex_);
+            ++video_stats_.frames_dropped;
+          }
+          {
+            const std::lock_guard<std::mutex> lock(video_mutex_);
+            ++video_stats_.frames_captured;
+          }
+        },
+        [this](Error reason) {
+          // Capture ended on its own. The track stays where it is; only the
+          // pixels stop.
+          sharing_.store(false);
+          if (callbacks_.on_screen_share_ended) {
+            callbacks_.on_screen_share_ended(std::move(reason));
+          }
+        });
+    if (!created) {
+      return Result<std::monostate>::failure(created.error());
+    }
+
+    std::unique_ptr<video::ScreenCapturer> capturer = std::move(created).take();
+    if (auto started = capturer->start(monitor_id); !started) {
+      return Result<std::monostate>::failure(started.error());
+    }
+
+    frame_queue_.clear();
+    {
+      const std::lock_guard<std::mutex> lock(video_mutex_);
+      capturer_ = std::move(capturer);
+    }
+
+    sharing_.store(true);
+    pumping_.store(true);
+    pump_thread_ = std::thread([this] { pump_loop(); });
+    return std::monostate{};
+  }
+
+  void stop_screen_share() override {
+    sharing_.store(false);
+    pumping_.store(false);
+    if (pump_thread_.joinable() && pump_thread_.get_id() != std::this_thread::get_id()) {
+      pump_thread_.join();
+    }
+
+    std::unique_ptr<video::ScreenCapturer> capturer;
+    {
+      const std::lock_guard<std::mutex> lock(video_mutex_);
+      capturer = std::move(capturer_);
+    }
+    if (capturer) {
+      capturer->stop();
+    }
+    frame_queue_.clear();
+  }
+
+  [[nodiscard]] bool sharing_screen() const override { return sharing_.load(); }
+
+  [[nodiscard]] VideoStats video_stats() const override {
+    const std::lock_guard<std::mutex> lock(video_mutex_);
+    VideoStats copy = video_stats_;
+    copy.frames_dropped = video_stats_.frames_dropped + frame_queue_.dropped();
+    if (capturer_) {
+      copy.send_fps = capturer_->stats().fps;
+    }
+    return copy;
+  }
+
   [[nodiscard]] AudioStats stats() const override {
     const std::lock_guard<std::mutex> lock(stats_mutex_);
     return stats_;
@@ -528,6 +725,9 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   void close() override {
     running_ = false;
+    // Before the connection goes: the pump thread touches the track source,
+    // and the capture thread touches the queue the pump reads from.
+    stop_screen_share();
     if (connection_ != nullptr) {
       connection_->Close();
       connection_ = nullptr;
@@ -537,6 +737,17 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // shared with every other session in the process: leaving it attached
     // makes the next session wait on it.
     local_track_ = nullptr;
+    {
+      const std::lock_guard<std::mutex> lock(video_mutex_);
+      if (remote_video_track_ != nullptr && remote_video_sink_ != nullptr) {
+        remote_video_track_->RemoveSink(remote_video_sink_.get());
+      }
+      remote_video_track_ = nullptr;
+      remote_video_sink_.reset();
+    }
+    local_video_track_ = nullptr;
+    video_sender_ = nullptr;
+    video_source_ = nullptr;
     state_ = MediaState::Closed;
   }
 
@@ -591,6 +802,14 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       return;
     }
 
+    // Video is the shared screen, and it is handled apart. It carries whoever
+    // holds the floor rather than one participant, so unlike audio there is no
+    // user id to read off it: who is sharing arrives over signaling.
+    if (receiver->media_type() == webrtc::MediaType::VIDEO) {
+      report_remote_video(receiver, active);
+      return;
+    }
+
     // The server puts the participant's id in the msid of every track it
     // sends, which is the only thing that says whose voice this is. See
     // section 4.3 of docs/protocol.md.
@@ -615,6 +834,39 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     if (callbacks_.on_remote_audio) {
       callbacks_.on_remote_audio(user_id, active);
     }
+  }
+
+  void report_remote_video(const webrtc::scoped_refptr<webrtc::RtpReceiverInterface>& receiver,
+                           bool active) {
+    auto track = webrtc::scoped_refptr<webrtc::VideoTrackInterface>(
+        static_cast<webrtc::VideoTrackInterface*>(receiver->track().get()));
+
+    const std::lock_guard<std::mutex> lock(video_mutex_);
+
+    // Whatever was attached before comes off first: the sink is a raw pointer
+    // as far as libwebrtc is concerned, and it must not outlive the track that
+    // holds it.
+    if (remote_video_track_ != nullptr && remote_video_sink_ != nullptr) {
+      remote_video_track_->RemoveSink(remote_video_sink_.get());
+    }
+
+    if (!active || track == nullptr) {
+      remote_video_track_ = nullptr;
+      remote_video_sink_.reset();
+      return;
+    }
+
+    remote_video_sink_ = std::make_unique<RemoteVideoSink>([this](video::VideoFrame frame) {
+      {
+        const std::lock_guard<std::mutex> counting(video_mutex_);
+        ++video_stats_.frames_received;
+      }
+      if (callbacks_.on_remote_video) {
+        callbacks_.on_remote_video(std::move(frame));
+      }
+    });
+    remote_video_track_ = std::move(track);
+    remote_video_track_->AddOrUpdateSink(remote_video_sink_.get(), webrtc::VideoSinkWants{});
   }
 
   /// Must be called with `remote_mutex_` held.
@@ -788,6 +1040,51 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     callbacks_.on_levels(std::move(levels));
   }
 
+  /// Takes frames off the queue, converts them and hands them to the encoder.
+  ///
+  /// This thread exists so that the colour conversion, which is the expensive
+  /// part, does not run where the frames are captured. A slow encoder costs
+  /// queued frames rather than capture rate.
+  void pump_loop() {
+    const auto interval = std::chrono::milliseconds(1000 / std::max(1, options_.capture.max_fps));
+    while (pumping_.load()) {
+      std::optional<video::VideoFrame> frame = frame_queue_.pop();
+      if (!frame.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        continue;
+      }
+
+      const auto timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+      if (video_source_ != nullptr) {
+        video_source_->deliver(*frame, timestamp_us);
+      }
+
+      const std::lock_guard<std::mutex> lock(video_mutex_);
+      ++video_stats_.frames_sent;
+      video_stats_.send_width = frame->width();
+      video_stats_.send_height = frame->height();
+      (void)interval;
+    }
+  }
+
+  /// Section 6 of SPEC.md: 1.5 to 3 Mbps for the screen.
+  void apply_video_bitrate() {
+    if (video_sender_ == nullptr) {
+      return;
+    }
+    webrtc::RtpParameters parameters = video_sender_->GetParameters();
+    if (parameters.encodings.empty()) {
+      return;
+    }
+    parameters.encodings[0].min_bitrate_bps = options_.video_min_bitrate_kbps * 1000;
+    parameters.encodings[0].max_bitrate_bps = options_.video_max_bitrate_kbps * 1000;
+    if (const webrtc::RTCError error = video_sender_->SetParameters(parameters); !error.ok()) {
+      DV_LOG_WARN("Media: the encoder refused the bitrate range: {}", error.message());
+    }
+  }
+
   void levels_loop() {
     while (running_) {
       std::this_thread::sleep_for(kLevelInterval);
@@ -823,6 +1120,24 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   Callbacks callbacks_;
   webrtc::scoped_refptr<webrtc::PeerConnectionInterface> connection_;
   webrtc::scoped_refptr<webrtc::AudioTrackInterface> local_track_;
+  webrtc::scoped_refptr<ScreenTrackSource> video_source_;
+  webrtc::scoped_refptr<webrtc::VideoTrackInterface> local_video_track_;
+  webrtc::scoped_refptr<webrtc::RtpSenderInterface> video_sender_;
+
+  MediaSessionOptions options_;
+
+  /// Between the capture thread and the pump thread. See video::FrameQueue for
+  /// why it drops the oldest frame rather than blocking.
+  video::FrameQueue frame_queue_;
+  std::thread pump_thread_;
+  std::atomic<bool> pumping_{false};
+  std::atomic<bool> sharing_{false};
+
+  mutable std::mutex video_mutex_;
+  std::unique_ptr<video::ScreenCapturer> capturer_;
+  VideoStats video_stats_;
+  std::unique_ptr<RemoteVideoSink> remote_video_sink_;
+  webrtc::scoped_refptr<webrtc::VideoTrackInterface> remote_video_track_;
 
   mutable std::mutex remote_mutex_;
   std::unordered_map<std::string, Remote> remote_;

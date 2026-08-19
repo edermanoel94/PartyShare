@@ -23,6 +23,7 @@
 #include <QWidget>
 
 #include "media/media_session.hpp"
+#include "ui/screen_view.hpp"
 
 namespace dv::ui {
 namespace {
@@ -79,6 +80,7 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   build_widgets();
   wire_session();
   load_devices();
+  load_monitors();
   refresh_controls();
 }
 
@@ -160,6 +162,27 @@ void MainWindow::build_widgets() {
   call_layout->addWidget(participants_);
   call_layout->addLayout(volume_row);
 
+  auto* share = new QGroupBox(QStringLiteral("Tela"), central);
+  auto* share_layout = new QVBoxLayout(share);
+
+  auto* share_row = new QHBoxLayout();
+  monitor_ = new QComboBox(share);
+  share_button_ = new QPushButton(QStringLiteral("Compartilhar tela"), share);
+  share_button_->setCheckable(true);
+  sharing_label_ = new QLabel(QString{}, share);
+  // The indicator section 5.2 of SPEC.md asks for. Empty until somebody
+  // actually starts, so an idle room says nothing rather than saying no.
+  sharing_label_->setStyleSheet(QStringLiteral("color: palette(highlight); font-weight: bold;"));
+  share_row->addWidget(new QLabel(QStringLiteral("Monitor"), share));
+  share_row->addWidget(monitor_, 1);
+  share_row->addWidget(share_button_);
+  share_row->addWidget(sharing_label_);
+
+  screen_view_ = new ScreenView(share);
+
+  share_layout->addLayout(share_row);
+  share_layout->addWidget(screen_view_, 1);
+
   status_ = new QLabel(QStringLiteral("desconectado"), central);
   metrics_ = new QLabel(QStringLiteral("sem métricas ainda"), central);
   QFont small = metrics_->font();
@@ -171,6 +194,7 @@ void MainWindow::build_widgets() {
   layout->addWidget(room);
   layout->addWidget(devices);
   layout->addWidget(call);
+  layout->addWidget(share, 1);
   layout->addWidget(status_);
   layout->addWidget(metrics_);
 
@@ -195,6 +219,7 @@ void MainWindow::build_widgets() {
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
   connect(volume_, &QSlider::valueChanged, this, &MainWindow::on_volume_changed);
+  connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
 }
 
 void MainWindow::wire_session() {
@@ -256,6 +281,17 @@ void MainWindow::wire_session() {
             QMetaObject::invokeMethod(this, "apply_error", Qt::QueuedConnection,
                                       Q_ARG(QString, QString::fromStdString(error.code)),
                                       Q_ARG(QString, QString::fromStdString(error.message)));
+          },
+      .on_remote_video =
+          [this](client::video::VideoFrame frame) {
+            // Handed straight to the widget, which is what decides when the
+            // interface thread comes to collect it.
+            screen_view_->submit(frame);
+          },
+      .on_screen_share =
+          [this](std::string user_id) {
+            QMetaObject::invokeMethod(this, "apply_screen_share", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(user_id)));
           },
   });
 
@@ -441,6 +477,72 @@ void MainWindow::update_volume_label(const QString& participant, int volume) {
   volume_label_->setText(QStringLiteral("Volume de %1: %2%").arg(participant).arg(volume));
 }
 
+void MainWindow::on_toggle_share() {
+  if (session_.sharing_screen()) {
+    if (const auto stopped = session_.stop_screen_share(); !stopped) {
+      apply_error(QString::fromStdString(stopped.error().code),
+                  QString::fromStdString(stopped.error().message));
+    }
+    refresh_controls();
+    return;
+  }
+
+  const QString monitor_id = monitor_->currentData().toString();
+  if (const auto started = session_.start_screen_share(monitor_id.toStdString()); !started) {
+    apply_error(QString::fromStdString(started.error().code),
+                QString::fromStdString(started.error().message));
+  }
+  refresh_controls();
+}
+
+void MainWindow::apply_screen_share(const QString& user_id) {
+  if (user_id.isEmpty()) {
+    sharing_label_->setText(QString{});
+    screen_view_->set_placeholder(QStringLiteral("ninguém está compartilhando a tela"));
+    screen_view_->clear();
+    refresh_controls();
+    return;
+  }
+
+  QString name = user_id;
+  for (int row = 0; row < participants_->count(); ++row) {
+    const QListWidgetItem* item = participants_->item(row);
+    if (item->data(Qt::UserRole).toString() == user_id) {
+      name = item->data(kNameRole).toString();
+      break;
+    }
+  }
+
+  const bool is_me = user_id == QString::fromStdString(session_.local_user().id);
+  sharing_label_->setText(is_me ? QStringLiteral("você está compartilhando")
+                                : QStringLiteral("%1 está compartilhando").arg(name));
+
+  // Nobody receives their own screen back, so while you are the one sharing
+  // this panel stays empty. Saying that nobody is sharing would be wrong in
+  // exactly the moment it matters most.
+  if (is_me) {
+    screen_view_->set_placeholder(QStringLiteral("você está compartilhando esta tela com a sala"));
+    screen_view_->clear();
+  }
+  refresh_controls();
+}
+
+void MainWindow::load_monitors() {
+  monitor_->clear();
+  const auto listed = session_.monitors();
+  if (!listed) {
+    monitor_->addItem(QStringLiteral("nenhum monitor disponível"), QString{});
+    monitor_->setEnabled(false);
+    share_button_->setEnabled(false);
+    return;
+  }
+
+  for (const client::video::Monitor& screen : listed.value()) {
+    monitor_->addItem(QString::fromStdString(screen.name), QString::fromStdString(screen.id));
+  }
+  monitor_->setEnabled(monitor_->count() > 0);
+}
+
 void MainWindow::on_volume_changed(int value) {
   if (selected_participant_.isEmpty()) {
     return;
@@ -512,6 +614,19 @@ void MainWindow::refresh_controls() {
   join_button_->setEnabled(authenticated);
   leave_button_->setEnabled(in_call);
   mute_button_->setEnabled(authenticated);
+
+  const bool sharing = session_.sharing_screen();
+  const std::string sharer = session_.screen_sharer();
+  const bool someone_else_is_sharing = !sharer.empty() && sharer != session_.local_user().id;
+
+  // Section 5.2 of SPEC.md allows one screen at a time, and the server refuses
+  // a second one. Saying so with a disabled button beats letting the click
+  // through and answering with an error.
+  share_button_->setEnabled(in_call && monitor_->count() > 0 && !someone_else_is_sharing);
+  share_button_->setChecked(sharing);
+  share_button_->setText(sharing ? QStringLiteral("Parar de compartilhar")
+                                 : QStringLiteral("Compartilhar tela"));
+  monitor_->setEnabled(!sharing && monitor_->count() > 0);
 }
 
 }  // namespace dv::ui

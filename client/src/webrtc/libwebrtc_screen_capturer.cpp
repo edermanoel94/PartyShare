@@ -60,16 +60,11 @@ constexpr int kMaxConsecutiveFailures = 30;
   return options;
 }
 
-[[nodiscard]] std::string monitor_name(const webrtc::DesktopCapturer::Source& source, Size size,
+[[nodiscard]] std::string monitor_name(const webrtc::DesktopCapturer::Source& source,
                                        std::size_t index) {
-  std::string title = source.title;
-  if (title.empty()) {
-    title = "Monitor " + std::to_string(index + 1);
-  }
-  if (!size.empty()) {
-    title += " (" + std::to_string(size.width) + "x" + std::to_string(size.height) + ")";
-  }
-  return title;
+  // X11 gives the output name, "DP-2". Windows and macOS give a title, and
+  // sometimes nothing at all, which is what the number is for.
+  return source.title.empty() ? "Monitor " + std::to_string(index + 1) : source.title;
 }
 
 /// Turns a captured BGRA frame into one at the size we mean to send.
@@ -306,12 +301,7 @@ Result<std::vector<Monitor>> monitors() {
   found.reserve(sources.size());
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const webrtc::DesktopCapturer::Source& source = sources[index];
-    // The size is not part of the source list on any backend, and asking for it
-    // means capturing a frame. The name carries what the platform gave us; the
-    // real size arrives with the first frame.
-    const Size size{};
-    found.push_back(
-        Monitor{std::to_string(source.id), monitor_name(source, size, index), size, index == 0});
+    found.push_back(Monitor{std::to_string(source.id), monitor_name(source, index), index == 0});
   }
   return found;
 }

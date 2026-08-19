@@ -36,6 +36,11 @@ constexpr auto kTimeout = 10000ms;
 /// The SSRC a participant sends its own audio under. The SFU rewrites it per
 /// destination, so it never reaches another participant as is.
 constexpr std::uint32_t kOutgoingSsrc = 0xDEADBEEF;
+/// The same for the screen it shares.
+constexpr std::uint32_t kOutgoingVideoSsrc = 0xBEEFCAFE;
+
+constexpr int kOpusPayloadType = 111;
+constexpr int kH264PayloadType = 96;
 
 /// Waits for `predicate` to hold, polling instead of sleeping a fixed time so
 /// that a fast machine finishes fast and a loaded one does not go flaky.
@@ -96,30 +101,49 @@ class Participant {
 
     connection_->onTrack([this](std::shared_ptr<rtc::Track> track) {
       const std::lock_guard<std::mutex> lock(mutex_);
+      const bool is_video = track->description().type() == "video";
+
       if (track->direction() == rtc::Description::Direction::SendOnly) {
-        // The m-line the server marked recvonly: this is the microphone.
+        // The m-lines the server marked recvonly: this participant's own
+        // microphone and its own screen.
         //
         // The SSRC has to be declared in the answer. Everything is bundled on
         // one transport, so it is the only thing that tells the server which
-        // track an arriving packet belongs to, and without it the audio is
+        // track an arriving packet belongs to, and without it the media is
         // silently dropped on arrival. libwebrtc always declares one; this is
         // the same thing by hand.
+        const std::uint32_t ssrc = is_video ? kOutgoingVideoSsrc : kOutgoingSsrc;
+        const std::string label = (is_video ? "screen-" : "participant-") + user_.id;
+
         rtc::Description::Media media = track->description();
-        media.addSSRC(kOutgoingSsrc, "participant-" + user_.id, user_.id, user_.id);
+        media.addSSRC(ssrc, label, user_.id, label);
         track->setDescription(std::move(media));
 
-        outgoing_ = track;
+        if (is_video) {
+          outgoing_video_ = track;
+        } else {
+          outgoing_ = track;
+        }
         return;
       }
 
+      // Receiver reports, and on video the PLI that asks the sender for an
+      // intra frame. libwebrtc does both by itself; here it is explicit.
+      track->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
+
+      auto* counter = is_video ? &received_video_rtp_ : &received_rtp_;
       track->onMessage(
-          [this](rtc::binary packet) {
+          [counter](rtc::binary packet) {
             if (!rtc::IsRtcp(packet)) {
-              received_rtp_.fetch_add(1);
+              counter->fetch_add(1);
             }
           },
           [](const rtc::string&) {});
-      incoming_.push_back(std::move(track));
+      if (is_video) {
+        incoming_video_.push_back(std::move(track));
+      } else {
+        incoming_.push_back(std::move(track));
+      }
     });
 
     signaling_.on_message([this](proto::Message message) { handle(std::move(message)); });
@@ -187,10 +211,47 @@ class Participant {
     constexpr std::uint32_t kSamplesPer20ms = 960;  // 48 kHz
     for (int i = 0; i < count; ++i) {
       track->send(make_rtp_packet(kOutgoingSsrc, static_cast<std::uint16_t>(i),
-                                  static_cast<std::uint32_t>(i) * kSamplesPer20ms, 111));
+                                  static_cast<std::uint32_t>(i) * kSamplesPer20ms,
+                                  kOpusPayloadType));
       std::this_thread::sleep_for(5ms);
     }
     return true;
+  }
+
+  /// Sends `count` video packets on the screen share track, spaced like frames
+  /// at 30 FPS on the 90 kHz clock H.264 uses.
+  [[nodiscard]] bool send_video(int count) {
+    std::shared_ptr<rtc::Track> track;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      track = outgoing_video_;
+    }
+    if (!track || !track->isOpen()) {
+      return false;
+    }
+
+    constexpr std::uint32_t kTicksPerFrame = 3000;  // 90 kHz / 30 FPS
+    for (int i = 0; i < count; ++i) {
+      track->send(make_rtp_packet(kOutgoingVideoSsrc, static_cast<std::uint16_t>(i),
+                                  static_cast<std::uint32_t>(i) * kTicksPerFrame,
+                                  kH264PayloadType));
+      std::this_thread::sleep_for(5ms);
+    }
+    return true;
+  }
+
+  /// Asks the sender for an intra frame, the way a viewer that joined mid
+  /// transmission does.
+  [[nodiscard]] bool request_keyframe() {
+    std::shared_ptr<rtc::Track> track;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (incoming_video_.empty()) {
+        return false;
+      }
+      track = incoming_video_.front();
+    }
+    return track->requestKeyframe();
   }
 
   [[nodiscard]] const dv::models::User& user() const { return user_; }
@@ -204,13 +265,22 @@ class Participant {
     const std::lock_guard<std::mutex> lock(mutex_);
     return last_answer_sdp_;
   }
+  [[nodiscard]] std::uint64_t received_video_rtp() const { return received_video_rtp_.load(); }
   [[nodiscard]] std::size_t incoming_track_count() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return incoming_.size();
   }
+  [[nodiscard]] std::size_t incoming_video_track_count() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return incoming_video_.size();
+  }
   [[nodiscard]] bool has_outgoing_track() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return outgoing_ != nullptr;
+  }
+  [[nodiscard]] bool has_outgoing_video_track() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return outgoing_video_ != nullptr;
   }
 
  private:
@@ -254,10 +324,13 @@ class Participant {
   std::string room_id_;
   std::atomic<bool> joined_{false};
   std::atomic<std::uint64_t> received_rtp_{0};
+  std::atomic<std::uint64_t> received_video_rtp_{0};
 
   std::mutex mutex_;
   std::shared_ptr<rtc::Track> outgoing_;
+  std::shared_ptr<rtc::Track> outgoing_video_;
   std::vector<std::shared_ptr<rtc::Track>> incoming_;
+  std::vector<std::shared_ptr<rtc::Track>> incoming_video_;
   std::string last_offer_sdp_;
   std::string last_answer_sdp_;
 };
@@ -421,6 +494,119 @@ TEST_F(SfuTest, LeavingTakesTheSessionAndTheTracksAway) {
 
   EXPECT_TRUE(wait_until([&] { return router->session_count() == 1; }));
   EXPECT_TRUE(wait_until([&] { return router->outbound_track_count(bruno.user().id) == 0; }));
+}
+
+TEST_F(SfuTest, EverySessionHasItsVideoTracksFromTheStart) {
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  auto* router = server_->media_router();
+
+  // Both video m-lines exist before anyone asks to share anything. That is
+  // what makes starting and stopping a share cost no renegotiation, which
+  // section 5.2 of SPEC.md needs to work without interrupting the call.
+  EXPECT_TRUE(wait_until([&] { return router->has_video_tracks(ana.user().id); }));
+  EXPECT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }))
+      << "the participant was never offered an m-line to send its screen on";
+  EXPECT_TRUE(wait_until([&] { return ana.incoming_video_track_count() == 1; }))
+      << "the participant was never offered the shared screen";
+}
+
+TEST_F(SfuTest, OneParticipantsScreenReachesTheOthers) {
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  ASSERT_TRUE(ana.send_video(50));
+
+  auto* router = server_->media_router();
+  EXPECT_TRUE(wait_until([&] { return router->video_packets_received() > 0; }))
+      << "the SFU received no video";
+  EXPECT_TRUE(wait_until([&] { return bruno.received_video_rtp() > 0; }))
+      << "the SFU received " << router->video_packets_received() << " video packets and forwarded "
+      << router->video_packets_forwarded();
+
+  // And it does not come back to whoever sent it.
+  EXPECT_EQ(ana.received_video_rtp(), 0U) << "a participant is watching their own screen";
+}
+
+TEST_F(SfuTest, VideoAndAudioTravelWithoutGettingMixedUp) {
+  // Both run over one bundled transport with rewritten SSRCs, so the failure
+  // this guards against is real: audio arriving on the video track, or the
+  // other way round, would still look like traffic flowing.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+
+  ASSERT_TRUE(ana.send_audio(30));
+  ASSERT_TRUE(ana.send_video(30));
+
+  EXPECT_TRUE(wait_until([&] { return bruno.received_rtp() > 0; })) << "no audio arrived";
+  EXPECT_TRUE(wait_until([&] { return bruno.received_video_rtp() > 0; })) << "no video arrived";
+
+  auto* router = server_->media_router();
+  EXPECT_GT(router->audio_packets_forwarded(), 0U);
+  EXPECT_GT(router->video_packets_forwarded(), 0U);
+}
+
+TEST_F(SfuTest, AKeyframeRequestReachesTheSharer) {
+  // Section 5.2 of SPEC.md: someone who joins in the middle of a transmission
+  // sees nothing until the sender produces an intra frame. Nothing between the
+  // two decodes anything, so the request has to be carried across by the SFU.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  // Video has to be flowing first, which is also the situation this is for: a
+  // viewer asks for an intra frame because a transmission is already under way
+  // and they arrived in the middle of it. It is the arriving packets that tell
+  // the receiver which stream to address the request to.
+  ASSERT_TRUE(ana.send_video(20));
+  ASSERT_TRUE(wait_until([&] { return bruno.received_video_rtp() > 0; }));
+
+  auto* router = server_->media_router();
+  ASSERT_EQ(router->keyframe_requests_forwarded(), 0U);
+
+  ASSERT_TRUE(bruno.request_keyframe()) << "the viewer could not ask for an intra frame";
+
+  EXPECT_TRUE(wait_until([&] { return router->keyframe_requests_forwarded() > 0; }))
+      << "the request stopped at the SFU instead of reaching the sender";
 }
 
 }  // namespace

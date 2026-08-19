@@ -19,6 +19,8 @@ class QSlider;
 
 namespace dv::ui {
 
+class ScreenView;
+
 /// The provisional interface of M4: log in, create or join a room, mute.
 ///
 /// Section 19 of SPEC.md describes the real one, which is M7. What matters
@@ -45,6 +47,7 @@ class MainWindow : public QMainWindow {
   void on_output_device_changed(int index);
   void on_participant_selected();
   void on_volume_changed(int value);
+  void on_toggle_share();
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
@@ -53,12 +56,14 @@ class MainWindow : public QMainWindow {
   void apply_local_level(double level, bool speaking);
   void apply_error(const QString& code, const QString& message);
   void apply_room_created(const QString& room_id);
+  void apply_screen_share(const QString& user_id);
 
  private:
   void build_widgets();
   void wire_session();
   void refresh_controls();
   void load_devices();
+  void load_monitors();
   void update_volume_label(const QString& participant, int volume);
 
   client::app::CallSession& session_;
@@ -75,6 +80,10 @@ class MainWindow : public QMainWindow {
   QComboBox* input_device_ = nullptr;
   QComboBox* output_device_ = nullptr;
   QProgressBar* microphone_level_ = nullptr;
+  QComboBox* monitor_ = nullptr;
+  QPushButton* share_button_ = nullptr;
+  QLabel* sharing_label_ = nullptr;
+  ScreenView* screen_view_ = nullptr;
   QSlider* volume_ = nullptr;
   QLabel* volume_label_ = nullptr;
   QLabel* status_ = nullptr;

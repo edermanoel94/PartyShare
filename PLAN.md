@@ -435,19 +435,30 @@ Objetivo: transformar as metas da seção 22 em números medidos.
 
 Tarefas:
 
-1. Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
+1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
 2. Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
 3. Ativar a adaptação de bitrate com base no feedback de congestion control.
 4. Encoders por hardware: Media Foundation ou NVENC no Windows, VideoToolbox no macOS, VAAPI no Linux, todos atrás da interface `VideoEncoder`, com fallback automático para software.
-5. Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
-6. Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
+5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
+6. [x] Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
 7. Crash reporting.
 
 Critérios de aceitação:
 
-- Todas as métricas da seção 22 medidas e registradas em `docs/benchmarks.md`.
+- [x] Todas as métricas da seção 22 medidas e registradas em `docs/benchmarks.md`.
+  Menos a latência, que em loopback mede o laço local e não a rede. Depende da tarefa 2.
 - A chamada sobrevive a 5% de perda de pacotes com degradação suave e sem queda.
-- Nenhum achado aberto de alta severidade na revisão de segurança.
+  Depende da tarefa 2.
+- [x] Nenhum achado aberto de alta severidade na revisão de segurança.
+  Havia um, o hash de senha, corrigido nesta rodada. Restam três de severidade média, descritos em [docs/security-review.md](docs/security-review.md).
+
+### Sobre a tarefa 5, e o que a análise estática encontrou
+
+`clang-tidy` passa sem um aviso sequer sobre `shared`, `server` e o core do cliente, que antes nem era analisado.
+`cppcheck` roda no CI e não pôde ser executado nesta máquina, onde não está instalado.
+
+Os achados que valiam correção estão no commit que os corrigiu.
+Os que foram recusados estão no `.clang-tidy`, cada um com o motivo escrito ao lado, porque uma verificação desligada sem justificativa é indistinguível de uma verificação esquecida.
 
 ---
 
@@ -523,6 +534,9 @@ Signaling, SFU, mídia do cliente, métricas e UI provisória existem, são test
 O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
+
+O M8 está em andamento: as tarefas 1, 5 e 6 estão feitas, e faltam a simulação de rede, a adaptação de bitrate, os encoders por hardware e o crash reporting.
+Os números da seção 22 estão em [docs/benchmarks.md](docs/benchmarks.md) e a revisão de segurança em [docs/security-review.md](docs/security-review.md).
 
 O M7 está entregue nas sete tarefas: três telas, diálogo de configurações, indicador de rede, erros em português e reconexão automática.
 Faltam as duas medições dos critérios, o perfil da thread de UI e o tempo de startup.

@@ -78,4 +78,23 @@ if(DV_BUILD_CLIENT_MEDIA)
     PROPERTIES LABELS media TIMEOUT 180
     DISCOVERY_TIMEOUT 60
   )
+
+  # The benchmarks of section 22 of SPEC.md. A target of their own because they
+  # hold a call of five for half a minute, which nobody wants in the suite that
+  # runs on every change.
+  add_executable(dv_benchmarks integration/test_benchmark.cpp)
+
+  target_include_directories(dv_benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/integration)
+
+  target_link_libraries(dv_benchmarks PRIVATE
+    dv::client_core
+    dv::server_core
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  gtest_discover_tests(dv_benchmarks
+    PROPERTIES LABELS benchmark TIMEOUT 600
+    DISCOVERY_TIMEOUT 60
+  )
 endif()

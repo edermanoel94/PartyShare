@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -35,14 +36,34 @@ std::string random_hex(std::size_t bytes) {
   return to_hex(buffer.data(), buffer.size());
 }
 
-std::string sha256_hex(const std::string& input) {
-  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_size = 0;
-  if (EVP_Digest(input.data(), input.size(), digest.data(), &digest_size, EVP_sha256(), nullptr) !=
-      1) {
-    throw std::runtime_error("SHA-256 computation failed");
+/// Derives the stored form of a password.
+///
+/// scrypt rather than a plain digest, because a digest is fast by design and
+/// that is the one property a password store must not have. Section 17 of
+/// SPEC.md forbids credentials in plain text; a SHA-256 of a password is not
+/// plain text but it is not far off, since a modern card tries billions of
+/// candidates a second against it.
+///
+/// The cost parameters are the usual interactive ones: N of 2^14 with r of 8
+/// is sixteen mebibytes and something like fifty milliseconds per attempt.
+/// Bigger is stronger against an attacker with the file, and is also what an
+/// attacker without it would aim a flood of logins at, so this is deliberately
+/// the moderate end rather than the maximum.
+std::string derive_key_hex(const std::string& password, const std::string& salt_hex) {
+  constexpr std::uint64_t kCost = 1U << 14U;  // N
+  constexpr std::uint64_t kBlockSize = 8;     // r
+  constexpr std::uint64_t kParallelism = 1;   // p
+  constexpr std::size_t kKeyBytes = 32;
+  // OpenSSL refuses anything above this, and N * r * 128 is what scrypt uses.
+  constexpr std::uint64_t kMaxMemory = std::uint64_t{64} * 1024 * 1024;
+
+  std::array<unsigned char, kKeyBytes> key{};
+  if (EVP_PBE_scrypt(password.data(), password.size(),
+                     reinterpret_cast<const unsigned char*>(salt_hex.data()), salt_hex.size(),
+                     kCost, kBlockSize, kParallelism, kMaxMemory, key.data(), key.size()) != 1) {
+    throw std::runtime_error("password key derivation failed");
   }
-  return to_hex(digest.data(), digest_size);
+  return to_hex(key.data(), key.size());
 }
 
 /// Compares without leaking, through timing, how many leading characters
@@ -86,7 +107,7 @@ Result<models::User> Authenticator::add_user(const std::string& username,
     account.user.display_name = std::move(display_name);
   }
   account.salt_hex = random_hex(16);
-  account.password_hash_hex = sha256_hex(account.salt_hex + password);
+  account.password_hash_hex = derive_key_hex(password, account.salt_hex);
 
   const models::User user = account.user;
   accounts_.emplace(username, std::move(account));
@@ -102,7 +123,8 @@ Result<Authenticator::Session> Authenticator::authenticate(const std::string& us
   }
 
   const Account& account = it->second;
-  if (!constant_time_equals(account.password_hash_hex, sha256_hex(account.salt_hex + password))) {
+  if (!constant_time_equals(account.password_hash_hex,
+                            derive_key_hex(password, account.salt_hex))) {
     return Result<Session>::failure(unauthorized());
   }
 

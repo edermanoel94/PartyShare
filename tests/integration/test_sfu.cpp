@@ -609,4 +609,32 @@ TEST_F(SfuTest, AKeyframeRequestReachesTheSharer) {
       << "the request stopped at the SFU instead of reaching the sender";
 }
 
+TEST_F(SfuTest, TheMediaIsEncryptedAndNothingElseIsOffered) {
+  // Section 17 of SPEC.md: no audio or video without encryption. WebRTC gives
+  // that by mandating DTLS-SRTP, and this is the evidence rather than the
+  // claim: every media line is negotiated over the secure profile, and both
+  // ends publish a certificate fingerprint.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_media_connected());
+
+  const std::string offer = ana.last_offer_sdp();
+  const std::string answer = ana.last_answer_sdp();
+  ASSERT_FALSE(offer.empty()) << "no offer was seen, so nothing was checked";
+  ASSERT_FALSE(answer.empty()) << "no answer was seen, so nothing was checked";
+
+  for (const auto& [name, sdp] : {std::pair{"offer", offer}, std::pair{"answer", answer}}) {
+    EXPECT_NE(sdp.find("a=fingerprint:"), std::string::npos)
+        << name << " carries no certificate fingerprint, so the DTLS peer is unauthenticated";
+    EXPECT_NE(sdp.find("RTP/SAVPF"), std::string::npos)
+        << name << " does not use the secure RTP profile";
+    // RTP/AVP is the same thing without encryption. A media line offering it
+    // would be one that could carry plaintext.
+    EXPECT_EQ(sdp.find(" RTP/AVP "), std::string::npos) << name << " offers unencrypted media";
+  }
+}
+
 }  // namespace

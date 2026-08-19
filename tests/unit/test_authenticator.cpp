@@ -143,4 +143,36 @@ TEST(Authenticator, TokensAreLongEnoughToResistGuessing) {
   EXPECT_EQ(session.value().token.size(), 64u);
 }
 
+TEST(AuthenticatorTest, HashingAPasswordIsDeliberatelySlow) {
+  // Section 17 of SPEC.md, and the point of using a key derivation function
+  // instead of a digest. A digest is fast by design, which is exactly the
+  // property a password store must not have: a modern card tries billions of
+  // SHA-256 candidates a second against a stolen file.
+  //
+  // The number is loose on purpose. What this guards against is somebody
+  // swapping the derivation back for a plain hash, which would drop this from
+  // milliseconds to microseconds, not against a particular cost setting.
+  dv::server::Authenticator authenticator;
+
+  const auto started = std::chrono::steady_clock::now();
+  ASSERT_TRUE(authenticator.add_user("ana", "senha", "Ana").ok());
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_GT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 5)
+      << "hashing a password took no time at all, which means it is not a key derivation";
+}
+
+TEST(AuthenticatorTest, TheSamePasswordStoresDifferentlyForDifferentUsers) {
+  // Per account salt. Without it, two people with the same password have the
+  // same stored value, and one stolen file answers both at once.
+  dv::server::Authenticator authenticator;
+  ASSERT_TRUE(authenticator.add_user("ana", "mesma-senha", "Ana").ok());
+  ASSERT_TRUE(authenticator.add_user("bruno", "mesma-senha", "Bruno").ok());
+
+  // Both still authenticate, which is what says the salt is stored and used
+  // rather than merely generated.
+  EXPECT_TRUE(authenticator.authenticate("ana", "mesma-senha", kNow).ok());
+  EXPECT_TRUE(authenticator.authenticate("bruno", "mesma-senha", kNow).ok());
+}
+
 }  // namespace

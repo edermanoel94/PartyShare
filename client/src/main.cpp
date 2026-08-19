@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstdio>
 
 #include <dv/config/config.hpp>
@@ -10,6 +11,11 @@
 #include "ui/main_window.hpp"
 
 int main(int argc, char* argv[]) {
+  // Section 22 of SPEC.md asks for a startup under three seconds. Measuring it
+  // from the first line of main is the closest this can get to what a person
+  // experiences: everything before it belongs to the loader.
+  const auto started_at = std::chrono::steady_clock::now();
+
   auto config_result = dv::config::load(argc, argv);
   if (!config_result) {
     // Logging is not up yet, so this is the one place that writes to stderr
@@ -66,6 +72,10 @@ int main(int argc, char* argv[]) {
 
   dv::ui::MainWindow window(session);
   window.show();
+
+  const auto startup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - started_at);
+  DV_LOG_INFO("Voice Desktop client ready in {} ms", startup_ms.count());
 
   const int exit_code = QApplication::exec();
 

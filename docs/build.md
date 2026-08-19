@@ -1,5 +1,8 @@
 # Build
 
+O hardware necessário para rodar o cliente e o servidor está em [requirements.md](requirements.md).
+Esta página é sobre as ferramentas necessárias para compilá-los.
+
 ## Pré-requisitos
 
 | Ferramenta | Versão mínima | Observação |

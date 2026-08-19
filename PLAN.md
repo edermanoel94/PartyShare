@@ -54,7 +54,7 @@ Isso é significativamente mais trabalho e entrega menos qualidade, então só d
 Segue a seção 15 da SPEC, com pequenos acréscimos.
 
 ```text
-tudo-puta/
+PartyShare/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── vcpkg.json

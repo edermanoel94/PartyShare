@@ -70,7 +70,7 @@ Não há script de shell aqui, porque a máquina não tem bash por padrão.
 Abra o **x64 Native Tools Command Prompt for VS 2022** e rode:
 
 ```bat
-cd C:\caminho\para\tudo-puta
+cd C:\caminho\para\PartyShare
 
 cmake -S . -B build\spike -G Ninja ^
   -DCMAKE_BUILD_TYPE=Release ^

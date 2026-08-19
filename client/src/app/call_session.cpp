@@ -881,9 +881,11 @@ void CallSession::metrics_loop() {
     // like from here.
     if (const media::VideoStats video = session->video_stats(); video.frames_sent > 0) {
       DV_LOG_INFO(
-          "Video: {}x{} at {:.1f} fps, up {:.0f} kbps, estimate {:.0f} kbps, {} frames dropped",
+          "Video: {}x{} at {:.1f} fps, up {:.0f} kbps, estimate {:.0f} kbps, {} frames dropped, "
+          "encoder {}",
           video.send_width, video.send_height, video.send_fps, video.send_bitrate_kbps,
-          video.available_send_bitrate_kbps, video.frames_dropped);
+          video.available_send_bitrate_kbps, video.frames_dropped,
+          video.encoder.empty() ? "starting" : video.encoder);
     }
 
     if (callbacks.on_metrics) {

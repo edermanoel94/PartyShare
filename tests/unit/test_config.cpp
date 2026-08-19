@@ -137,6 +137,15 @@ TEST(Config, ValidationRejectsABitrateRangeThatIsInverted) {
   EXPECT_TRUE(dv::config::validate(config).has_value());
 }
 
+TEST(Config, CrashReportingIsOnByDefaultAndCanBeTurnedOff) {
+  // A stack trace of somebody's machine written to disk is a decision they are
+  // entitled to make, so it is a setting rather than a fact.
+  const Config defaults;
+  EXPECT_TRUE(defaults.logging.crash_reports);
+  EXPECT_TRUE(defaults.logging.crash_directory.empty())
+      << "the default has to be empty so the platform's own state directory is used";
+}
+
 TEST(Config, ValidationRejectsAFloorAboveWhereTheEncoderStarts) {
   // The floor is what congestion control may squeeze down to, so a floor above
   // the starting point is a range with nothing in it.

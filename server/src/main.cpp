@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <dv/config/config.hpp>
+#include <dv/diagnostics/crash_reporter.hpp>
 #include <dv/logging/logger.hpp>
 
 #include "signaling/server.hpp"
@@ -111,6 +112,19 @@ int main(int argc, char* argv[]) {
         .file_path = config.logging.file_path,
         .log_to_console = config.logging.log_to_console,
     });
+
+    if (config.logging.crash_reports) {
+      const auto installed = dv::diagnostics::install_crash_reporter({
+          .directory = config.logging.crash_directory,
+          .application = "desktop-voice-server",
+          .version = DV_VERSION,
+      });
+      if (installed.ok()) {
+        DV_LOG_INFO("Crash reports: {}", installed.value().string());
+      } else {
+        DV_LOG_WARN("Crash reports are off: {}", installed.error().message);
+      }
+    }
 
     DV_LOG_INFO("Voice Desktop signaling server starting");
 

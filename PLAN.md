@@ -438,10 +438,10 @@ Tarefas:
 1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
 2. [x] Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
 3. [x] Ativar a adaptação de bitrate com base no feedback de congestion control.
-4. Encoders por hardware: Media Foundation ou NVENC no Windows, VideoToolbox no macOS, VAAPI no Linux, todos atrás da interface `VideoEncoder`, com fallback automático para software.
+4. Parcial. Encoders por hardware: a fábrica, a seleção e o fallback automático existem e são exercitados; falta um backend, e o motivo está abaixo.
 5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
 6. [x] Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
-7. Crash reporting.
+7. [x] Crash reporting.
 
 Critérios de aceitação:
 
@@ -520,6 +520,38 @@ A extensão fica de fora até que isso seja resolvido no upstream.
 
 O que ficou é a defesa: o SFU descarta pacotes com padding em vez de encaminhá-los.
 Qualquer participante pode enviar um, e o resultado era o servidor abortando - o que é um jeito de derrubar a chamada de todo mundo com um pacote.
+
+### Encoder por hardware: a costura existe, o backend não
+
+A tarefa 4 pede encoders por hardware atrás de uma interface, com fallback automático para software.
+A interface é a `webrtc::VideoEncoderFactory`, como já estava registrado no M6, e o que foi escrito é ela:
+
+- `client/src/webrtc/video_encoder_factory.hpp` decide qual codificador usar, e embrulha os dois no `CreateVideoEncoderSoftwareFallbackWrapper` da própria libwebrtc, que é o que o Chrome usa para trocar de hardware para software no meio de um stream sem a chamada perceber.
+- `client/src/webrtc/hardware_encoder.hpp` é onde cada plataforma entra. Hoje só existe a implementação vazia, e um build sem backend nenhum continua compilando e codificando.
+- Qual codificador está de fato rodando passou a ser um número medido, lido das estatísticas da libwebrtc e não do que se pediu, porque são coisas diferentes: um codificador de hardware pode ser criado, aceitar o stream e ser substituído pelo de software no meio do caminho.
+
+O que falta é um backend, e a razão de não haver um é a máquina.
+A placa aqui é NVIDIA, e a VAAPI que o plano cita não faz encode em NVIDIA.
+O caminho testável seria NVENC, e ele também não roda: a `libcuda` do sistema está na versão 610.57.04 e o módulo do kernel carregado está na 610.43.03, então `cuInit` devolve `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH`.
+
+É a mesma condição que impede o `tc netem`: o sistema foi atualizado e não foi reiniciado.
+Escrever centenas de linhas de NVENC que nunca puderam ser executadas seria escrever exatamente o tipo de código que este projeto vem se recusando a declarar pronto, então a tarefa fica marcada como parcial até que a máquina permita verificar.
+
+### Crash reporting
+
+Um crash que não deixa nada para trás vira um relato que diz "fechou sozinho".
+
+O que se escreve é o mínimo que transforma isso em algo acionável: qual build, qual sinal, e onde no código.
+O detalhe que decide a implementação é que um handler de sinal roda entre duas instruções de um programa que já deu errado, e quase nada pode ser chamado ali - nem `malloc`, nem `printf`, nem nada que tome um lock que a thread que quebrou talvez já tenha.
+
+Então tudo que precisa alocar é preparado na instalação, e o handler só escreve bytes que já existem: `open`, `write`, `close`, `time` e `backtrace_symbols_fd`, que é a única função de backtrace que não aloca.
+O handler também não decide o destino do processo: ele restaura o handler padrão e re-emite o sinal, então core dump continua acontecendo e o código de saída continua dizendo o que matou o programa.
+
+Testado do jeito que dá para testar isto: cada caso cria um processo filho, quebra o filho de propósito, e lê o que ficou.
+Um `SIGSEGV` de verdade, com o backtrace nomeando o próprio binário, e o `SIGABRT` por onde chegam as asserções e as exceções não capturadas.
+
+No Windows um crash chega como structured exception e o relatório que vale é um minidump.
+Isso não existe aqui, e a função que o implementaria está marcada: este projeto nunca foi construído nem executado no Windows, e um handler escrito às cegas seria um handler que ninguém viu rodar.
 
 ### Sobre a tarefa 5, e o que a análise estática encontrou
 
@@ -604,7 +636,7 @@ O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
 
-O M8 está em andamento: as tarefas 1, 2, 3, 5 e 6 estão feitas, e faltam os encoders por hardware e o crash reporting.
+O M8 está em andamento: as tarefas 1, 2, 3, 5, 6 e 7 estão feitas, e falta um backend de encoder por hardware, que depende de a máquina de desenvolvimento ser reiniciada.
 Os números da seção 22 estão em [docs/benchmarks.md](docs/benchmarks.md) e a revisão de segurança em [docs/security-review.md](docs/security-review.md).
 A simulação de rede encontrou e corrigiu um congelamento do compartilhamento de tela sob perda, que era a diferença entre "degrada" e "para".
 

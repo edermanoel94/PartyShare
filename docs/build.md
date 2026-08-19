@@ -63,6 +63,9 @@ Duas variáveis de ambiente ajudam a depurar mídia:
 | `DV_VIRTUAL_INPUT_DEVICE` | Nome do dispositivo de captura que os testes de mídia devem usar. Exportado pelo `scripts/virtual_audio.sh`, descrito abaixo. |
 | `DV_VIRTUAL_OUTPUT_DEVICE` | O mesmo para a reprodução. |
 | `DV_DUMP_SDP` | Faz o SFU registrar cada oferta que envia. É a forma de responder "isto foi negociado?" sobre codecs, extensões e feedback. |
+| `DV_DISABLE_HARDWARE_ENCODER` | Força o codificador de software mesmo em uma máquina com placa capaz. Serve para comparar os dois e para contornar driver problemático. |
+| `DV_CRASH_DIRECTORY` | Onde os relatórios de crash são escritos. O padrão é o diretório de estado da plataforma. |
+| `DV_CRASH_REPORTS` | `0` desliga o relatório de crash por completo. |
 
 ### Dispositivo de áudio virtual
 
@@ -101,6 +104,31 @@ O script diz isso em vez de deixar o `tc` responder que a qdisc é desconhecida.
 `DV_NETEM_DRY_RUN=1` mostra o comando que seria executado, sem executá-lo e sem root.
 
 A diferença entre os dois caminhos, e os números medidos com cada um, estão em [benchmarks.md](benchmarks.md).
+
+### Relatórios de crash
+
+Um crash que não deixa nada para trás vira um relato que diz "fechou sozinho".
+Cliente e servidor instalam um handler para os sinais em que um crash chega, e escrevem um arquivo com o build, o sinal e o backtrace:
+
+```text
+desktop-voice crash report
+application: desktop-voice
+version: 0.1.0
+built: Aug 19 2026 16:36:58
+
+when: 1787168270 seconds since the epoch, readable with: date -d @1787168270
+signal: SIGSEGV, a read or write through a bad pointer
+
+backtrace:
+./build/media/bin/desktop-voice(+0x145437) [0x5572fb6c8437]
+/usr/lib/libQt6Core.so.6(_ZN10QEventLoop4execE...+0x193) [0x7f6888391983]
+```
+
+O padrão é `$XDG_STATE_HOME/desktop-voice/crashes` no Linux, `~/Library/Logs` no macOS e `%LOCALAPPDATA%` no Windows, e os dez mais recentes são mantidos.
+Cada linha é `binário(+deslocamento) [endereço]`; o deslocamento é o que `addr2line -Cfe <binário> <deslocamento>` transforma em arquivo e linha.
+Nomes vindos de bibliotecas saem mangled, porque desfazer isso aloca memória e um handler de sinal não pode: `c++filt` resolve.
+
+O processo continua morrendo como morreria, então core dump configurado continua sendo gerado e o código de saída continua dizendo o que matou o programa.
 
 ## Compilar
 

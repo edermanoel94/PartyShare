@@ -98,6 +98,16 @@ struct VideoStats {
   /// What the encoder is currently aiming at, in kbps, which is the estimate
   /// above clamped into the configured range.
   double target_bitrate_kbps = 0;
+
+  /// What libwebrtc reports as the encoder actually running, for example
+  /// "OpenH264" or "NVENC". Empty until the first frame is encoded.
+  ///
+  /// Read from the statistics rather than from what was asked for, because
+  /// those are different things: a hardware encoder can be created, accept a
+  /// stream and then be replaced by the software one halfway through.
+  std::string encoder;
+  /// libwebrtc's own verdict on whether that encoder is hardware.
+  bool hardware_encoder = false;
 };
 
 enum class MediaState : std::uint8_t {
@@ -293,6 +303,24 @@ struct MediaSessionOptions {
 
 /// True when this build can actually create a session.
 [[nodiscard]] bool media_is_available() noexcept;
+
+/// Whether the screen share is encoded by a card or by the processor.
+///
+/// Two separate questions, because they have different answers: a binary can
+/// be built with a hardware backend and still run on a machine that has no
+/// card, no driver, or a driver that does not match its own kernel module.
+struct HardwareEncoding {
+  bool compiled_in = false;
+  bool available = false;
+  /// "NVENC", "VAAPI", "VideoToolbox", and so on. Empty when none is compiled
+  /// in.
+  std::string implementation;
+  /// Why it is unavailable, in words meant for whoever is wondering why their
+  /// card is idle.
+  std::string detail;
+};
+
+[[nodiscard]] HardwareEncoding hardware_encoding();
 
 /// The devices the system offers, in the order the platform reports them.
 ///

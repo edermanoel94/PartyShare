@@ -4,6 +4,7 @@ add_executable(dv_unit_tests
   unit/test_result.cpp
   unit/test_logging.cpp
   unit/test_config.cpp
+  unit/test_crash_reporter.cpp
   unit/test_models.cpp
   unit/test_protocol.cpp
   unit/test_room_manager.cpp

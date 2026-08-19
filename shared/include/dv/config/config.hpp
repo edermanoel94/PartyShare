@@ -54,6 +54,12 @@ struct LoggingConfig {
   std::string level = "info";
   std::string file_path;
   bool log_to_console = true;
+  /// Where a crash report is written. Empty means the platform's own place for
+  /// state, which is what dv::diagnostics::default_crash_directory answers.
+  std::string crash_directory;
+  /// Crash reporting off is a legitimate choice for someone who does not want
+  /// stack traces of their machine written to disk at all.
+  bool crash_reports = true;
 };
 
 struct ServerConfig {

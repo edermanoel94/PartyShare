@@ -2,6 +2,7 @@
 #include <cstdio>
 
 #include <dv/config/config.hpp>
+#include <dv/diagnostics/crash_reporter.hpp>
 #include <dv/logging/logger.hpp>
 
 #include <QApplication>
@@ -32,6 +33,21 @@ int main(int argc, char* argv[]) {
       .log_to_console = config.logging.log_to_console,
   });
 
+  // Before anything that could crash, and after logging so that a failure to
+  // install has somewhere to be said.
+  if (config.logging.crash_reports) {
+    const auto installed = dv::diagnostics::install_crash_reporter({
+        .directory = config.logging.crash_directory,
+        .application = "desktop-voice",
+        .version = DV_VERSION,
+    });
+    if (installed.ok()) {
+      DV_LOG_INFO("Crash reports: {}", installed.value().string());
+    } else {
+      DV_LOG_WARN("Crash reports are off: {}", installed.error().message);
+    }
+  }
+
   DV_LOG_INFO("Voice Desktop client starting");
   DV_LOG_INFO("Signaling server: {}", config.network.signaling_url);
   DV_LOG_INFO("Video: {}x{} @ {} FPS, codec {}", config.video.width, config.video.height,
@@ -41,7 +57,7 @@ int main(int argc, char* argv[]) {
 
   QApplication application(argc, argv);
   QApplication::setApplicationName(QStringLiteral("Voice Desktop"));
-  QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+  QApplication::setApplicationVersion(QStringLiteral(DV_VERSION));
 
   dv::client::app::CallSession::Options session_options;
   session_options.signaling_url = config.network.signaling_url;

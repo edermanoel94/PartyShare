@@ -51,8 +51,12 @@ if(DV_BUILD_CLIENT_MEDIA)
   # A target of its own because the strict warning set cannot be applied to a
   # translation unit that includes libwebrtc headers.
   add_library(dv_client_media STATIC
+    src/webrtc/hardware_encoder.hpp
+    src/webrtc/hardware_encoder_none.cpp
     src/webrtc/impaired_socket_factory.cpp
     src/webrtc/impaired_socket_factory.hpp
+    src/webrtc/video_encoder_factory.cpp
+    src/webrtc/video_encoder_factory.hpp
     src/webrtc/libwebrtc_media_session.cpp
     src/webrtc/libwebrtc_screen_capturer.cpp
   )

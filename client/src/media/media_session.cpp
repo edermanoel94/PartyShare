@@ -27,6 +27,15 @@ bool media_is_available() noexcept {
   return false;
 }
 
+HardwareEncoding hardware_encoding() {
+  return HardwareEncoding{
+      .compiled_in = false,
+      .available = false,
+      .implementation = {},
+      .detail = "this client was built without libwebrtc, so it encodes nothing at all",
+  };
+}
+
 Result<std::vector<AudioDevice>> input_devices() {
   return Result<std::vector<AudioDevice>>::failure(
       "media_unavailable", "this client was built without libwebrtc, so it has no audio devices");

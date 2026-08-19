@@ -324,6 +324,47 @@ TEST_F(MediaEndToEndTest, AScreenSharedByOneClientArrivesDecodedAtTheOther) {
   EXPECT_EQ(ana.remote_frames(), 0U);
 }
 
+TEST_F(MediaEndToEndTest, TheScreenIsEncodedBySomethingThatSaysWhatItIs) {
+  // Which encoder is running is not a detail: it is the difference between a
+  // laptop fan at full speed and one that stays quiet, and task 4 of M8 exists
+  // to change the answer. What is asserted here is that the answer is
+  // reported at all, because a number nobody can read cannot be improved.
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  ASSERT_TRUE(ana.session().start_screen_share("").ok());
+  ASSERT_TRUE(wait_until([&] { return bruno.remote_frames() > 0; }, 30000ms));
+
+  ASSERT_TRUE(wait_until([&] { return !ana.session().video_stats().encoder.empty(); }))
+      << "libwebrtc never said which encoder it is using";
+
+  const dv::client::media::VideoStats stats = ana.session().video_stats();
+  std::printf("\nencoder: %s (%s)\n", stats.encoder.c_str(),
+              stats.hardware_encoder ? "hardware" : "software");
+  std::fflush(stdout);
+
+  // Whatever it is, the two claims have to agree with each other: libwebrtc
+  // marks an encoder power efficient exactly when it is hardware, and a
+  // software encoder that claimed to be one would send the bitrate controller
+  // down the wrong path.
+  const bool hardware_available = dv::client::media::hardware_encoding().available;
+  EXPECT_EQ(stats.hardware_encoder, hardware_available && stats.encoder != "OpenH264")
+      << "the encoder in use and what this machine supports disagree";
+}
+
 TEST_F(MediaEndToEndTest, StoppingAndStartingAShareLeavesTheCallAlone) {
   if (!dv::client::video::screen_capture_is_available()) {
     GTEST_SKIP() << "no display server attached, so there is no screen to share";

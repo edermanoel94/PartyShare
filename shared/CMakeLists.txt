@@ -1,10 +1,16 @@
 add_library(dv_shared STATIC
+  src/diagnostics/crash_reporter.cpp
   src/logging/logger.cpp
   src/config/config.cpp
   src/models/room.cpp
   src/protocol/message.cpp
 )
 add_library(dv::shared ALIAS dv_shared)
+
+# The one place the version number lives is the project() call. Anything that
+# writes it into a crash report, a window title or a user agent takes it from
+# here rather than repeating the literal.
+target_compile_definitions(dv_shared PUBLIC DV_VERSION="${PROJECT_VERSION}")
 
 target_include_directories(dv_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

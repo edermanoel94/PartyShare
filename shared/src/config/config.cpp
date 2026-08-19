@@ -141,6 +141,8 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(logging, "level", base.logging.level);
       read_field(logging, "file_path", base.logging.file_path);
       read_field(logging, "log_to_console", base.logging.log_to_console);
+      read_field(logging, "crash_directory", base.logging.crash_directory);
+      read_field(logging, "crash_reports", base.logging.crash_reports);
     }
     if (root.contains("server")) {
       const json& server = root.at("server");
@@ -206,6 +208,8 @@ void apply_environment(Config& config) {
 
   apply_env_string("DV_LOG_LEVEL", config.logging.level);
   apply_env_string("DV_LOG_FILE", config.logging.file_path);
+  apply_env_string("DV_CRASH_DIRECTORY", config.logging.crash_directory);
+  apply_env_bool("DV_CRASH_REPORTS", config.logging.crash_reports);
 
   apply_env_string("DV_SERVER_BIND_ADDRESS", config.server.bind_address);
   if (const auto raw = env("DV_SERVER_PORT")) {

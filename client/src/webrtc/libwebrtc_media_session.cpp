@@ -64,7 +64,9 @@
 #include "media/network_impairment.hpp"
 #include "video/frame_queue.hpp"
 #include "video/screen_capturer.hpp"
+#include "webrtc/hardware_encoder.hpp"
 #include "webrtc/impaired_socket_factory.hpp"
+#include "webrtc/video_encoder_factory.hpp"
 
 namespace dv::client::media {
 namespace {
@@ -302,7 +304,14 @@ class Engine {
     dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
     dependencies.audio_processing_builder =
         std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
-    dependencies.video_encoder_factory = webrtc::CreateBuiltinVideoEncoderFactory();
+    // Hardware when the machine has it, software when it does not. See
+    // webrtc/video_encoder_factory.hpp.
+    //
+    // Chosen once for the process, like the rest of the engine, and read from
+    // the environment because the engine is built before any session exists
+    // and therefore before any session options are known.
+    dependencies.video_encoder_factory =
+        create_video_encoder_factory(std::getenv("DV_DISABLE_HARDWARE_ENCODER") == nullptr);
     dependencies.video_decoder_factory = webrtc::CreateBuiltinVideoDecoderFactory();
     dependencies.packet_socket_factory = make_impaired_socket_factory(
         std::make_unique<webrtc::BasicPacketSocketFactory>(network_thread_->socketserver()),
@@ -1026,6 +1035,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     std::uint64_t bytes_received = 0;
     std::uint64_t keyframes = 0;
     double target = 0;
+    std::string encoder;
+    bool hardware = false;
 
     for (const auto* outbound : report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>()) {
       if (outbound->kind.value_or("") != "video") {
@@ -1034,6 +1045,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       bytes_sent += outbound->bytes_sent.value_or(0);
       keyframes += outbound->key_frames_encoded.value_or(0);
       target = std::max(target, outbound->target_bitrate.value_or(0) / 1000.0);
+      if (outbound->encoder_implementation.has_value()) {
+        encoder = *outbound->encoder_implementation;
+      }
+      hardware = hardware || outbound->power_efficient_encoder.value_or(false);
     }
 
     for (const auto* inbound : report->GetStatsOfType<webrtc::RTCInboundRtpStreamStats>()) {
@@ -1070,6 +1085,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       last_video_collection_ = now;
     }
     video_stats_.keyframes_sent = keyframes;
+    if (!encoder.empty()) {
+      video_stats_.encoder = encoder;
+      video_stats_.hardware_encoder = hardware;
+    }
     video_stats_.available_send_bitrate_kbps = available;
     video_stats_.target_bitrate_kbps = target;
   }
@@ -1296,6 +1315,16 @@ Result<std::unique_ptr<MediaSession>> create_media_session(const MediaSessionOpt
     return Result<std::unique_ptr<MediaSession>>::failure(started.error());
   }
   return std::unique_ptr<MediaSession>(std::move(session));
+}
+
+HardwareEncoding hardware_encoding() {
+  const HardwareEncoderSupport support = hardware_encoder_support();
+  return HardwareEncoding{
+      .compiled_in = support.compiled_in,
+      .available = support.available,
+      .implementation = support.implementation,
+      .detail = support.detail,
+  };
 }
 
 bool media_is_available() noexcept {

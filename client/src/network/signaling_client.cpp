@@ -1,11 +1,10 @@
 #include "network/signaling_client.hpp"
 
+#include <algorithm>
 #include <utility>
 #include <variant>
 
 #include <rtc/rtc.hpp>
-
-#include <algorithm>
 
 #include <dv/logging/logger.hpp>
 
@@ -91,7 +90,7 @@ Result<std::monostate> SignalingClient::connect() {
   if (options_.url.empty()) {
     return Result<std::monostate>::failure("invalid_value", "the signaling URL is empty");
   }
-  if (options_.url.rfind("ws://", 0) != 0 && options_.url.rfind("wss://", 0) != 0) {
+  if (!options_.url.starts_with("ws://") && !options_.url.starts_with("wss://")) {
     return Result<std::monostate>::failure(
         "invalid_value", "the signaling URL must start with ws:// or wss://: " + options_.url);
   }
@@ -184,8 +183,7 @@ void SignalingClient::handle_drop(const std::string& detail) {
     return;
   }
 
-  set_state(State::Reconnecting,
-            detail + ", retrying in " + std::to_string(wait.count()) + " ms");
+  set_state(State::Reconnecting, detail + ", retrying in " + std::to_string(wait.count()) + " ms");
   retry_changed_.notify_all();
 }
 

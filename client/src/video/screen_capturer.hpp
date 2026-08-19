@@ -34,7 +34,7 @@ struct Monitor {
 
 /// Section 5.2 of SPEC.md: 1280x720 at 30 FPS.
 struct ScreenCaptureOptions {
-  Size max_size{1280, 720};
+  Size max_size{.width = 1280, .height = 720};
   int max_fps = 30;
 };
 

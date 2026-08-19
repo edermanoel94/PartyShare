@@ -3,13 +3,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <thread>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <variant>
 
 #include <dv/core/result.hpp>
@@ -143,7 +143,7 @@ class SignalingClient {
   bool wanted_ = false;
   bool stopping_ = false;
   int attempts_ = 0;
-  std::chrono::steady_clock::time_point retry_at_{};
+  std::chrono::steady_clock::time_point retry_at_;
 };
 
 /// How long to wait before attempt number `attempt`, counting from one.

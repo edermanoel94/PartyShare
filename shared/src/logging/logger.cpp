@@ -33,8 +33,8 @@ spdlog::level::level_enum to_spdlog(Level level) {
 
 std::string to_lower(std::string_view text) {
   std::string result(text);
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::ranges::transform(result, result.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return result;
 }
 
@@ -86,13 +86,27 @@ void set_level(Level level) {
 
 Level level_from_string(std::string_view text, Level fallback) {
   const std::string normalized = to_lower(text);
-  if (normalized == "trace") return Level::Trace;
-  if (normalized == "debug") return Level::Debug;
-  if (normalized == "info") return Level::Info;
-  if (normalized == "warn" || normalized == "warning") return Level::Warn;
-  if (normalized == "error") return Level::Error;
-  if (normalized == "fatal" || normalized == "critical") return Level::Fatal;
-  if (normalized == "off" || normalized == "none") return Level::Off;
+  if (normalized == "trace") {
+    return Level::Trace;
+  }
+  if (normalized == "debug") {
+    return Level::Debug;
+  }
+  if (normalized == "info") {
+    return Level::Info;
+  }
+  if (normalized == "warn" || normalized == "warning") {
+    return Level::Warn;
+  }
+  if (normalized == "error") {
+    return Level::Error;
+  }
+  if (normalized == "fatal" || normalized == "critical") {
+    return Level::Fatal;
+  }
+  if (normalized == "off" || normalized == "none") {
+    return Level::Off;
+  }
   return fallback;
 }
 

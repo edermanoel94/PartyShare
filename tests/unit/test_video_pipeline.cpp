@@ -27,7 +27,7 @@ constexpr Size kTarget{1280, 720};
   const auto bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
                      static_cast<std::size_t>(VideoFrame::kBytesPerPixel);
   std::vector<std::uint8_t> pixels(bytes, fill);
-  return VideoFrame{width, height, std::move(pixels)};
+  return VideoFrame{Size{width, height}, std::move(pixels)};
 }
 
 TEST(FrameSizeTest, A1080pMonitorFitsExactlyInto720p) {
@@ -166,20 +166,30 @@ TEST(VideoFrameTest, TakingThePixelsLeavesTheFrameEmpty) {
   // The buffer is handed back so the capturer can fill it again instead of
   // allocating three and a half megabytes thirty times a second.
   VideoFrame frame = make_frame(4, 4, 9);
-  const std::size_t size = frame.size();
+  const std::size_t bytes = frame.byte_count();
 
   std::vector<std::uint8_t> pixels = frame.take_pixels();
 
-  EXPECT_EQ(pixels.size(), size);
+  EXPECT_EQ(pixels.size(), bytes);
   EXPECT_TRUE(frame.empty());
   EXPECT_EQ(frame.width(), 0);
   EXPECT_EQ(frame.height(), 0);
 }
 
+TEST(VideoFrameTest, ItCarriesASizeRatherThanTwoLooseNumbers) {
+  // Width and height are the same type and mean different things. Handing them
+  // over as a Size is what stops the pair being swapped at a call site, which
+  // produces a frame that decodes into diagonal stripes.
+  const VideoFrame frame = make_frame(640, 480);
+  EXPECT_EQ(frame.size(), (Size{640, 480}));
+  EXPECT_EQ(frame.width(), 640);
+  EXPECT_EQ(frame.height(), 480);
+}
+
 TEST(VideoFrameTest, StrideIsFourBytesPerPixel) {
   const VideoFrame frame = make_frame(1280, 720);
   EXPECT_EQ(frame.stride(), 1280 * 4);
-  EXPECT_EQ(frame.size(), static_cast<std::size_t>(1280) * 720 * 4);
+  EXPECT_EQ(frame.byte_count(), static_cast<std::size_t>(1280) * 720 * 4);
 }
 
 }  // namespace

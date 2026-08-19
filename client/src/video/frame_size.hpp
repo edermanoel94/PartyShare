@@ -50,7 +50,7 @@ struct Size {
   // chroma sample in it.
   width = std::max(2, width - (width % 2));
   height = std::max(2, height - (height % 2));
-  return {width, height};
+  return {.width = width, .height = height};
 }
 
 }  // namespace dv::client::video

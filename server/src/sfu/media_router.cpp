@@ -101,19 +101,26 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   // Installed before anything can produce one. libdatachannel delivers these
   // from its own threads, and they must never take `mutex_` on a path that
   // could already hold it, which is why they only enqueue.
-  session.connection->onLocalDescription([this, user_id, room_id](rtc::Description description) {
-    if (description.type() != rtc::Description::Type::Offer) {
-      // The SFU is always the offerer, so anything else is a bug on our side.
-      DV_LOG_WARN("SFU: ignoring a local {} for {}", description.typeString(), user_id);
-      return;
-    }
-    enqueue(user_id, protocol::Offer{room_id, std::string(protocol::kSfuUserId), user_id,
-                                     std::string(description)});
-  });
+  session.connection->onLocalDescription(
+      [this, user_id, room_id](const rtc::Description& description) {
+        if (description.type() != rtc::Description::Type::Offer) {
+          // The SFU is always the offerer, so anything else is a bug on our side.
+          DV_LOG_WARN("SFU: ignoring a local {} for {}", description.typeString(), user_id);
+          return;
+        }
+        enqueue(user_id, protocol::Offer{.room_id = room_id,
+                                         .from_user_id = std::string(protocol::kSfuUserId),
+                                         .to_user_id = user_id,
+                                         .sdp = std::string(description)});
+      });
 
-  session.connection->onLocalCandidate([this, user_id, room_id](rtc::Candidate candidate) {
-    enqueue(user_id, protocol::IceCandidate{room_id, std::string(protocol::kSfuUserId), user_id,
-                                            std::string(candidate), candidate.mid(), 0});
+  session.connection->onLocalCandidate([this, user_id, room_id](const rtc::Candidate& candidate) {
+    enqueue(user_id, protocol::IceCandidate{.room_id = room_id,
+                                            .from_user_id = std::string(protocol::kSfuUserId),
+                                            .to_user_id = user_id,
+                                            .candidate = std::string(candidate),
+                                            .sdp_mid = candidate.mid(),
+                                            .sdp_mline_index = 0});
   });
 
   session.connection->onStateChange([user_id](rtc::PeerConnection::State state) {
@@ -152,8 +159,8 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   session.inbound->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
 
   session.inbound->onMessage(
-      [this, user_id, room_id](rtc::binary packet) {
-        forward_audio(user_id, room_id, std::move(packet));
+      [this, user_id, room_id](const rtc::binary& packet) {
+        forward_audio(user_id, room_id, packet);
       },
       [](const rtc::string&) {
         // Text on a media track is not part of anything we speak.
@@ -167,8 +174,8 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   session.video_inbound = session.connection->addTrack(video_inbound);
   session.video_inbound->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
   session.video_inbound->onMessage(
-      [this, user_id, room_id](rtc::binary packet) {
-        forward_video(user_id, room_id, std::move(packet));
+      [this, user_id, room_id](const rtc::binary& packet) {
+        forward_video(user_id, room_id, packet);
       },
       [](const rtc::string&) {});
 
@@ -328,6 +335,10 @@ void MediaRouter::add_outbound_track(Session& session, const std::string& source
   session.renegotiation_pending = true;
 }
 
+// Reads nothing from the router today, only from the session handed to it. It
+// stays a member because it is part of the router's own protocol with itself,
+// and the contract about `mutex_` in the header is about the caller.
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void MediaRouter::negotiate(Session& session) {
   if (!session.renegotiation_pending && session.connection->localDescription().has_value()) {
     return;
@@ -384,7 +395,7 @@ void MediaRouter::add_video_outbound_track(Session& session) {
 }
 
 void MediaRouter::forward_video(const std::string& from_user_id, const std::string& room_id,
-                                rtc::binary packet) {
+                                const rtc::binary& packet) {
   if (rtc::IsRtcp(packet)) {
     return;
   }
@@ -469,7 +480,7 @@ std::shared_ptr<const MediaRouter::RoutingTable> MediaRouter::routes() const {
 }
 
 void MediaRouter::forward_audio(const std::string& from_user_id, const std::string& room_id,
-                                rtc::binary packet) {
+                                const rtc::binary& packet) {
   if (rtc::IsRtcp(packet)) {
     // Handled by the track's own RTCP session, not something to forward.
     return;

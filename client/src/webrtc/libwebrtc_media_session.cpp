@@ -409,7 +409,7 @@ class RemoteVideoSink final : public webrtc::VideoSinkInterface<webrtc::VideoFra
       return;
     }
 
-    handler_(video::VideoFrame{width, height, std::move(pixels)});
+    handler_(video::VideoFrame{video::Size{width, height}, std::move(pixels)});
   }
 
  private:
@@ -709,8 +709,9 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
     if (min_kbps <= 0 || max_kbps < min_kbps) {
       return Result<std::monostate>::failure(
-          "invalid_value", "the bitrate range has to be positive and the maximum at least the "
-                           "minimum");
+          "invalid_value",
+          "the bitrate range has to be positive and the maximum at least the "
+          "minimum");
     }
     options_.video_min_bitrate_kbps = min_kbps;
     options_.video_max_bitrate_kbps = max_kbps;

@@ -1,15 +1,61 @@
----
+# Static analysis for the project, section 24 of SPEC.md.
+#
+# bugprone-* and performance-* are errors: they are about code that is wrong or
+# wasteful, and neither is a matter of taste. Everything else is a warning.
+#
+# The disabled checks below are decisions, not silence:
+#
+#   modernize-use-scoped-lock
+#     std::lock_guard says "one mutex, whole scope", which is what every lock in
+#     this project is. std::scoped_lock exists to take several at once without
+#     deadlocking, and spending it on one hides that distinction.
+#
+#   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+#   cppcoreguidelines-pro-bounds-constant-array-index
+#     Would ban operator[] on every map and vector here. The bounds that matter
+#     are the ones on data off the network, which is the protocol parser, and
+#     that is covered by tests rather than by a blanket rule.
+#
+#   cppcoreguidelines-pro-bounds-pointer-arithmetic
+#   cppcoreguidelines-pro-type-reinterpret-cast
+#     Rewriting an RTP header in place is pointer arithmetic over a byte buffer
+#     and a reinterpret_cast, and there is no other way to do it. See
+#     MediaRouter::forward_audio.
+#
+#   cppcoreguidelines-macro-usage
+#     The logging macros of section 23 of SPEC.md have to be macros: they
+#     capture the call site, and a function cannot.
+#
+#   bugprone-easily-swappable-parameters
+#     Fires on every function that takes two strings, which in a signaling
+#     protocol is most of them. The real answer is a distinct type per
+#     identifier, which is worth doing and is not a two line change; until it
+#     is, the check is noise rather than a finding.
+#
+#   readability-function-cognitive-complexity
+#     A threshold on complexity is a conversation, not a build failure. What it
+#     flags here is the protocol dispatch, which is long because the protocol
+#     is, not because it is tangled.
+
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
   modernize-*,
   performance-*,
   readability-*,
+  -bugprone-easily-swappable-parameters,
   -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-macro-usage,
   -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -modernize-use-scoped-lock,
   -modernize-use-trailing-return-type,
-  -readability-magic-numbers,
-  -readability-identifier-length
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -readability-magic-numbers
 
 WarningsAsErrors: 'bugprone-*,performance-*'
 HeaderFilterRegex: '.*/(shared|client|server)/.*'

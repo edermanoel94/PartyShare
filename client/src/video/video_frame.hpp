@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "video/frame_size.hpp"
+
 namespace dv::client::video {
 
 /// One captured or decoded frame, in packed BGRA.
@@ -22,8 +24,11 @@ class VideoFrame {
  public:
   VideoFrame() = default;
 
-  VideoFrame(int width, int height, std::vector<std::uint8_t> pixels)
-      : width_(width), height_(height), pixels_(std::move(pixels)) {}
+  /// Takes a Size rather than two ints. Width and height are the same type,
+  /// next to each other, and mean different things: exactly the pair that gets
+  /// swapped and produces a frame that decodes into diagonal stripes.
+  VideoFrame(Size size, std::vector<std::uint8_t> pixels)
+      : size_(size), pixels_(std::move(pixels)) {}
 
   VideoFrame(const VideoFrame&) = delete;
   VideoFrame& operator=(const VideoFrame&) = delete;
@@ -31,29 +36,30 @@ class VideoFrame {
   VideoFrame& operator=(VideoFrame&&) noexcept = default;
   ~VideoFrame() = default;
 
-  [[nodiscard]] int width() const noexcept { return width_; }
-  [[nodiscard]] int height() const noexcept { return height_; }
+  [[nodiscard]] Size size() const noexcept { return size_; }
+  [[nodiscard]] int width() const noexcept { return size_.width; }
+  [[nodiscard]] int height() const noexcept { return size_.height; }
   /// Bytes per row. Packed, so always four bytes per pixel.
-  [[nodiscard]] int stride() const noexcept { return width_ * kBytesPerPixel; }
+  [[nodiscard]] int stride() const noexcept { return size_.width * kBytesPerPixel; }
   [[nodiscard]] bool empty() const noexcept { return pixels_.empty(); }
 
   [[nodiscard]] const std::uint8_t* data() const noexcept { return pixels_.data(); }
   [[nodiscard]] std::uint8_t* data() noexcept { return pixels_.data(); }
-  [[nodiscard]] std::size_t size() const noexcept { return pixels_.size(); }
+  /// Bytes in the buffer. Not to be confused with size(), which is the
+  /// dimensions.
+  [[nodiscard]] std::size_t byte_count() const noexcept { return pixels_.size(); }
 
   /// Hands the buffer back so it can be filled again instead of reallocated.
   /// The frame is empty afterwards.
   [[nodiscard]] std::vector<std::uint8_t> take_pixels() noexcept {
-    width_ = 0;
-    height_ = 0;
+    size_ = Size{};
     return std::move(pixels_);
   }
 
   static constexpr int kBytesPerPixel = 4;
 
  private:
-  int width_ = 0;
-  int height_ = 0;
+  Size size_;
   std::vector<std::uint8_t> pixels_;
 };
 

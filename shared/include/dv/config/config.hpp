@@ -72,6 +72,9 @@ struct Config {
 ///
 /// The file is optional. A missing file is not an error, but a file that
 /// exists and cannot be parsed is.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
 [[nodiscard]] Result<Config> load(int argc, const char* const argv[]);
 
 /// Same precedence, minus the command line. Useful in tests.

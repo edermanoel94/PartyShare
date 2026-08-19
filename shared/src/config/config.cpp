@@ -14,8 +14,8 @@ namespace {
 
 using nlohmann::json;
 
-Error invalid_value(std::string field, std::string reason) {
-  return Error{"invalid_value", field + ": " + reason};
+Error invalid_value(const std::string& field, const std::string& reason) {
+  return Error{.code = "invalid_value", .message = field + ": " + reason};
 }
 
 std::optional<std::string> env(const char* name) {
@@ -27,9 +27,12 @@ std::optional<std::string> env(const char* name) {
 }
 
 bool parse_bool(std::string_view text, bool fallback) {
-  if (text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "on") return true;
-  if (text == "0" || text == "false" || text == "FALSE" || text == "no" || text == "off")
+  if (text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "on") {
+    return true;
+  }
+  if (text == "0" || text == "false" || text == "FALSE" || text == "no" || text == "off") {
     return false;
+  }
   return fallback;
 }
 
@@ -212,6 +215,7 @@ void apply_environment(Config& config) {
   apply_env_string("DV_SERVER_USERS_FILE", config.server.users_file);
 }
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
 Result<Config> load(int argc, const char* const argv[]) {
   // The configuration file path is the one setting that has to be read from
   // the command line before anything else can be loaded.
@@ -249,15 +253,33 @@ Result<Config> load(int argc, const char* const argv[]) {
       continue;
     }
     const std::string text(value);
-    if (key == "config") continue;
-    if (key == "log-level") config.logging.level = text;
-    if (key == "log-file") config.logging.file_path = text;
-    if (key == "signaling-url") config.network.signaling_url = text;
-    if (key == "bind-address") config.server.bind_address = text;
-    if (key == "users-file") config.server.users_file = text;
-    if (key == "input-device") config.audio.input_device = text;
-    if (key == "output-device") config.audio.output_device = text;
-    if (key == "codec") config.video.codec = text;
+    if (key == "config") {
+      continue;
+    }
+    if (key == "log-level") {
+      config.logging.level = text;
+    }
+    if (key == "log-file") {
+      config.logging.file_path = text;
+    }
+    if (key == "signaling-url") {
+      config.network.signaling_url = text;
+    }
+    if (key == "bind-address") {
+      config.server.bind_address = text;
+    }
+    if (key == "users-file") {
+      config.server.users_file = text;
+    }
+    if (key == "input-device") {
+      config.audio.input_device = text;
+    }
+    if (key == "output-device") {
+      config.audio.output_device = text;
+    }
+    if (key == "codec") {
+      config.video.codec = text;
+    }
     if (key == "port") {
       if (const auto parsed = parse_int(text); parsed && *parsed > 0 && *parsed <= 65535) {
         config.server.port = static_cast<std::uint16_t>(*parsed);
@@ -305,16 +327,15 @@ std::optional<Error> validate(const Config& config) {
   }
 
   static constexpr std::array<int, 5> kOpusSampleRates{8000, 12000, 16000, 24000, 48000};
-  if (std::find(kOpusSampleRates.begin(), kOpusSampleRates.end(), config.audio.sample_rate_hz) ==
-      kOpusSampleRates.end()) {
+  if (std::ranges::find(kOpusSampleRates, config.audio.sample_rate_hz) == kOpusSampleRates.end()) {
     return invalid_value("audio.sample_rate_hz", "must be a rate supported by Opus");
   }
   if (config.audio.channels < 1 || config.audio.channels > 2) {
     return invalid_value("audio.channels", "must be 1 or 2");
   }
   static constexpr std::array<int, 5> kOpusFrameDurations{5, 10, 20, 40, 60};
-  if (std::find(kOpusFrameDurations.begin(), kOpusFrameDurations.end(),
-                config.audio.frame_duration_ms) == kOpusFrameDurations.end()) {
+  if (std::ranges::find(kOpusFrameDurations, config.audio.frame_duration_ms) ==
+      kOpusFrameDurations.end()) {
     return invalid_value("audio.frame_duration_ms", "must be 5, 10, 20, 40 or 60");
   }
   if (config.audio.bitrate_kbps < 6 || config.audio.bitrate_kbps > 510) {

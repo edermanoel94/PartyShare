@@ -31,7 +31,7 @@ namespace dv::protocol {
 /// hexadecimal characters assigned by the authenticator, and this is not one.
 inline constexpr std::string_view kSfuUserId = "sfu";
 
-enum class MessageType {
+enum class MessageType : std::uint8_t {
   Authenticate,
   Authenticated,
   CreateRoom,

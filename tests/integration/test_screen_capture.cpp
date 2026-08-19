@@ -40,7 +40,7 @@ class Recorder {
       const std::lock_guard<std::mutex> lock(mutex_);
       ++count_;
       last_size_ = Size{frame.width(), frame.height()};
-      last_bytes_ = frame.size();
+      last_bytes_ = frame.byte_count();
     };
   }
 

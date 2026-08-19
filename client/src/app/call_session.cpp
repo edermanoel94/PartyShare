@@ -17,7 +17,7 @@ namespace {
   for (const auto& [id, participant] : participants) {
     result.push_back(participant);
   }
-  std::sort(result.begin(), result.end(), [](const Participant& a, const Participant& b) {
+  std::ranges::sort(result, [](const Participant& a, const Participant& b) {
     return a.user.display_name == b.user.display_name ? a.user.id < b.user.id
                                                       : a.user.display_name < b.user.display_name;
   });
@@ -48,7 +48,7 @@ CallSession::CallSession(Options options)
 CallSession::CallSession(Options options, MediaSessionFactory factory)
     : options_(std::move(options)),
       media_factory_(std::move(factory)),
-      signaling_(SignalingClient::Options{options_.signaling_url}) {
+      signaling_(SignalingClient::Options{.url = options_.signaling_url}) {
   signaling_.on_message([this](protocol::Message message) { handle_signal(std::move(message)); });
   signaling_.on_state([this](SignalingClient::State state, const std::string& detail) {
     handle_signaling_state(state, detail);
@@ -104,7 +104,7 @@ Result<std::monostate> CallSession::create_room(const std::string& room_name) {
   if (user_id.empty()) {
     return Result<std::monostate>::failure("unauthorized", "authenticate before creating a room");
   }
-  return signaling_.send(protocol::CreateRoom{user_id, room_name});
+  return signaling_.send(protocol::CreateRoom{.user_id = user_id, .room_name = room_name});
 }
 
 Result<std::monostate> CallSession::join(const std::string& room_id,
@@ -121,7 +121,8 @@ Result<std::monostate> CallSession::join(const std::string& room_id,
   if (user_id.empty()) {
     return Result<std::monostate>::failure("unauthorized", "authenticate before joining a room");
   }
-  return signaling_.send(protocol::JoinRoom{room_id, user_id, display_name});
+  return signaling_.send(
+      protocol::JoinRoom{.room_id = room_id, .user_id = user_id, .display_name = display_name});
 }
 
 Result<std::monostate> CallSession::leave() {
@@ -147,7 +148,7 @@ Result<std::monostate> CallSession::leave() {
   publish_participants();
   set_state(State::Authenticated, "left the room");
 
-  return signaling_.send(protocol::LeaveRoom{room, user_id});
+  return signaling_.send(protocol::LeaveRoom{.room_id = room, .user_id = user_id});
 }
 
 Result<std::monostate> CallSession::set_muted(bool muted) {
@@ -173,9 +174,9 @@ Result<std::monostate> CallSession::set_muted(bool muted) {
   // The server confirms by broadcasting it back, and only then does the
   // interface change: everyone has to agree about who is muted.
   if (muted) {
-    return signaling_.send(protocol::Mute{room, user_id});
+    return signaling_.send(protocol::Mute{.room_id = room, .user_id = user_id});
   }
-  return signaling_.send(protocol::Unmute{room, user_id});
+  return signaling_.send(protocol::Unmute{.room_id = room, .user_id = user_id});
 }
 
 bool CallSession::muted() const {
@@ -213,7 +214,9 @@ Result<std::monostate> CallSession::start_screen_share(const std::string& monito
     return started;
   }
 
-  if (auto sent = signaling_.send(protocol::ScreenShareStarted{room, user_id}); !sent) {
+  if (auto sent =
+          signaling_.send(protocol::ScreenShareStarted{.room_id = room, .user_id = user_id});
+      !sent) {
     session->stop_screen_share();
     return sent;
   }
@@ -237,7 +240,7 @@ Result<std::monostate> CallSession::stop_screen_share() {
   if (room.empty()) {
     return std::monostate{};
   }
-  return signaling_.send(protocol::ScreenShareStopped{room, user_id});
+  return signaling_.send(protocol::ScreenShareStopped{.room_id = room, .user_id = user_id});
 }
 
 bool CallSession::sharing_screen() const {
@@ -254,6 +257,10 @@ std::string CallSession::screen_sharer() const {
   return screen_sharer_;
 }
 
+// Reads nothing from the session today. It stays a member because listing the
+// monitors is something the interface asks the session for, and a future one
+// may well consult the call's state to answer.
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 Result<std::vector<video::Monitor>> CallSession::monitors() const {
   return video::monitors();
 }
@@ -387,7 +394,9 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
         password = pending_password_;
       }
       if (!username.empty()) {
-        if (auto sent = signaling_.send(protocol::Authenticate{username, password}); !sent) {
+        if (auto sent =
+                signaling_.send(protocol::Authenticate{.username = username, .password = password});
+            !sent) {
           report(sent.error());
         }
       }
@@ -435,7 +444,8 @@ void CallSession::handle_signal(protocol::Message message) {
     // than the end of the call.
     if (!rejoin_room.empty()) {
       DV_LOG_INFO("Call session: rejoining room {} after reconnecting", rejoin_room);
-      if (auto sent = signaling_.send(protocol::JoinRoom{rejoin_room, user_id, rejoin_name});
+      if (auto sent = signaling_.send(protocol::JoinRoom{
+              .room_id = rejoin_room, .user_id = user_id, .display_name = rejoin_name});
           !sent) {
         report(sent.error());
       }
@@ -549,7 +559,7 @@ void CallSession::handle_signal(protocol::Message message) {
   }
 
   if (const auto* error = std::get_if<protocol::ErrorMessage>(&message)) {
-    report(Error{error->code, error->message});
+    report(Error{.code = error->code, .message = error->message});
     return;
   }
 }
@@ -601,8 +611,9 @@ void CallSession::handle_ice_candidate(const protocol::IceCandidate& candidate) 
     return;
   }
 
-  const media::IceCandidate value{candidate.candidate, candidate.sdp_mid,
-                                  candidate.sdp_mline_index};
+  const media::IceCandidate value{.candidate = candidate.candidate,
+                                  .sdp_mid = candidate.sdp_mid,
+                                  .sdp_mline_index = candidate.sdp_mline_index};
   if (auto added = session->add_remote_candidate(value); !added) {
     report(added.error());
   }
@@ -626,8 +637,11 @@ Result<std::monostate> CallSession::ensure_media_session() {
       room = room_id_;
       user_id = local_user_.id;
     }
-    if (auto sent = signaling_.send(
-            protocol::Answer{room, user_id, std::string(protocol::kSfuUserId), std::move(sdp)});
+    if (auto sent =
+            signaling_.send(protocol::Answer{.room_id = room,
+                                             .from_user_id = user_id,
+                                             .to_user_id = std::string(protocol::kSfuUserId),
+                                             .sdp = std::move(sdp)});
         !sent) {
       report(sent.error());
     }
@@ -641,15 +655,19 @@ Result<std::monostate> CallSession::ensure_media_session() {
       room = room_id_;
       user_id = local_user_.id;
     }
-    if (auto sent = signaling_.send(protocol::IceCandidate{
-            room, user_id, std::string(protocol::kSfuUserId), std::move(candidate.candidate),
-            std::move(candidate.sdp_mid), candidate.sdp_mline_index});
+    if (auto sent =
+            signaling_.send(protocol::IceCandidate{.room_id = room,
+                                                   .from_user_id = user_id,
+                                                   .to_user_id = std::string(protocol::kSfuUserId),
+                                                   .candidate = std::move(candidate.candidate),
+                                                   .sdp_mid = std::move(candidate.sdp_mid),
+                                                   .sdp_mline_index = candidate.sdp_mline_index});
         !sent) {
       report(sent.error());
     }
   };
 
-  callbacks.on_remote_audio = [this](std::string user_id, bool active) {
+  callbacks.on_remote_audio = [this](const std::string& user_id, bool active) {
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(user_id); it != participants_.end()) {
@@ -659,7 +677,7 @@ Result<std::monostate> CallSession::ensure_media_session() {
     publish_participants();
   };
 
-  callbacks.on_levels = [this](std::vector<media::AudioLevel> levels) {
+  callbacks.on_levels = [this](const std::vector<media::AudioLevel>& levels) {
     Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);

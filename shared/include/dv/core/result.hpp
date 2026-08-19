@@ -32,7 +32,7 @@ class Result {
   static Result failure(Error error) { return Result(std::move(error)); }
 
   static Result failure(std::string code, std::string message) {
-    return Result(Error{std::move(code), std::move(message)});
+    return Result(Error{.code = std::move(code), .message = std::move(message)});
   }
 
   [[nodiscard]] bool ok() const noexcept { return std::holds_alternative<T>(storage_); }

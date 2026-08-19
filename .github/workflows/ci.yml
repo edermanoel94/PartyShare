@@ -151,19 +151,25 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DDV_BUILD_CLIENT=OFF
+            -DDV_BUILD_CLIENT_UI=OFF
 
+      # The client core is analysed too. It has no Qt in it, which is why the
+      # interface is the only thing turned off above, and it is where the
+      # threading lives.
       - name: clang-tidy
         run: |
-          files=$(find shared server -name '*.cpp')
-          clang-tidy-18 -p build/analysis $files
+          find shared server \
+            client/src/app client/src/media client/src/network client/src/video \
+            -name '*.cpp' -print0 | xargs -0 clang-tidy-18 -p build/analysis
 
       - name: cppcheck
         run: |
           cppcheck --enable=warning,performance,portability \
             --std=c++20 --error-exitcode=1 --inline-suppr \
             --suppress=missingIncludeSystem \
-            -I shared/include -I server/src shared/src server/src
+            -I shared/include -I server/src -I client/src \
+            shared/src server/src \
+            client/src/app client/src/media client/src/network client/src/video
 
   # The M3 spike is not part of the product build. It runs on demand so the
   # libwebrtc toolchain can be validated on every platform without adding a

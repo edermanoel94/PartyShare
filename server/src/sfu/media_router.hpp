@@ -202,10 +202,10 @@ class MediaRouter : public MediaSignals {
   [[nodiscard]] std::shared_ptr<const RoutingTable> routes() const;
 
   void forward_audio(const std::string& from_user_id, const std::string& room_id,
-                     rtc::binary packet);
+                     const rtc::binary& packet);
 
   void forward_video(const std::string& from_user_id, const std::string& room_id,
-                     rtc::binary packet);
+                     const rtc::binary& packet);
 
   /// A viewer asked for an intra frame. Passes the request up to whoever is
   /// sending video in that room.

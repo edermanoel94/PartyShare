@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,7 +15,7 @@ namespace dv::server {
 namespace {
 
 std::string to_hex(const unsigned char* data, std::size_t size) {
-  static constexpr char kDigits[] = "0123456789abcdef";
+  static constexpr std::string_view kDigits = "0123456789abcdef";
   std::string hex;
   hex.reserve(size * 2);
   for (std::size_t i = 0; i < size; ++i) {
@@ -55,7 +56,7 @@ bool constant_time_equals(const std::string& left, const std::string& right) {
 
 Error unauthorized() {
   // Deliberately identical for an unknown user and a wrong password.
-  return Error{"unauthorized", "invalid username or password"};
+  return Error{.code = "unauthorized", .message = "invalid username or password"};
 }
 
 }  // namespace
@@ -77,7 +78,13 @@ Result<models::User> Authenticator::add_user(const std::string& username,
 
   Account account;
   account.user.id = random_hex(16);
-  account.user.display_name = display_name.empty() ? username : std::move(display_name);
+  // Not a ternary with a std::move in one arm: the other arm is a reference,
+  // so the whole expression is one and nothing moves.
+  if (display_name.empty()) {
+    account.user.display_name = username;
+  } else {
+    account.user.display_name = std::move(display_name);
+  }
   account.salt_hex = random_hex(16);
   account.password_hash_hex = sha256_hex(account.salt_hex + password);
 
@@ -105,7 +112,8 @@ Result<Authenticator::Session> Authenticator::authenticate(const std::string& us
   session.expires_in_seconds = static_cast<int>(
       std::chrono::duration_cast<std::chrono::seconds>(options_.token_lifetime).count());
 
-  tokens_.emplace(session.token, Token{account.user.id, now + options_.token_lifetime});
+  tokens_.emplace(session.token,
+                  Token{.user_id = account.user.id, .expires_at = now + options_.token_lifetime});
   return session;
 }
 
@@ -120,9 +128,8 @@ Result<models::User> Authenticator::validate(const std::string& token, Clock::ti
   }
 
   const std::string& user_id = it->second.user_id;
-  const auto account = std::find_if(accounts_.begin(), accounts_.end(), [&](const auto& entry) {
-    return entry.second.user.id == user_id;
-  });
+  const auto account = std::ranges::find_if(
+      accounts_, [&](const auto& entry) { return entry.second.user.id == user_id; });
   if (account == accounts_.end()) {
     tokens_.erase(it);
     return Result<models::User>::failure("unauthorized", "the account no longer exists");

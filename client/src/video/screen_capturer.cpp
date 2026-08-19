@@ -25,9 +25,13 @@ bool screen_capture_is_available() noexcept {
   return false;
 }
 
+// Same as create_media_session: the sinks are taken by value because the real
+// implementation moves them, and this stub cannot change the signature.
+// NOLINTBEGIN(performance-unnecessary-value-param)
 Result<std::unique_ptr<ScreenCapturer>> create_screen_capturer(
     const ScreenCaptureOptions& /*options*/, ScreenCapturer::FrameSink /*frames*/,
     ScreenCapturer::ErrorSink /*errors*/) {
+  // NOLINTEND(performance-unnecessary-value-param)
   return Result<std::unique_ptr<ScreenCapturer>>::failure("capture_unavailable", kUnavailable);
 }
 

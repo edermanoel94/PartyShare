@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -11,7 +12,7 @@
 /// different name. Everything else maps one to one.
 namespace dv::log {
 
-enum class Level { Trace, Debug, Info, Warn, Error, Fatal, Off };
+enum class Level : std::uint8_t { Trace, Debug, Info, Warn, Error, Fatal, Off };
 
 struct Options {
   Level level = Level::Info;

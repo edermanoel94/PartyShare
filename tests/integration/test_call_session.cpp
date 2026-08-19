@@ -196,8 +196,8 @@ class FakeMediaSession : public media::MediaSession {
     if (callbacks_.on_remote_video) {
       const auto bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
                          static_cast<std::size_t>(dv::client::video::VideoFrame::kBytesPerPixel);
-      callbacks_.on_remote_video(
-          dv::client::video::VideoFrame{width, height, std::vector<std::uint8_t>(bytes)});
+      callbacks_.on_remote_video(dv::client::video::VideoFrame{
+          dv::client::video::Size{width, height}, std::vector<std::uint8_t>(bytes)});
     }
   }
 

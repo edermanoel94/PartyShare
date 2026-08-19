@@ -10,8 +10,13 @@ namespace dv::client::media {
 //
 // The counterpart lives in client/src/webrtc/libwebrtc_media_session.cpp.
 
+// The callbacks are taken by value because the real implementation moves them
+// into the session. This one has nowhere to put them, and cannot change the
+// signature it is standing in for.
+// NOLINTBEGIN(performance-unnecessary-value-param)
 Result<std::unique_ptr<MediaSession>> create_media_session(const MediaSessionOptions& /*options*/,
                                                            MediaSession::Callbacks /*callbacks*/) {
+  // NOLINTEND(performance-unnecessary-value-param)
   return Result<std::unique_ptr<MediaSession>>::failure(
       "media_unavailable",
       "this client was built without libwebrtc, so it cannot send or receive audio. "

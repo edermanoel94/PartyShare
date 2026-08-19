@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <dv/logging/logger.hpp>
+
 #include <QComboBox>
 #include <QFont>
 #include <QFormLayout>
@@ -23,8 +25,6 @@
 #include <QStringList>
 #include <QVBoxLayout>
 #include <QWidget>
-
-#include <dv/logging/logger.hpp>
 
 #include "media/media_session.hpp"
 #include "ui/screen_view.hpp"
@@ -360,9 +360,9 @@ void MainWindow::wire_session() {
                     .arg(stats.packets_lost)
                     .arg(stats.send_bitrate_kbps, 0, 'f', 0)
                     .arg(stats.receive_bitrate_kbps, 0, 'f', 0);
-            QMetaObject::invokeMethod(
-                this, "apply_metrics", Qt::QueuedConnection, Q_ARG(QString, summary),
-                Q_ARG(int, static_cast<int>(client::app::quality_of(stats))));
+            QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
+                                      Q_ARG(QString, summary),
+                                      Q_ARG(int, static_cast<int>(client::app::quality_of(stats))));
           },
       .on_local_level =
           [this](double level, bool speaking) {
@@ -604,10 +604,10 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
     quality_->clear();
     return;
   }
-  quality_->setText(QStringLiteral("● rede %1")
-                        .arg(QString::fromUtf8(client::app::to_string(measured).data(),
-                                               static_cast<qsizetype>(
-                                                   client::app::to_string(measured).size()))));
+  quality_->setText(
+      QStringLiteral("● rede %1")
+          .arg(QString::fromUtf8(client::app::to_string(measured).data(),
+                                 static_cast<qsizetype>(client::app::to_string(measured).size()))));
   quality_->setStyleSheet(
       QStringLiteral("color: %1; font-weight: bold;").arg(kColours.value(quality)));
 }

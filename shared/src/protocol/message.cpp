@@ -17,24 +17,24 @@ struct TypeMapping {
 
 // The single source of truth for the wire names. docs/protocol.md must match.
 constexpr std::array<TypeMapping, 18> kTypeMappings{{
-    {MessageType::Authenticate, "authenticate"},
-    {MessageType::Authenticated, "authenticated"},
-    {MessageType::CreateRoom, "create_room"},
-    {MessageType::RoomCreated, "room_created"},
-    {MessageType::JoinRoom, "join_room"},
-    {MessageType::LeaveRoom, "leave_room"},
-    {MessageType::UserJoined, "user_joined"},
-    {MessageType::UserLeft, "user_left"},
-    {MessageType::Offer, "offer"},
-    {MessageType::Answer, "answer"},
-    {MessageType::IceCandidate, "ice_candidate"},
-    {MessageType::ScreenShareStarted, "screen_share_started"},
-    {MessageType::ScreenShareStopped, "screen_share_stopped"},
-    {MessageType::Mute, "mute"},
-    {MessageType::Unmute, "unmute"},
-    {MessageType::Error, "error"},
-    {MessageType::Ping, "ping"},
-    {MessageType::Pong, "pong"},
+    {.type = MessageType::Authenticate, .name = "authenticate"},
+    {.type = MessageType::Authenticated, .name = "authenticated"},
+    {.type = MessageType::CreateRoom, .name = "create_room"},
+    {.type = MessageType::RoomCreated, .name = "room_created"},
+    {.type = MessageType::JoinRoom, .name = "join_room"},
+    {.type = MessageType::LeaveRoom, .name = "leave_room"},
+    {.type = MessageType::UserJoined, .name = "user_joined"},
+    {.type = MessageType::UserLeft, .name = "user_left"},
+    {.type = MessageType::Offer, .name = "offer"},
+    {.type = MessageType::Answer, .name = "answer"},
+    {.type = MessageType::IceCandidate, .name = "ice_candidate"},
+    {.type = MessageType::ScreenShareStarted, .name = "screen_share_started"},
+    {.type = MessageType::ScreenShareStopped, .name = "screen_share_stopped"},
+    {.type = MessageType::Mute, .name = "mute"},
+    {.type = MessageType::Unmute, .name = "unmute"},
+    {.type = MessageType::Error, .name = "error"},
+    {.type = MessageType::Ping, .name = "ping"},
+    {.type = MessageType::Pong, .name = "pong"},
 }};
 
 /// Reads fields out of a JSON object, remembering the first failure instead of
@@ -101,10 +101,12 @@ class FieldReader {
   }
 
   [[nodiscard]] bool ok() const noexcept { return !error_.has_value(); }
+  /// Only after ok() has said false.
+  /// NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   [[nodiscard]] const Error& error() const { return *error_; }
 
  private:
-  const json* find(std::string_view key) const {
+  [[nodiscard]] const json* find(std::string_view key) const {
     const auto it = object_.find(key);
     return it == object_.end() ? nullptr : &*it;
   }
@@ -122,9 +124,15 @@ class FieldReader {
     if (error_.has_value()) {
       return;  // keep the first failure, it is the most informative
     }
-    error_ = Error{std::string(code), std::string(key) + " " + std::string(reason)};
+    error_ =
+        Error{.code = std::string(code), .message = std::string(key) + " " + std::string(reason)};
   }
 
+  // A reference rather than a copy, and the object outlives this by
+  // construction: the reader is a local built around one message and dies
+  // with it. Copying a parsed message per field read would be the
+  // alternative.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const json& object_;
   std::optional<Error> error_;
 };
@@ -160,27 +168,65 @@ std::optional<MessageType> type_from_name(std::string_view name) noexcept {
   return std::nullopt;
 }
 
+// std::visit throws only on a valueless variant, which happens when a move
+// constructor throws during assignment. Every alternative here moves without
+// throwing, so this cannot, and noexcept is a guarantee worth keeping.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 MessageType type_of(const Message& message) noexcept {
   return std::visit(
       [](const auto& value) -> MessageType {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, Authenticate>) return MessageType::Authenticate;
-        if constexpr (std::is_same_v<T, Authenticated>) return MessageType::Authenticated;
-        if constexpr (std::is_same_v<T, CreateRoom>) return MessageType::CreateRoom;
-        if constexpr (std::is_same_v<T, RoomCreated>) return MessageType::RoomCreated;
-        if constexpr (std::is_same_v<T, JoinRoom>) return MessageType::JoinRoom;
-        if constexpr (std::is_same_v<T, LeaveRoom>) return MessageType::LeaveRoom;
-        if constexpr (std::is_same_v<T, UserJoined>) return MessageType::UserJoined;
-        if constexpr (std::is_same_v<T, UserLeft>) return MessageType::UserLeft;
-        if constexpr (std::is_same_v<T, Offer>) return MessageType::Offer;
-        if constexpr (std::is_same_v<T, Answer>) return MessageType::Answer;
-        if constexpr (std::is_same_v<T, IceCandidate>) return MessageType::IceCandidate;
-        if constexpr (std::is_same_v<T, ScreenShareStarted>) return MessageType::ScreenShareStarted;
-        if constexpr (std::is_same_v<T, ScreenShareStopped>) return MessageType::ScreenShareStopped;
-        if constexpr (std::is_same_v<T, Mute>) return MessageType::Mute;
-        if constexpr (std::is_same_v<T, Unmute>) return MessageType::Unmute;
-        if constexpr (std::is_same_v<T, ErrorMessage>) return MessageType::Error;
-        if constexpr (std::is_same_v<T, Ping>) return MessageType::Ping;
+        if constexpr (std::is_same_v<T, Authenticate>) {
+          return MessageType::Authenticate;
+        }
+        if constexpr (std::is_same_v<T, Authenticated>) {
+          return MessageType::Authenticated;
+        }
+        if constexpr (std::is_same_v<T, CreateRoom>) {
+          return MessageType::CreateRoom;
+        }
+        if constexpr (std::is_same_v<T, RoomCreated>) {
+          return MessageType::RoomCreated;
+        }
+        if constexpr (std::is_same_v<T, JoinRoom>) {
+          return MessageType::JoinRoom;
+        }
+        if constexpr (std::is_same_v<T, LeaveRoom>) {
+          return MessageType::LeaveRoom;
+        }
+        if constexpr (std::is_same_v<T, UserJoined>) {
+          return MessageType::UserJoined;
+        }
+        if constexpr (std::is_same_v<T, UserLeft>) {
+          return MessageType::UserLeft;
+        }
+        if constexpr (std::is_same_v<T, Offer>) {
+          return MessageType::Offer;
+        }
+        if constexpr (std::is_same_v<T, Answer>) {
+          return MessageType::Answer;
+        }
+        if constexpr (std::is_same_v<T, IceCandidate>) {
+          return MessageType::IceCandidate;
+        }
+        if constexpr (std::is_same_v<T, ScreenShareStarted>) {
+          return MessageType::ScreenShareStarted;
+        }
+        if constexpr (std::is_same_v<T, ScreenShareStopped>) {
+          return MessageType::ScreenShareStopped;
+        }
+        if constexpr (std::is_same_v<T, Mute>) {
+          return MessageType::Mute;
+        }
+        if constexpr (std::is_same_v<T, Unmute>) {
+          return MessageType::Unmute;
+        }
+        if constexpr (std::is_same_v<T, ErrorMessage>) {
+          return MessageType::Error;
+        }
+        if constexpr (std::is_same_v<T, Ping>) {
+          return MessageType::Ping;
+        }
         return MessageType::Pong;
       },
       message);
@@ -210,15 +256,9 @@ std::string serialize(const Message& message) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
           root["display_name"] = value.display_name;
-        } else if constexpr (std::is_same_v<T, LeaveRoom>) {
-          root["room_id"] = value.room_id;
-          root["user_id"] = value.user_id;
         } else if constexpr (std::is_same_v<T, UserJoined>) {
           root["room_id"] = value.room_id;
           root["user"] = user_to_json(value.user);
-        } else if constexpr (std::is_same_v<T, UserLeft>) {
-          root["room_id"] = value.room_id;
-          root["user_id"] = value.user_id;
         } else if constexpr (std::is_same_v<T, Offer> || std::is_same_v<T, Answer>) {
           root["room_id"] = value.room_id;
           root["from_user_id"] = value.from_user_id;
@@ -231,9 +271,11 @@ std::string serialize(const Message& message) {
           root["candidate"] = value.candidate;
           root["sdp_mid"] = value.sdp_mid;
           root["sdp_mline_index"] = value.sdp_mline_index;
-        } else if constexpr (std::is_same_v<T, ScreenShareStarted> ||
+        } else if constexpr (std::is_same_v<T, LeaveRoom> || std::is_same_v<T, UserLeft> ||
+                             std::is_same_v<T, ScreenShareStarted> ||
                              std::is_same_v<T, ScreenShareStopped> || std::is_same_v<T, Mute> ||
                              std::is_same_v<T, Unmute>) {
+          // Everything whose payload is exactly a room and a user.
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {

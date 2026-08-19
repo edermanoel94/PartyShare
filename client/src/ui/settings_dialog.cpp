@@ -52,8 +52,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   video_form->addRow(QStringLiteral("Bitrate mínimo"), min_bitrate_);
   video_form->addRow(QStringLiteral("Bitrate máximo"), max_bitrate_);
 
-  auto* note = new QLabel(
-      QStringLiteral("As mudanças valem na hora, inclusive durante uma chamada."), this);
+  auto* note =
+      new QLabel(QStringLiteral("As mudanças valem na hora, inclusive durante uma chamada."), this);
   note->setStyleSheet(QStringLiteral("color: palette(mid);"));
 
   // Named here rather than taken from QDialogButtonBox::Close, whose label

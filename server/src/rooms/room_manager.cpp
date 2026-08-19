@@ -1,16 +1,17 @@
 #include "rooms/room_manager.hpp"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 namespace dv::server {
 namespace {
 
 Error error(std::string code, std::string message) {
-  return Error{std::move(code), std::move(message)};
+  return Error{.code = std::move(code), .message = std::move(message)};
 }
 
-constexpr char kHexDigits[] = "0123456789ABCDEF";
+constexpr std::string_view kHexDigits = "0123456789ABCDEF";
 
 /// Enough attempts that exhausting them means the identifier space is
 /// genuinely close to full, rather than that we were unlucky.
@@ -25,7 +26,7 @@ RoomManager::RoomManager(Options options)
       random_(options.id_seed.has_value() ? *options.id_seed : std::random_device{}()) {}
 
 std::string RoomManager::generate_room_id() {
-  std::uniform_int_distribution<int> digit(0, 15);
+  std::uniform_int_distribution<std::size_t> digit(0, kHexDigits.size() - 1);
   std::string id(models::kRoomIdLength, '0');
   for (char& character : id) {
     character = kHexDigits[digit(random_)];
@@ -58,7 +59,7 @@ std::optional<Error> RoomManager::join(const std::string& room_id, models::User 
   if (room.contains(user.id)) {
     return error("already_in_room", user.id + " is already in " + room_id);
   }
-  if (static_cast<int>(room.size()) >= options_.max_participants_per_room) {
+  if (std::cmp_greater_equal(room.size(), options_.max_participants_per_room)) {
     return error("room_full", "room " + room_id + " is full");
   }
 
@@ -69,7 +70,8 @@ std::optional<Error> RoomManager::join(const std::string& room_id, models::User 
   }
 
   user_to_room_[user.id] = room_id;
-  room.participants.push_back(models::Participant{std::move(user), false, false});
+  room.participants.push_back(
+      models::Participant{.user = std::move(user), .muted = false, .sharing_screen = false});
   return std::nullopt;
 }
 
@@ -80,8 +82,8 @@ std::optional<Error> RoomManager::leave(const std::string& room_id, const std::s
   }
 
   models::Room& room = it->second;
-  const auto participant = std::find_if(
-      room.participants.begin(), room.participants.end(),
+  const auto participant = std::ranges::find_if(
+      room.participants,
       [&](const models::Participant& candidate) { return candidate.user.id == user_id; });
   if (participant == room.participants.end()) {
     return error("not_in_room", user_id + " is not in " + room_id);
@@ -97,7 +99,7 @@ std::optional<Error> RoomManager::leave(const std::string& room_id, const std::s
 }
 
 std::optional<std::string> RoomManager::remove_from_any_room(const std::string& user_id) {
-  const auto room_id = room_of(user_id);
+  auto room_id = room_of(user_id);
   if (!room_id.has_value()) {
     return std::nullopt;
   }

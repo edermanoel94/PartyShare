@@ -111,8 +111,8 @@ class Hub {
     /// Set once the connection has authenticated.
     std::optional<models::User> user;
     std::optional<std::string> room_id;
-    Clock::time_point last_seen{};
-    Clock::time_point last_ping{};
+    Clock::time_point last_seen;
+    Clock::time_point last_ping;
   };
 
   [[nodiscard]] Connection* find_connection(ConnectionId connection);
@@ -129,6 +129,11 @@ class Hub {
   // One handler per message type. Each returns the messages to send.
   void handle_authenticate(std::vector<Outgoing>& out, Connection& connection,
                            const protocol::Authenticate& message, Clock::time_point now);
+  /// The user on an authenticated connection, or nullptr after answering the
+  /// caller with an error. Every handler but handle_authenticate starts here.
+  [[nodiscard]] static models::User* authenticated(std::vector<Outgoing>& out,
+                                                   Connection& connection);
+
   void handle_create_room(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::CreateRoom& message);
   void handle_join_room(std::vector<Outgoing>& out, Connection& connection,

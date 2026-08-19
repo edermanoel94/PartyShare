@@ -48,8 +48,8 @@ enum class NetworkQuality : std::uint8_t {
   }
 
   const std::uint64_t expected = stats.packets_received + stats.packets_lost;
-  const double loss = expected == 0 ? 0.0 : static_cast<double>(stats.packets_lost) /
-                                                static_cast<double>(expected);
+  const double loss =
+      expected == 0 ? 0.0 : static_cast<double>(stats.packets_lost) / static_cast<double>(expected);
 
   if (stats.round_trip_time_ms > 300.0 || stats.jitter_ms > 30.0 || loss > 0.05) {
     return NetworkQuality::Poor;

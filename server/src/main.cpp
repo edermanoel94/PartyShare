@@ -15,9 +15,12 @@
 
 namespace {
 
+// A signal handler has nowhere to put anything but a global, and this one has
+// to be writable by definition.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<bool> g_stop_requested{false};
 
-extern "C" void handle_signal(int) {
+extern "C" void handle_signal(int /*signal*/) {
   g_stop_requested = true;
 }
 
@@ -88,59 +91,72 @@ int load_users(dv::server::SignalingServer& server, const std::string& path) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-  auto config_result = dv::config::load(argc, argv);
-  if (!config_result) {
-    std::fprintf(stderr, "configuration error [%s]: %s\n", config_result.error().code.c_str(),
-                 config_result.error().message.c_str());
+  // Nothing is allowed to leave main. An exception escaping here is a
+  // std::terminate with no message, and the one thing an operator needs from
+  // a server that dies is a reason.
+  try {
+    auto config_result = dv::config::load(argc, argv);
+    if (!config_result) {
+      // Written straight to stderr because the logger is configured from the
+      // configuration that just failed to load.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+      std::fprintf(stderr, "configuration error [%s]: %s\n", config_result.error().code.c_str(),
+                   config_result.error().message.c_str());
+      return 1;
+    }
+    const dv::config::Config config = std::move(config_result).take();
+
+    dv::log::init({
+        .level = dv::log::level_from_string(config.logging.level),
+        .file_path = config.logging.file_path,
+        .log_to_console = config.logging.log_to_console,
+    });
+
+    DV_LOG_INFO("Voice Desktop signaling server starting");
+
+    dv::server::SignalingServer::Options options;
+    options.bind_address = config.server.bind_address;
+    options.port = config.server.port;
+    options.hub.max_participants_per_room = config.server.max_participants_per_room;
+    options.hub.heartbeat_interval = std::chrono::milliseconds(config.server.heartbeat_interval_ms);
+    options.hub.heartbeat_timeout = std::chrono::milliseconds(config.server.heartbeat_timeout_ms);
+
+    // ICE for the SFU's own connections. TURN only matters once a participant is
+    // behind a NAT that STUN cannot get through, which is why it is optional.
+    options.sfu.ice_servers = config.network.stun_servers;
+    if (!config.network.turn_url.empty()) {
+      options.sfu.ice_servers.push_back(build_turn_url(config.network));
+    }
+
+    dv::server::SignalingServer server(options);
+
+    if (!config.server.users_file.empty()) {
+      (void)load_users(server, config.server.users_file);
+    } else {
+      DV_LOG_WARN("server.users_file is not set, nobody will be able to authenticate");
+    }
+
+    std::signal(SIGINT, handle_signal);
+    std::signal(SIGTERM, handle_signal);
+
+    server.start();
+    DV_LOG_INFO("Max participants per room: {}", config.server.max_participants_per_room);
+    DV_LOG_INFO("Media routing: {}, {} ICE server(s)", options.enable_sfu ? "on" : "off",
+                options.sfu.ice_servers.size());
+    DV_LOG_INFO("Press Ctrl+C to stop");
+
+    while (!g_stop_requested) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    DV_LOG_INFO("Shutdown requested");
+    server.stop();
+    dv::log::shutdown();
+    return 0;
+  } catch (const std::exception& error) {
+    // The logger may not exist yet, or may be the thing that failed.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    std::fprintf(stderr, "fatal: %s\n", error.what());
     return 1;
   }
-  const dv::config::Config config = std::move(config_result).take();
-
-  dv::log::init({
-      .level = dv::log::level_from_string(config.logging.level),
-      .file_path = config.logging.file_path,
-      .log_to_console = config.logging.log_to_console,
-  });
-
-  DV_LOG_INFO("Voice Desktop signaling server starting");
-
-  dv::server::SignalingServer::Options options;
-  options.bind_address = config.server.bind_address;
-  options.port = config.server.port;
-  options.hub.max_participants_per_room = config.server.max_participants_per_room;
-  options.hub.heartbeat_interval = std::chrono::milliseconds(config.server.heartbeat_interval_ms);
-  options.hub.heartbeat_timeout = std::chrono::milliseconds(config.server.heartbeat_timeout_ms);
-
-  // ICE for the SFU's own connections. TURN only matters once a participant is
-  // behind a NAT that STUN cannot get through, which is why it is optional.
-  options.sfu.ice_servers = config.network.stun_servers;
-  if (!config.network.turn_url.empty()) {
-    options.sfu.ice_servers.push_back(build_turn_url(config.network));
-  }
-
-  dv::server::SignalingServer server(options);
-
-  if (!config.server.users_file.empty()) {
-    (void)load_users(server, config.server.users_file);
-  } else {
-    DV_LOG_WARN("server.users_file is not set, nobody will be able to authenticate");
-  }
-
-  std::signal(SIGINT, handle_signal);
-  std::signal(SIGTERM, handle_signal);
-
-  server.start();
-  DV_LOG_INFO("Max participants per room: {}", config.server.max_participants_per_room);
-  DV_LOG_INFO("Media routing: {}, {} ICE server(s)", options.enable_sfu ? "on" : "off",
-              options.sfu.ice_servers.size());
-  DV_LOG_INFO("Press Ctrl+C to stop");
-
-  while (!g_stop_requested) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  }
-
-  DV_LOG_INFO("Shutdown requested");
-  server.stop();
-  dv::log::shutdown();
-  return 0;
 }

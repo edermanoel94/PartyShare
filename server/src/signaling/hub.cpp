@@ -8,7 +8,7 @@ namespace dv::server {
 namespace {
 
 Error unauthorized(std::string message) {
-  return Error{"unauthorized", std::move(message)};
+  return Error{.code = "unauthorized", .message = std::move(message)};
 }
 
 }  // namespace
@@ -17,7 +17,8 @@ Hub::Hub() : Hub(Options{}) {}
 
 Hub::Hub(Options options)
     : options_(options),
-      rooms_(RoomManager::Options{options.max_participants_per_room, options.room_id_seed}) {}
+      rooms_(RoomManager::Options{.max_participants_per_room = options.max_participants_per_room,
+                                  .id_seed = options.room_id_seed}) {}
 
 void Hub::on_connect(ConnectionId connection, Clock::time_point now) {
   Connection state;
@@ -57,13 +58,15 @@ void Hub::broadcast(std::vector<Outgoing>& out, const std::string& room_id,
       continue;
     }
     if (const auto target = connection_of_user(participant.user.id)) {
-      out.push_back(Outgoing{*target, message});
+      out.push_back(Outgoing{.connection = *target, .message = message});
     }
   }
 }
 
 void Hub::reply_error(std::vector<Outgoing>& out, ConnectionId connection, const Error& error) {
-  out.push_back(Outgoing{connection, protocol::ErrorMessage{error.code, error.message}});
+  out.push_back(
+      Outgoing{.connection = connection,
+               .message = protocol::ErrorMessage{.code = error.code, .message = error.message}});
 }
 
 std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view payload,
@@ -125,7 +128,7 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
           handle_screen_share(out, *state, value.room_id, value.user_id, false);
 
         } else if constexpr (std::is_same_v<T, protocol::Ping>) {
-          out.push_back(Outgoing{state->id, protocol::Pong{value.nonce}});
+          out.push_back(Outgoing{.connection = state->id, .message = protocol::Pong{value.nonce}});
 
         } else if constexpr (std::is_same_v<T, protocol::Pong>) {
           // last_seen was already refreshed above, which is the whole point.
@@ -133,7 +136,8 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else {
           // Messages the server only ever sends. Receiving one is a client bug.
           reply_error(out, state->id,
-                      Error{"unknown_message_type", "this message is server to client only"});
+                      Error{.code = "unknown_message_type",
+                            .message = "this message is server to client only"});
         }
       },
       message);
@@ -167,13 +171,33 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
   user_to_connection_[value.user.id] = connection.id;
 
   DV_LOG_INFO("User {} authenticated on connection {}", value.user.id, connection.id);
-  out.push_back(Outgoing{
-      connection.id, protocol::Authenticated{value.user, value.token, value.expires_in_seconds}});
+  out.push_back(
+      Outgoing{.connection = connection.id,
+               .message = protocol::Authenticated{.user = value.user,
+                                                  .token = value.token,
+                                                  .expires_in_seconds = value.expires_in_seconds}});
+}
+
+models::User* Hub::authenticated(std::vector<Outgoing>& out, Connection& connection) {
+  // The dispatcher refuses everything but `authenticate` before a user exists,
+  // so this never fails in practice. Checking anyway is what keeps the
+  // invariant local: a handler should not have to know what the dispatcher
+  // does in order to be correct, and the day one is called from somewhere else
+  // this is a refusal rather than a crash on a null optional.
+  if (!connection.user.has_value()) {
+    reply_error(out, connection.id, unauthorized("authenticate before sending anything else"));
+    return nullptr;
+  }
+  return &*connection.user;
 }
 
 void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
                              const protocol::CreateRoom& message) {
-  if (message.user_id != connection.user->id) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (message.user_id != user->id) {
     reply_error(out, connection.id, unauthorized("user_id does not match this session"));
     return;
   }
@@ -185,18 +209,24 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   }
   const std::string room_id = std::move(created).take();
 
-  DV_LOG_INFO("Room {} created by {}", room_id, connection.user->id);
-  out.push_back(Outgoing{connection.id, protocol::RoomCreated{room_id, message.room_name}});
+  DV_LOG_INFO("Room {} created by {}", room_id, user->id);
+  out.push_back(Outgoing{
+      .connection = connection.id,
+      .message = protocol::RoomCreated{.room_id = room_id, .room_name = message.room_name}});
 }
 
 void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
                            const protocol::JoinRoom& message) {
-  if (message.user_id != connection.user->id) {
+  models::User* authenticated_user = authenticated(out, connection);
+  if (authenticated_user == nullptr) {
+    return;
+  }
+  if (message.user_id != authenticated_user->id) {
     reply_error(out, connection.id, unauthorized("user_id does not match this session"));
     return;
   }
 
-  models::User user = *connection.user;
+  models::User user = *authenticated_user;
   if (!message.display_name.empty()) {
     user.display_name = message.display_name;
   }
@@ -206,7 +236,7 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
   connection.room_id = message.room_id;
-  connection.user->display_name = user.display_name;
+  authenticated_user->display_name = user.display_name;
 
   const models::Room* room = rooms_.find(message.room_id);
 
@@ -217,17 +247,23 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
     if (participant.user.id == user.id) {
       continue;
     }
-    out.push_back(Outgoing{connection.id, protocol::UserJoined{message.room_id, participant.user}});
+    out.push_back(Outgoing{
+        .connection = connection.id,
+        .message = protocol::UserJoined{.room_id = message.room_id, .user = participant.user}});
   }
-  out.push_back(Outgoing{connection.id, protocol::UserJoined{message.room_id, user}});
+  out.push_back(
+      Outgoing{.connection = connection.id,
+               .message = protocol::UserJoined{.room_id = message.room_id, .user = user}});
 
   // A screen share already in progress has to be announced to the newcomer.
   if (const models::Participant* sharer = room->screen_sharer()) {
-    out.push_back(
-        Outgoing{connection.id, protocol::ScreenShareStarted{message.room_id, sharer->user.id}});
+    out.push_back(Outgoing{.connection = connection.id,
+                           .message = protocol::ScreenShareStarted{.room_id = message.room_id,
+                                                                   .user_id = sharer->user.id}});
   }
 
-  broadcast(out, message.room_id, protocol::UserJoined{message.room_id, user}, user.id);
+  broadcast(out, message.room_id, protocol::UserJoined{.room_id = message.room_id, .user = user},
+            user.id);
   DV_LOG_INFO("User {} joined room {} ({} participants)", user.id, message.room_id, room->size());
 
   // Last, so that the participant already knows who is in the room by the time
@@ -239,7 +275,11 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
 
 void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
                             const protocol::LeaveRoom& message) {
-  if (message.user_id != connection.user->id) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (message.user_id != user->id) {
     reply_error(out, connection.id, unauthorized("user_id does not match this session"));
     return;
   }
@@ -255,9 +295,11 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
   connection.room_id.reset();
 
   if (was_sharing) {
-    broadcast(out, message.room_id, protocol::ScreenShareStopped{message.room_id, message.user_id});
+    broadcast(out, message.room_id,
+              protocol::ScreenShareStopped{.room_id = message.room_id, .user_id = message.user_id});
   }
-  broadcast(out, message.room_id, protocol::UserLeft{message.room_id, message.user_id});
+  broadcast(out, message.room_id,
+            protocol::UserLeft{.room_id = message.room_id, .user_id = message.user_id});
   DV_LOG_INFO("User {} left room {}", message.user_id, message.room_id);
 
   if (media_signals_ != nullptr) {
@@ -268,18 +310,24 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
 void Hub::handle_relay(std::vector<Outgoing>& out, Connection& connection,
                        const protocol::Message& message, const std::string& room_id,
                        const std::string& from_user_id, const std::string& to_user_id) {
-  if (from_user_id != connection.user->id) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (from_user_id != user->id) {
     reply_error(out, connection.id, unauthorized("from_user_id does not match this session"));
     return;
   }
 
   const models::Room* room = rooms_.find(room_id);
   if (room == nullptr) {
-    reply_error(out, connection.id, Error{"room_not_found", "no room with id " + room_id});
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + room_id});
     return;
   }
   if (!room->contains(from_user_id)) {
-    reply_error(out, connection.id, Error{"not_in_room", "sender is not in " + room_id});
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "sender is not in " + room_id});
     return;
   }
 
@@ -288,8 +336,9 @@ void Hub::handle_relay(std::vector<Outgoing>& out, Connection& connection,
   // participant. See protocol::kSfuUserId.
   if (to_user_id == protocol::kSfuUserId) {
     if (media_signals_ == nullptr) {
-      reply_error(out, connection.id,
-                  Error{"media_unavailable", "this server is not routing media"});
+      reply_error(
+          out, connection.id,
+          Error{.code = "media_unavailable", .message = "this server is not routing media"});
       return;
     }
     media_signals_->on_media_signal(room_id, from_user_id, message);
@@ -297,23 +346,29 @@ void Hub::handle_relay(std::vector<Outgoing>& out, Connection& connection,
   }
 
   if (!room->contains(to_user_id)) {
-    reply_error(out, connection.id, Error{"not_in_room", "recipient is not in " + room_id});
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "recipient is not in " + room_id});
     return;
   }
 
   const auto target = connection_of_user(to_user_id);
   if (!target.has_value()) {
-    reply_error(out, connection.id, Error{"not_in_room", "recipient is not connected"});
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "recipient is not connected"});
     return;
   }
 
   // The server forwards the frame untouched. It never inspects SDP or ICE.
-  out.push_back(Outgoing{*target, message});
+  out.push_back(Outgoing{.connection = *target, .message = message});
 }
 
 void Hub::handle_mute(std::vector<Outgoing>& out, Connection& connection,
                       const std::string& room_id, const std::string& user_id, bool muted) {
-  if (user_id != connection.user->id) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (user_id != user->id) {
     reply_error(out, connection.id, unauthorized("user_id does not match this session"));
     return;
   }
@@ -325,16 +380,20 @@ void Hub::handle_mute(std::vector<Outgoing>& out, Connection& connection,
   // Confirmed to everyone, the sender included: clients only update their UI
   // once the server has agreed.
   if (muted) {
-    broadcast(out, room_id, protocol::Mute{room_id, user_id});
+    broadcast(out, room_id, protocol::Mute{.room_id = room_id, .user_id = user_id});
   } else {
-    broadcast(out, room_id, protocol::Unmute{room_id, user_id});
+    broadcast(out, room_id, protocol::Unmute{.room_id = room_id, .user_id = user_id});
   }
 }
 
 void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection,
                               const std::string& room_id, const std::string& user_id,
                               bool sharing) {
-  if (user_id != connection.user->id) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (user_id != user->id) {
     reply_error(out, connection.id, unauthorized("user_id does not match this session"));
     return;
   }
@@ -348,14 +407,14 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
 
   if (sharing) {
     DV_LOG_INFO("User {} started sharing in room {}", user_id, room_id);
-    broadcast(out, room_id, protocol::ScreenShareStarted{room_id, user_id});
+    broadcast(out, room_id, protocol::ScreenShareStarted{.room_id = room_id, .user_id = user_id});
   } else {
     DV_LOG_INFO("User {} stopped sharing in room {}", user_id, room_id);
-    broadcast(out, room_id, protocol::ScreenShareStopped{room_id, user_id});
+    broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});
   }
 }
 
-std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_point) {
+std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_point /*now*/) {
   std::vector<Outgoing> out;
 
   const auto it = connections_.find(connection);
@@ -390,9 +449,9 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
   (void)rooms_.remove_from_any_room(user_id);
 
   if (was_sharing) {
-    broadcast(out, *room_id, protocol::ScreenShareStopped{*room_id, user_id});
+    broadcast(out, *room_id, protocol::ScreenShareStopped{.room_id = *room_id, .user_id = user_id});
   }
-  broadcast(out, *room_id, protocol::UserLeft{*room_id, user_id});
+  broadcast(out, *room_id, protocol::UserLeft{.room_id = *room_id, .user_id = user_id});
 
   if (media_signals_ != nullptr) {
     media_signals_->on_participant_left(*room_id, user_id);
@@ -412,7 +471,7 @@ std::vector<Outgoing> Hub::tick(Clock::time_point now, std::vector<ConnectionId>
     }
     if (now - state.last_ping >= options_.heartbeat_interval) {
       state.last_ping = now;
-      out.push_back(Outgoing{id, protocol::Ping{}});
+      out.push_back(Outgoing{.connection = id, .message = protocol::Ping{}});
     }
   }
 

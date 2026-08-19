@@ -85,7 +85,7 @@ constexpr int kMaxConsecutiveFailures = 30;
                     reuse.data(), destination_stride, target.width, target.height,
                     libyuv::kFilterBox);
 
-  return VideoFrame{target.width, target.height, std::move(reuse)};
+  return VideoFrame{target, std::move(reuse)};
 }
 
 class LibwebrtcScreenCapturer final : public ScreenCapturer,

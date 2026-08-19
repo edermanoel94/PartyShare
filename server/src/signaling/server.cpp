@@ -15,7 +15,7 @@ SignalingServer::SignalingServer(Options options)
   }
 
   router_ = std::make_unique<sfu::MediaRouter>(options_.sfu);
-  router_->on_signal([this](const std::string& user_id, protocol::Message message) {
+  router_->on_signal([this](const std::string& user_id, const protocol::Message& message) {
     send_to_user(user_id, message);
   });
   hub_.set_media_signals(router_.get());
@@ -109,8 +109,10 @@ void SignalingServer::on_client(std::shared_ptr<rtc::WebSocket> socket) {
       // The protocol is text only. A binary frame is a client bug, and is
       // answered rather than silently dropped.
       const std::lock_guard<std::mutex> lock(mutex_);
-      dispatch({Outgoing{id, protocol::ErrorMessage{
-                                 "invalid_json", "binary frames are not part of this protocol"}}});
+      dispatch({Outgoing{
+          .connection = id,
+          .message = protocol::ErrorMessage{
+              .code = "invalid_json", .message = "binary frames are not part of this protocol"}}});
       return;
     }
 
@@ -143,7 +145,7 @@ void SignalingServer::send_to_user(const std::string& user_id, const protocol::M
                  protocol::type_name(protocol::type_of(message)), user_id);
     return;
   }
-  dispatch({Outgoing{*connection, message}});
+  dispatch({Outgoing{.connection = *connection, .message = message}});
 }
 
 void SignalingServer::dispatch(const std::vector<Outgoing>& messages) {

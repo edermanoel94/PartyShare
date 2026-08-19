@@ -177,5 +177,28 @@ strip --strip-unneeded "${APPDIR}/usr/bin/partyshare-server" 2>/dev/null || true
 log "wrapping the AppDir"
 "${TOOL_DIR}/linuxdeploy" --appdir "$APPDIR" --output appimage
 
+# The floor is a property of the artefact that is invisible until somebody on an
+# older distribution cannot start it, so it is printed rather than left to be
+# discovered. A build on a rolling distribution produces a file that runs almost
+# nowhere else, which is fine for development and is not a release: the release
+# job builds on the oldest runner the CI has, and that is where the number that
+# matters comes from.
+glibc_floor() {
+  find "$APPDIR" -type f \( -name '*.so*' -o -perm -u+x \) -print0 2>/dev/null \
+    | xargs -0 --no-run-if-empty objdump -T 2>/dev/null \
+    | grep -oE 'GLIBC_[0-9]+\.[0-9]+' \
+    | sort -u -t_ -k2 -V \
+    | tail -1
+}
+
+FLOOR="$(glibc_floor || true)"
+
 log "done"
 ls -lh "${BUILD_DIR}/${OUTPUT}"
+
+if [[ -n "$FLOOR" ]]; then
+  printf '\nglibc required: %s (this machine has %s)\n' \
+    "${FLOOR#GLIBC_}" "$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$')"
+  printf 'The AppImage runs on distributions with that glibc or newer, and on no\n'
+  printf 'older one. Ubuntu 24.04 has 2.39, Debian 12 has 2.36, Ubuntu 22.04 has 2.35.\n'
+fi

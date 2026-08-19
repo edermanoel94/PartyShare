@@ -29,6 +29,7 @@ Ele constrói tudo e não publica nada, porque um release sem tag não tem vers�
 | Artefato | Plataforma | Estado |
 | --- | --- | --- |
 | `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Construído e verificado |
+| `partyshare-x.y.z-windows-x64.exe` | Windows x64 | Escrito, nunca executado |
 | `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Escrito, nunca executado |
 | `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Escrito, nunca executado |
 | `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Escrito, nunca executado |
@@ -57,9 +58,29 @@ Três coisas que o script resolve e que não são óbvias:
 - **O `strip` da ferramenta é velho demais.**
   O `linuxdeploy` carrega o próprio binutils, e ele rejeita a seção `.relr.dyn` que um linker atual emite, de forma fatal e não ignorável.
   O empacotamento acontece em duas passagens por isso, com o `strip` do sistema entre elas.
-- **A glibc não pode ser embutida.**
+- **A glibc não pode ser embutida, e isso decide onde o artefato roda.**
   Qt e a runtime de C++ vão dentro; a glibc não vai.
-  O AppImage roda em qualquer distribuição cuja glibc seja pelo menos tão nova quanto a da máquina que o construiu, e em nenhuma mais velha, e é por isso que o job usa o runner mais antigo disponível em vez do mais novo.
+  O AppImage roda em qualquer distribuição cuja glibc seja pelo menos tão nova quanto a da máquina que o construiu, e em nenhuma mais velha.
+
+  Isso não é teórico. Um AppImage construído nesta máquina de desenvolvimento, que roda Arch com glibc 2.44, **não inicia em um Ubuntu 24.04 limpo**: pede `GLIBC_2.43` e `GLIBC_2.44`, e o 24.04 tem 2.39.
+  O script imprime o piso do arquivo que acabou de produzir por isso, porque é uma propriedade invisível até alguém não conseguir abrir o programa.
+
+  Um AppImage construído localmente é artefato de desenvolvimento, não de distribuição. O distribuível sai do CI, que constrói no runner mais antigo disponível.
+
+### Do que o AppImage depende do sistema
+
+Nem tudo é embutido, e o que fica de fora é deliberado: embutir a fontconfig faz o programa parar de achar as fontes do sistema, e embutir a pilha gráfica faz ele parar de achar o driver da máquina.
+
+O conjunto exato, verificado com `ldd` sobre a árvore extraída em um container limpo:
+
+```text
+libX11  libX11-xcb  libxcb  libICE  libSM
+libEGL  libGLX  libOpenGL  libdrm  libgbm
+libfontconfig  libfreetype  libharfbuzz
+```
+
+Todo desktop Linux já tem os treze.
+O teste de máquina limpa do workflow instala exatamente essa lista e nada mais, o que é o que a mantém honesta: uma dependência nova que entrar sem estar aqui falha ali.
 
 ## Windows e macOS
 
@@ -67,11 +88,10 @@ Escritos a partir da documentação das ferramentas de cada plataforma, e **nunc
 Este repositório é desenvolvido em Linux, e nenhum dos dois jobs jamais produziu um arquivo que alguém tenha instalado.
 
 Trate a primeira execução como a coisa que vai descobrir o que está errado neles, não como uma regressão.
-O que se sabe que falta, antes mesmo de rodar:
+O que eles pretendem produzir:
 
-- O instalador do Windows é um ZIP do CPack com a runtime do Qt ao lado, não um `.msi` nem um `.exe` de instalação.
-  A tarefa 1 do M9 pede um instalador de verdade, com entrada no menu iniciar e desinstalação.
-- O `.dmg` é uma imagem com o bundle e um atalho para `/Applications`, sem plano de fundo nem posicionamento de ícones.
+- O instalador do Windows é NSIS, com atalho no menu iniciar, ícone próprio e desinstalação. O ZIP continua ao lado para quem prefere os arquivos sem um instalador mexendo na máquina.
+- O `.dmg` tem o bundle, o atalho para `/Applications` e ícone de volume. Falta plano de fundo e posicionamento de ícones na janela, que é aparência e não função.
 - Nenhum dos dois foi aberto em uma máquina limpa, que é o critério de aceitação do marco.
 
 ## Assinatura e notarização
@@ -95,11 +115,11 @@ Notarização não é assinatura: a Apple quer o bundle assinado com um Develope
 
 ## O que ainda não está feito
 
-O M9 tem seis tarefas e nenhuma delas está fechada por completo.
+Das seis tarefas do M9, duas estão fechadas: o AppImage e a publicação por tag.
 
-- Instalador do Windows de verdade, no lugar do ZIP.
-- `.dmg` com aparência, no lugar da imagem crua.
+- Rodar os jobs de Windows e macOS uma primeira vez, que é o que vai dizer o que está errado neles.
+- `.dmg` com plano de fundo e posicionamento de ícones.
 - Assinatura e notarização, que dependem de certificados que ninguém comprou.
-- Instalar e rodar cada artefato em uma máquina limpa da respectiva plataforma, que é o critério de aceitação e não pode ser feito por quem só tem Linux.
+- Instalar e rodar o artefato de Windows e o de macOS em uma máquina limpa da respectiva plataforma.
 
-O AppImage é o único que atravessa o caminho inteiro hoje, e mesmo ele não foi instalado em uma distribuição diferente da que o construiu.
+O Linux é o único que atravessa o caminho inteiro, e o teste de máquina limpa do workflow é o que sustenta essa afirmação: o job constrói no Ubuntu 22.04 e inicia o resultado em um container de Ubuntu 24.04 com só as treze bibliotecas de sistema listadas acima.

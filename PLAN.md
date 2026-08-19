@@ -588,9 +588,9 @@ Objetivo: a seção 25 da SPEC.
 
 Tarefas:
 
-1. Parcial. Instalador Windows: hoje é um ZIP do CPack com a runtime do Qt ao lado, escrito e nunca executado. Falta um instalador de verdade, com entrada no menu iniciar e desinstalação.
+1. Parcial. Instalador Windows por NSIS, com atalho, ícone e desinstalação, mais o ZIP ao lado. O executável carrega ícone e bloco de versão. Escrito e nunca executado.
 2. [x] AppImage no Linux.
-3. Parcial. Bundle `.app` e `.dmg` no macOS: escritos e nunca executados, sem plano de fundo nem posicionamento de ícones, sem notarização.
+3. Parcial. Bundle `.app` com ícone e `.dmg` com atalho para `/Applications` e ícone de volume. Falta aparência da janela, e nada disso jamais rodou.
 4. Assinatura de código no Windows e no macOS. Os passos existem no workflow, condicionais aos segredos, e nenhum segredo está configurado.
 5. [x] Publicação automática de artefatos por tag de release.
 6. Parcial. `docs/release.md` existe. `docs/build.md` ainda não fala dos artefatos.
@@ -600,7 +600,16 @@ Critérios de aceitação:
 - Uma tag gera os quatro artefatos automaticamente.
   Gera um, verificado. Os outros três estão escritos e nunca rodaram, porque este repositório é desenvolvido em Linux.
 - Cada artefato instala e roda em uma máquina limpa da respectiva plataforma.
-  Nenhum. O AppImage roda na máquina que o construiu, o que não é a mesma afirmação.
+  O do Linux sim, e é testado assim a cada release: o job constrói no Ubuntu 22.04 e inicia o resultado em um container de Ubuntu 24.04 com só as treze bibliotecas de sistema que o AppImage deliberadamente não embute.
+  Os outros três não, e não podem ser por quem só tem Linux.
+
+### A glibc decide onde o artefato roda, e isso não é teórico
+
+O AppImage carrega Qt e a runtime de C++, e não carrega a glibc, que não é embutível.
+Um construído nesta máquina, que roda Arch com glibc 2.44, **não inicia em um Ubuntu 24.04 limpo**: pede `GLIBC_2.43` e `GLIBC_2.44`, e o 24.04 tem 2.39.
+
+Isso torna um AppImage construído localmente artefato de desenvolvimento e não de distribuição, e é a razão de o job de release usar o runner mais velho disponível em vez do mais novo, que é o instinto errado.
+O script passou a imprimir o piso de glibc do arquivo que acabou de produzir, porque é uma propriedade invisível até alguém não conseguir abrir o programa.
 
 ### O que a árvore de instalação era antes do M9
 

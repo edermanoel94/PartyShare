@@ -80,6 +80,33 @@ jobs:
             exit 1
           fi
 
+      # The second acceptance criterion of the milestone: the artefact runs on a
+      # machine that is not the one that built it. A container of a different
+      # distribution is the closest thing to that a pipeline can produce, and it
+      # is a real test here because the job builds on 22.04 and this is 24.04.
+      #
+      # The packages are the libraries the AppImage deliberately does not carry.
+      # Bundling fontconfig makes an application stop finding the host's fonts,
+      # and bundling the graphics stack makes it stop finding the host's driver,
+      # so both are expected from the system. The list is what every desktop
+      # already has, and installing it explicitly is what keeps it honest: a
+      # dependency that creeps in outside this list will fail here.
+      - name: Clean machine test
+        run: |
+          docker run --rm -v "$PWD/build/appimage:/art:ro" ubuntu:24.04 bash -c '
+            set -e
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends               libx11-6 libx11-xcb1 libxcb1 libice6 libsm6               libegl1 libglx0 libopengl0 libdrm2 libgbm1               libfontconfig1 libfreetype6 libharfbuzz0b xvfb
+            cp /art/partyshare-*.AppImage /tmp/app && chmod +x /tmp/app
+            export APPIMAGE_EXTRACT_AND_RUN=1
+            output=$(timeout 60 xvfb-run -a /tmp/app 2>&1 || true)
+            echo "$output"
+            echo "$output" | grep -q "PartyShare client ready" || {
+              echo "the AppImage does not start on a clean Ubuntu 24.04"
+              exit 1
+            }
+          '
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x64
@@ -117,6 +144,12 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      # CPack shells out to makensis and reports its absence as a generator
+      # that produced nothing, which reads like a configuration mistake rather
+      # than a missing program.
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
 
       - name: Restore the vcpkg binary cache
         uses: actions/cache@v4
@@ -162,9 +195,16 @@ jobs:
           }
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
 
+      # CPack packages the install tree that CMake describes, not the staged
+      # directory above, so the Qt runtime windeployqt just copied has to be
+      # part of what gets installed. Pointing the staging directory at it is
+      # what puts the DLLs inside the installer instead of beside it.
       - name: Build the installer
         shell: bash
-        run: cpack --config build/windows-release/CPackConfig.cmake -B build/windows-release/package
+        run: |
+          cpack --config build/windows-release/CPackConfig.cmake \
+            -B build/windows-release/package \
+            -D CPACK_INSTALLED_DIRECTORIES="$PWD/stage;."
 
       - uses: actions/upload-artifact@v4
         with:
@@ -248,13 +288,36 @@ jobs:
             --wait
           xcrun stapler staple stage/partyshare.app
 
+      # What a person sees when the image mounts: the application, and the
+      # Applications folder to drag it into. The symlink is the whole convention
+      # on macOS, and an image without it is one where the only thing to do is
+      # run the app from the disk image, which leaves it running from a mount
+      # that disappears.
       - name: Build the disk image
         run: |
-          mkdir -p dmg && cp -R stage/partyshare.app dmg/
-          ln -s /Applications dmg/Applications
+          set -euo pipefail
           VERSION=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          rm -rf dmg && mkdir -p dmg
+          cp -R stage/partyshare.app dmg/
+          ln -s /Applications dmg/Applications
+
+          # The icon the mounted volume itself gets in the Finder sidebar. It
+          # needs the file, the custom icon attribute, and the directory marked
+          # as having one: any of the three missing and it falls back to the
+          # generic disk.
+          cp assets/partyshare.icns dmg/.VolumeIcon.icns
+          SetFile -a C dmg || true
+
           hdiutil create -volname PartyShare -srcfolder dmg -ov -format UDZO \
             "partyshare-${VERSION}-macos-${{ matrix.arch }}.dmg"
+
+      # Gatekeeper judges the disk image as well as the bundle inside it, so an
+      # unsigned image carrying a signed application still warns on first open.
+      - name: Sign the disk image
+        if: ${{ secrets.MACOS_CERTIFICATE != '' }}
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" partyshare-*.dmg
 
       - uses: actions/upload-artifact@v4
         with:

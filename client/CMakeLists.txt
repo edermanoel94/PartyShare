@@ -124,7 +124,25 @@ endif()
 
 qt_standard_project_setup()
 
+# The icon and the version block Explorer reads off the executable. Configured
+# rather than static, so the properties dialog cannot disagree with the tag.
+if(WIN32)
+  configure_file(${CMAKE_SOURCE_DIR}/assets/partyshare.rc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/partyshare.rc @ONLY)
+  set(dv_client_resources ${CMAKE_CURRENT_BINARY_DIR}/partyshare.rc)
+endif()
+
+# The macOS icon has to be a source of the target, not a file copied next to it:
+# it is the bundle's Resources directory that Finder reads, and a bundle without
+# one gets the blank sheet of paper that says nobody finished the packaging.
+if(APPLE)
+  set(dv_client_resources ${CMAKE_SOURCE_DIR}/assets/partyshare.icns)
+  set_source_files_properties(${dv_client_resources} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources)
+endif()
+
 qt_add_executable(dv_client
+  ${dv_client_resources}
   src/main.cpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
@@ -146,6 +164,8 @@ set_target_properties(dv_client PROPERTIES
   MACOSX_BUNDLE_BUNDLE_NAME "PartyShare"
   MACOSX_BUNDLE_GUI_IDENTIFIER "dev.partyshare.client"
   MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+  MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+  MACOSX_BUNDLE_ICON_FILE "partyshare.icns"
 )
 
 dv_set_target_warnings(dv_client)

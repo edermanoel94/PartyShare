@@ -42,7 +42,29 @@ set(CPACK_PACKAGE_FILE_NAME "partyshare-${PROJECT_VERSION}-${DV_PACKAGE_PLATFORM
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
 
 if(WIN32)
-  set(CPACK_GENERATOR "ZIP")
+  # NSIS and not ZIP: task 1 asks for an installer, and an archive is not one.
+  # What separates them is what a person gets afterwards - a start menu entry, a
+  # shortcut, and a way to remove the thing - and none of that comes from
+  # unpacking a folder somewhere. ZIP stays alongside for anyone who wants the
+  # files without an installer touching their machine.
+  set(CPACK_GENERATOR "NSIS;ZIP")
+
+  set(CPACK_NSIS_PACKAGE_NAME "PartyShare")
+  set(CPACK_NSIS_DISPLAY_NAME "PartyShare")
+  set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\partyshare.exe")
+  set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/assets/partyshare.ico")
+  set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/assets/partyshare.ico")
+  set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+  # Upgrading in place rather than stacking a second copy next to the first,
+  # which is what happens by default and is how a machine ends up running an
+  # old version from a directory nobody remembers creating.
+  set(CPACK_NSIS_UNINSTALL_NAME "Uninstall PartyShare")
+  set(CPACK_NSIS_MODIFY_PATH OFF)
+
+  # The shortcut is the client. The server is installed and deliberately not
+  # given one: nobody double clicks a signaling server.
+  set(CPACK_PACKAGE_EXECUTABLES "partyshare;PartyShare")
+  set(CPACK_CREATE_DESKTOP_LINKS "partyshare")
 else()
   set(CPACK_GENERATOR "TGZ")
 endif()

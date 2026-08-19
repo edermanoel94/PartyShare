@@ -156,16 +156,16 @@ class Client {
     options.metrics_interval = 500ms;
     // No ICE servers: this is all loopback, and a test must not depend on
     // reaching a STUN server on the internet.
-    options.audio.ice_servers.clear();
-    options.audio.echo_cancellation = echo_cancellation;
+    options.media.ice_servers.clear();
+    options.media.echo_cancellation = echo_cancellation;
     // scripts/virtual_audio.sh exports these on a machine with no sound card,
     // and then every case here runs on the virtual devices it created. Unset,
     // which is the case on a developer machine, the platform default is used.
     if (const char* input = std::getenv("DV_VIRTUAL_INPUT_DEVICE"); input != nullptr) {
-      options.audio.input_device = input;
+      options.media.input_device = input;
     }
     if (const char* output = std::getenv("DV_VIRTUAL_OUTPUT_DEVICE"); output != nullptr) {
-      options.audio.output_device = output;
+      options.media.output_device = output;
     }
     return options;
   }

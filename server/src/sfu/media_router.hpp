@@ -17,7 +17,7 @@
 
 #include <dv/protocol/message.hpp>
 
-#include "sfu/nack_requester.hpp"
+#include "sfu/video_feedback.hpp"
 #include "signaling/hub.hpp"
 
 namespace dv::server::sfu {
@@ -58,6 +58,9 @@ class MediaRouter : public MediaSignals {
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.
     int h264_payload_type = 96;
+    /// The range a screen share is held to, and how the SFU moves inside it.
+    /// See sfu/bandwidth_estimator.hpp.
+    BandwidthEstimator::Options bandwidth;
   };
 
   /// Delivers one protocol frame to one participant. Called from the router's
@@ -116,11 +119,19 @@ class MediaRouter : public MediaSignals {
   }
 
   /// What the repair of the incoming screen share is doing, summed over the
-  /// participants sending one. See sfu/nack_requester.hpp.
+  /// participants sending one. See sfu/video_feedback.hpp.
   struct VideoRepairStats {
     std::uint64_t requests_sent = 0;
     std::uint64_t packets_missing = 0;
     std::uint64_t packets_repaired = 0;
+    /// The highest target any sharer is currently being asked to aim for, in
+    /// kbps. Zero while nobody is sharing.
+    int target_kbps = 0;
+    /// The lowest a viewer has said it can take, in kbps, which is the cap on
+    /// the number above. Zero while no viewer has said anything.
+    int viewer_ceiling_kbps = 0;
+    /// How many REMB reports arrived from viewers.
+    std::uint64_t viewer_reports_received = 0;
   };
   [[nodiscard]] VideoRepairStats video_repair_stats() const;
 
@@ -155,6 +166,13 @@ class MediaRouter : public MediaSignals {
   struct RoutingTable {
     std::unordered_map<std::string, Route> by_source;
     std::unordered_map<std::string, std::vector<std::shared_ptr<rtc::Track>>> video_inbound_by_room;
+    /// The feedback handler of every participant who could be sharing, by
+    /// room. Published here rather than looked up in `sessions_` because a
+    /// viewer's REMB arrives on a libdatachannel thread that already holds the
+    /// peer connection's own lock, and taking `mutex_` there is the deadlock
+    /// this table exists to avoid.
+    std::unordered_map<std::string, std::vector<std::shared_ptr<VideoFeedback>>>
+        video_feedback_by_room;
   };
 
   struct Session {
@@ -177,9 +195,9 @@ class MediaRouter : public MediaSignals {
     /// funciona sem reiniciar a chamada" true by construction rather than by
     /// getting a mid-call offer right.
     std::optional<Outbound> video_outbound;
-    /// Asks the sharer for the packets that went missing on the way in, so the
-    /// hole is filled once here rather than once per viewer.
-    std::shared_ptr<NackRequester> video_nacks;
+    /// Tells the sharer what to resend and what to aim for. See
+    /// sfu/video_feedback.hpp.
+    std::shared_ptr<VideoFeedback> video_feedback;
     /// Mids are assigned by us because we write the offer. 0 is the inbound
     /// track, everything after it is an outbound one.
     unsigned next_mid = 0;
@@ -187,6 +205,11 @@ class MediaRouter : public MediaSignals {
     /// state that is not stable breaks the connection, so it waits.
     bool renegotiation_pending = false;
   };
+
+  /// A viewer said how much it can take. Called from a libdatachannel thread,
+  /// and must not touch `mutex_`.
+  void note_viewer_bandwidth(const std::string& viewer_id, const std::string& room_id,
+                             unsigned int bitrate_bps);
 
   /// Must be called with `mutex_` held.
   Session* find_session(const std::string& user_id);
@@ -258,6 +281,15 @@ class MediaRouter : public MediaSignals {
   std::atomic<std::uint64_t> video_packets_received_{0};
   std::atomic<std::uint64_t> video_packets_forwarded_{0};
   std::atomic<std::uint64_t> keyframe_requests_forwarded_{0};
+
+  /// What each viewer last said it could take, in kbps, and the smallest of
+  /// them per room. Its own mutex because it is written from libdatachannel
+  /// threads that must never wait on `mutex_`.
+  mutable std::mutex bandwidth_mutex_;
+  std::unordered_map<std::string, int> viewer_bandwidth_kbps_;
+  std::unordered_map<std::string, std::string> viewer_room_;
+  std::atomic<std::uint64_t> viewer_reports_received_{0};
+  std::atomic<int> viewer_ceiling_kbps_{0};
 };
 
 }  // namespace dv::server::sfu

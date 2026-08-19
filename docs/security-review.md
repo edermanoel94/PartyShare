@@ -73,6 +73,25 @@ A correção conhecida é a de sempre com coturn: o servidor de signaling deriva
 O segredo nunca sai do servidor, e a credencial expira sozinha.
 Isso é uma mudança de protocolo, então fica registrada aqui em vez de improvisada.
 
+## 6. Um pacote que derrubava o servidor
+
+Não pedido pela seção 17, e encontrado enquanto a tarefa 3 do M8 media adaptação de bitrate.
+
+**Achado, severidade alta: qualquer participante autenticado derrubava o servidor inteiro com um pacote RTP.**
+
+Um pacote com o bit de padding do RFC 3550 ligado, encaminhado pelo SFU, chega ao construtor de sender report da libdatachannel, que tem um `assert(!header->padding())`.
+O processo aborta, e com ele todas as chamadas de todas as salas.
+
+Não é preciso má fé para produzir um: a libwebrtc envia exatamente esses pacotes quando sonda banda, o que foi como isto apareceu.
+Basta um cliente com uma extensão de cabeçalho a mais para que aconteça sozinho.
+
+**Corrigido:** o SFU descarta pacotes com padding em vez de encaminhá-los.
+Um participante que os envie perde os próprios quadros, que a retransmissão então repara, em vez de encerrar a chamada de todo mundo.
+`tests/integration/test_sfu.cpp` envia pacotes com padding e exige que o servidor continue encaminhando vídeo depois; sem a correção, o teste aborta em vez de falhar.
+
+O `assert` continua na libdatachannel, e continua sendo um `assert` em uma biblioteca de rede que processa entrada não confiável.
+Enquanto estiver lá, nenhuma extensão que faça a libwebrtc sondar banda pode ser negociada.
+
 ## Resumo
 
 | Item | Severidade | Situação |
@@ -80,6 +99,7 @@ Isso é uma mudança de protocolo, então fica registrada aqui em vez de improvi
 | Mídia sem criptografia | - | Coberto, verificado por teste |
 | Armazenamento de streams | - | Coberto, nada é gravado |
 | Hash de senha sem custo | Alta | Corrigido nesta revisão, scrypt |
+| Pacote com padding derrubava o servidor | Alta | Corrigido, o SFU descarta o pacote |
 | Senha em memória durante a sessão | Média | Aberto, precisa de token de retomada |
 | Credenciais de TURN estáticas | Média | Aberto, precisa de credencial efêmera |
 | Signaling sem TLS por padrão | Média | Aberto, deveria recusar `ws://` remoto |

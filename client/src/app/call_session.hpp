@@ -61,7 +61,7 @@ class CallSession {
 
   struct Options {
     std::string signaling_url;
-    media::MediaSessionOptions audio;
+    media::MediaSessionOptions media;
     /// Section 22 of SPEC.md wants these numbers, and M4 wants them in the log.
     std::chrono::milliseconds metrics_interval{5000};
   };
@@ -159,6 +159,9 @@ class CallSession {
   [[nodiscard]] std::string room_id() const;
   [[nodiscard]] std::vector<Participant> participants() const;
   [[nodiscard]] media::AudioStats stats() const;
+  /// The screen share, from capture through to what the congestion controller
+  /// says the link can carry. Zeroed when there is no call.
+  [[nodiscard]] media::VideoStats video_stats() const;
 
  private:
   void handle_signal(protocol::Message message);

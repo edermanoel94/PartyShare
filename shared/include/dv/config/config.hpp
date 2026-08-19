@@ -14,8 +14,15 @@ struct VideoConfig {
   int width = 1280;
   int height = 720;
   int fps = 30;
+  /// Where the encoder starts and what it aims for on a healthy link, section
+  /// 6 of SPEC.md.
   int min_bitrate_kbps = 1500;
   int max_bitrate_kbps = 3000;
+  /// The lowest congestion control may squeeze the screen share to before the
+  /// picture stops being worth the bandwidth. Not a target: a link that cannot
+  /// carry the minimum above has to be allowed to carry less, or it is simply
+  /// flooded.
+  int floor_bitrate_kbps = 300;
   /// Kept as a string so adding VP9 and AV1 later needs no schema change.
   std::string codec = "H264";
 };

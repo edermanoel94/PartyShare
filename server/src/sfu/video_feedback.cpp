@@ -1,11 +1,11 @@
-#include "sfu/nack_requester.hpp"
+#include "sfu/video_feedback.hpp"
 
 #include <cstring>
 #include <vector>
 
 namespace dv::server::sfu {
 
-void NackRequester::incoming(rtc::message_vector& messages, const rtc::message_callback& send) {
+void VideoFeedback::incoming(rtc::message_vector& messages, const rtc::message_callback& send) {
   const auto now = Clock::now();
 
   for (const auto& message : messages) {
@@ -20,9 +20,19 @@ void NackRequester::incoming(rtc::message_vector& messages, const rtc::message_c
   }
 
   request(send, now);
+  report_bandwidth(send, now);
 }
 
-void NackRequester::observe(std::uint32_t ssrc, std::uint16_t sequence_number,
+void VideoFeedback::set_bandwidth_ceiling(int kbps) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  bandwidth_.set_ceiling(kbps);
+}
+
+int VideoFeedback::target_kbps() const {
+  return target_kbps_.load(std::memory_order_relaxed);
+}
+
+void VideoFeedback::observe(std::uint32_t ssrc, std::uint16_t sequence_number,
                             Clock::time_point now) {
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -35,6 +45,7 @@ void NackRequester::observe(std::uint32_t ssrc, std::uint16_t sequence_number,
     missing_.clear();
   }
 
+  ++packets_seen_;
   if (!started_) {
     started_ = true;
     expected_ = static_cast<std::uint16_t>(sequence_number + 1);
@@ -79,7 +90,7 @@ void NackRequester::observe(std::uint32_t ssrc, std::uint16_t sequence_number,
   expected_ = static_cast<std::uint16_t>(sequence_number + 1);
 }
 
-void NackRequester::request(const rtc::message_callback& send, Clock::time_point now) {
+void VideoFeedback::request(const rtc::message_callback& send, Clock::time_point now) {
   std::vector<std::uint16_t> wanted;
   std::uint32_t ssrc = 0;
 
@@ -134,6 +145,57 @@ void NackRequester::request(const rtc::message_callback& send, Clock::time_point
               scratch.data() + sizeof(rtc::RtcpFbHeader), entries * sizeof(rtc::RtcpNackPart));
 
   requests_sent_.fetch_add(1, std::memory_order_relaxed);
+  send(std::move(message));
+}
+
+void VideoFeedback::report_bandwidth(const rtc::message_callback& send, Clock::time_point now) {
+  int target = 0;
+  std::uint32_t ssrc = 0;
+
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!started_ || !send) {
+      return;
+    }
+    if (last_bandwidth_report_ == Clock::time_point{}) {
+      // The first packet only starts the clock. Reporting immediately would
+      // report on an interval that never happened.
+      last_bandwidth_report_ = now;
+      packets_seen_at_report_ = packets_seen_;
+      packets_missing_at_report_ = packets_missing_.load(std::memory_order_relaxed);
+      return;
+    }
+    if (now - last_bandwidth_report_ < options_.bandwidth_interval) {
+      return;
+    }
+
+    const std::uint64_t missing_now = packets_missing_.load(std::memory_order_relaxed);
+    const std::uint64_t received = packets_seen_ - packets_seen_at_report_;
+    const std::uint64_t lost = missing_now - packets_missing_at_report_;
+    last_bandwidth_report_ = now;
+    packets_seen_at_report_ = packets_seen_;
+    packets_missing_at_report_ = missing_now;
+
+    // Packets that came back after being asked for are not loss the sender has
+    // to slow down for: the repair worked. Only what stayed missing counts,
+    // and the counter cannot tell the two apart within one interval, so this
+    // errs on the side of asking for less rather than more.
+    bandwidth_.update(received, lost);
+    target = bandwidth_.target_kbps();
+    ssrc = ssrc_;
+  }
+
+  if (ssrc == 0) {
+    return;
+  }
+
+  auto message = rtc::make_message(rtc::RtcpRemb::SizeWithSSRCs(1), rtc::Message::Control);
+  auto* remb = reinterpret_cast<rtc::RtcpRemb*>(message->data());
+  remb->preparePacket(ssrc, 1, static_cast<unsigned int>(target) * 1000);
+  remb->setSSRC(0, ssrc);
+
+  target_kbps_.store(target, std::memory_order_relaxed);
+  bandwidth_reports_sent_.fetch_add(1, std::memory_order_relaxed);
   send(std::move(message));
 }
 

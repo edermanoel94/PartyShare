@@ -124,6 +124,11 @@ int main(int argc, char* argv[]) {
     // ICE for the SFU's own connections. TURN only matters once a participant is
     // behind a NAT that STUN cannot get through, which is why it is optional.
     options.sfu.ice_servers = config.network.stun_servers;
+    // What the SFU will ask a screen share to aim for: the configured range,
+    // with the floor congestion control may squeeze it to.
+    options.sfu.bandwidth.start_kbps = config.video.min_bitrate_kbps;
+    options.sfu.bandwidth.max_kbps = config.video.max_bitrate_kbps;
+    options.sfu.bandwidth.min_kbps = config.video.floor_bitrate_kbps;
     if (!config.network.turn_url.empty()) {
       options.sfu.ice_servers.push_back(build_turn_url(config.network));
     }

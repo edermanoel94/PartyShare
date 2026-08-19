@@ -45,20 +45,28 @@ int main(int argc, char* argv[]) {
 
   dv::client::app::CallSession::Options session_options;
   session_options.signaling_url = config.network.signaling_url;
-  session_options.audio.ice_servers = config.network.stun_servers;
+  session_options.media.ice_servers = config.network.stun_servers;
   if (!config.network.turn_url.empty()) {
-    session_options.audio.ice_servers.push_back(config.network.turn_url);
-    session_options.audio.turn_username = config.network.turn_username;
-    session_options.audio.turn_password = config.network.turn_password;
+    session_options.media.ice_servers.push_back(config.network.turn_url);
+    session_options.media.turn_username = config.network.turn_username;
+    session_options.media.turn_password = config.network.turn_password;
   }
-  session_options.audio.sample_rate_hz = config.audio.sample_rate_hz;
-  session_options.audio.channels = config.audio.channels;
-  session_options.audio.frame_duration_ms = config.audio.frame_duration_ms;
-  session_options.audio.echo_cancellation = config.audio.echo_cancellation;
-  session_options.audio.noise_suppression = config.audio.noise_suppression;
-  session_options.audio.automatic_gain_control = config.audio.automatic_gain_control;
-  session_options.audio.input_device = config.audio.input_device;
-  session_options.audio.output_device = config.audio.output_device;
+  session_options.media.sample_rate_hz = config.audio.sample_rate_hz;
+  session_options.media.channels = config.audio.channels;
+  session_options.media.frame_duration_ms = config.audio.frame_duration_ms;
+  session_options.media.echo_cancellation = config.audio.echo_cancellation;
+  session_options.media.noise_suppression = config.audio.noise_suppression;
+  session_options.media.automatic_gain_control = config.audio.automatic_gain_control;
+  session_options.media.input_device = config.audio.input_device;
+  session_options.media.output_device = config.audio.output_device;
+  // The video section of the configuration, which until M8 was parsed, logged
+  // and then ignored: the session used its own defaults, so setting a bitrate
+  // or a resolution in the file changed nothing.
+  session_options.media.capture.max_size = {config.video.width, config.video.height};
+  session_options.media.capture.max_fps = config.video.fps;
+  session_options.media.video_min_bitrate_kbps = config.video.min_bitrate_kbps;
+  session_options.media.video_max_bitrate_kbps = config.video.max_bitrate_kbps;
+  session_options.media.video_floor_bitrate_kbps = config.video.floor_bitrate_kbps;
 
   if (!dv::client::media::media_is_available()) {
     DV_LOG_WARN(

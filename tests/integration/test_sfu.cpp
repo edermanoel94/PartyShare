@@ -240,6 +240,50 @@ class Participant {
     return true;
   }
 
+  /// Sends video packets carrying RTP padding, which is what libwebrtc does
+  /// when it probes for bandwidth.
+  ///
+  /// libdatachannel's sender report builder asserts on a padded packet, so
+  /// forwarding one aborts the whole server. Any participant can send these,
+  /// so the SFU has to survive them.
+  [[nodiscard]] bool send_padded_video(int count) {
+    std::shared_ptr<rtc::Track> track;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      track = outgoing_video_;
+    }
+    if (!track || !track->isOpen()) {
+      return false;
+    }
+
+    for (int i = 0; i < count; ++i) {
+      rtc::binary packet = make_rtp_packet(kOutgoingVideoSsrc, static_cast<std::uint16_t>(i),
+                                           static_cast<std::uint32_t>(i) * 3000, kH264PayloadType);
+      // RFC 3550 section 5.1: the padding bit in the header, and the number of
+      // padding octets in the last one.
+      auto* first = reinterpret_cast<std::uint8_t*>(packet.data());
+      *first |= 0x20U;
+      packet.back() = std::byte{4};
+      track->send(std::move(packet));
+      std::this_thread::sleep_for(5ms);
+    }
+    return true;
+  }
+
+  /// Tells the SFU how much this viewer's own link can carry, which is what a
+  /// receiver's congestion controller does through REMB.
+  [[nodiscard]] bool request_bitrate(unsigned int bitrate_bps) {
+    std::shared_ptr<rtc::Track> track;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (incoming_video_.empty()) {
+        return false;
+      }
+      track = incoming_video_.front();
+    }
+    return track->requestBitrate(bitrate_bps);
+  }
+
   /// Asks the sender for an intra frame, the way a viewer that joined mid
   /// transmission does.
   [[nodiscard]] bool request_keyframe() {
@@ -542,6 +586,79 @@ TEST_F(SfuTest, OneParticipantsScreenReachesTheOthers) {
 
   // And it does not come back to whoever sent it.
   EXPECT_EQ(ana.received_video_rtp(), 0U) << "a participant is watching their own screen";
+}
+
+TEST_F(SfuTest, TheSlowestViewerLimitsWhatTheSharerIsAskedFor) {
+  // The SFU is the only party that hears every viewer, so it is the only one
+  // that can hold the sharer to what the slowest of them can take.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  // The share has to be flowing first: what the SFU asks for is only sent
+  // while packets are arriving to report on.
+  ASSERT_TRUE(ana.send_video(30));
+
+  constexpr unsigned int kViewerCanTake = 600000;
+  ASSERT_TRUE(bruno.request_bitrate(kViewerCanTake));
+
+  auto* router = server_->media_router();
+  ASSERT_TRUE(wait_until([&] { return router->video_repair_stats().viewer_reports_received > 0; }))
+      << "the viewer's report never reached the SFU";
+  EXPECT_EQ(router->video_repair_stats().viewer_ceiling_kbps, 600);
+
+  // And it reaches the sharer. The SFU reports once a second, so this has to
+  // be more than a second of video, spaced like the real thing.
+  ASSERT_TRUE(ana.send_video(250));
+  EXPECT_TRUE(wait_until([&] {
+    const int target = router->video_repair_stats().target_kbps;
+    return target > 0 && target <= 600;
+  })) << "the sharer is still being asked for "
+      << router->video_repair_stats().target_kbps << " kbps";
+}
+
+TEST_F(SfuTest, APaddedPacketIsDroppedRatherThanTakingTheServerDown) {
+  // Found while enabling bandwidth estimation: negotiating abs-send-time makes
+  // libwebrtc probe, probing is padding, and libdatachannel asserts on a
+  // padded packet while building the sender report. The assert is inside a
+  // library we do not control, so the packet has to stop here.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  ASSERT_TRUE(ana.send_padded_video(20));
+
+  auto* router = server_->media_router();
+  EXPECT_EQ(router->video_packets_received(), 0U) << "a padded packet was taken as media";
+  EXPECT_EQ(bruno.received_video_rtp(), 0U);
+
+  // And the call is still a call: the padded packets cost their own frames and
+  // nothing else.
+  ASSERT_TRUE(ana.send_video(30));
+  EXPECT_TRUE(wait_until([&] { return bruno.received_video_rtp() > 0; }))
+      << "the server survived the padded packets but stopped forwarding video";
 }
 
 TEST_F(SfuTest, VideoAndAudioTravelWithoutGettingMixedUp) {

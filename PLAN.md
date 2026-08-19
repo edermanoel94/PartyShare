@@ -437,7 +437,7 @@ Tarefas:
 
 1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
 2. [x] Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
-3. Ativar a adaptação de bitrate com base no feedback de congestion control.
+3. [x] Ativar a adaptação de bitrate com base no feedback de congestion control.
 4. Encoders por hardware: Media Foundation ou NVENC no Windows, VideoToolbox no macOS, VAAPI no Linux, todos atrás da interface `VideoEncoder`, com fallback automático para software.
 5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
 6. [x] Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
@@ -448,10 +448,11 @@ Critérios de aceitação:
 - [x] Todas as métricas da seção 22 medidas e registradas em [docs/benchmarks.md](docs/benchmarks.md).
   A latência continua sendo a exceção parcial: a chamada foi medida sobrevivendo a 492 ms de ida e volta injetados, o que responde "aguenta", mas o "abaixo de 150 ms em rede real" continua sem uma rede real para ser medido.
 - [x] A chamada sobrevive a 5% de perda de pacotes com degradação suave e sem queda.
-  Cinco participantes, um compartilhando a tela, com 5% de perda injetada nos dois sentidos: os quatro espectadores seguem a 29,8 FPS, o mesmo número da corrida sem perda, e ninguém cai.
+  Cinco participantes, um compartilhando a tela, com 5% de perda injetada nos dois sentidos: os quatro espectadores seguem a 29,7 FPS, o mesmo número da corrida sem perda, e ninguém cai.
   Só passou a ser verdade depois da correção descrita abaixo. Antes dela, a tela congelava.
 - [x] Nenhum achado aberto de alta severidade na revisão de segurança.
-  Havia um, o hash de senha, corrigido nesta rodada. Restam três de severidade média, descritos em [docs/security-review.md](docs/security-review.md).
+  Houve dois, ambos corrigidos: o hash de senha sem custo e um pacote RTP com padding que derrubava o servidor inteiro.
+  Restam três de severidade média, descritos em [docs/security-review.md](docs/security-review.md).
 
 ### Como a rede é degradada, e por que de dois jeitos
 
@@ -479,11 +480,46 @@ O SFU carregou oito pedidos de keyframe em quinze segundos e nenhum produziu ima
 Faltavam as duas pontas da retransmissão, e o SFU agora tem as duas:
 
 - `rtc::RtcpNackResponder` na track de saída, que reenvia ao espectador o pacote que ele perdeu, de um cache dos últimos.
-- `dv::server::sfu::NackRequester` na track de entrada, escrito aqui porque a libdatachannel responde NACK e nunca pede um.
+- `dv::server::sfu::VideoFeedback` na track de entrada, escrito aqui porque a libdatachannel responde NACK e nunca pede um.
   Um buraco na sequência vira um NACK genérico da RFC 4585, o compartilhador reenvia, e o SFU encaminha um fluxo já remendado em vez de espalhar a perda para todos os espectadores.
 
 Depois disso, o mesmo caso entrega **443 quadros em 15 segundos**, com zero pedidos de keyframe.
 Os números completos, com a ressalva de que a tela medida estava parada, estão em [docs/benchmarks.md](docs/benchmarks.md).
+
+### Quem decide o bitrate do compartilhamento, e como
+
+A tarefa 3 pede adaptação de bitrate a partir do feedback de congestion control. A primeira medição mostrou que não havia nenhum:
+com um quinto dos pacotes sendo descartados, a estimativa do remetente subia até o teto de 3 Mbps e ficava lá.
+Não é defeito da libwebrtc. Sem `transport-cc` e sem REMB, ninguém conta a ela que existe perda, e um controlador sem entrada não controla nada.
+
+Quem tem essa informação é o SFU, e só ele: o remetente enxerga o próprio enlace de subida, o espectador enxerga o de descida, e o servidor enxerga os dois.
+Então é ele quem decide, em `server/src/sfu/bandwidth_estimator.hpp`, com a metade baseada em perda do controle de congestionamento do Google:
+
+- acima de 10% de perda o alvo cai proporcionalmente à perda;
+- abaixo de 2% ele cresce 8% por segundo;
+- entre os dois nada acontece, porque reagir a ruído é como uma taxa oscila em vez de assentar.
+
+O número viaja como REMB, que é o que `a=rtcp-fb:96 goog-remb` na oferta já negociava e ninguém usava, e a libwebrtc o trata como teto do que o próprio controlador dela pode mirar.
+Medido: 2.568 kbps em enlace limpo, 1.613 com 20% de perda - com o SFU pedindo exatamente 1.613 - e 2.193 depois que a perda para.
+
+Do lado do cliente, duas mudanças foram necessárias para que isso pudesse funcionar:
+
+- `SetBitrate` na conexão inteira, com piso, ponto de partida e teto, que é o intervalo dentro do qual o controlador trabalha.
+  Sem ponto de partida a estimativa começa nos 300 kbps padrão da libwebrtc e leva dezenas de segundos sondando para subir, o que numa tela compartilhada se lê como uma imagem borrada por meio minuto.
+- O mínimo por encoding foi removido.
+  Um piso ali é a única coisa que torna a adaptação impossível: um enlace que não aguenta 1,5 Mbps receberia 1,5 Mbps do mesmo jeito.
+  O que a seção 6 da SPEC chama de mínimo é onde o codificador começa e o que ele busca em enlace saudável, não um chão que ele nunca pode furar.
+
+### A metade que não deu para ligar, e um `assert` no caminho
+
+Falta a outra direção: o espectador dizer quanto o enlace dele aguenta, para que o mais lento da sala limite o que o compartilhador produz.
+O código existe, está exercitado por teste com RTCP real, e nunca dispara com o cliente deste projeto: para produzir esse relatório a libwebrtc precisa da extensão `abs-send-time` no cabeçalho RTP.
+
+Negociar a extensão faz a libwebrtc sondar banda, sondar é enviar padding, e a libdatachannel tem um `assert` que derruba o processo inteiro ao montar o sender report de um pacote com padding.
+A extensão fica de fora até que isso seja resolvido no upstream.
+
+O que ficou é a defesa: o SFU descarta pacotes com padding em vez de encaminhá-los.
+Qualquer participante pode enviar um, e o resultado era o servidor abortando - o que é um jeito de derrubar a chamada de todo mundo com um pacote.
 
 ### Sobre a tarefa 5, e o que a análise estática encontrou
 
@@ -568,7 +604,7 @@ O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
 
-O M8 está em andamento: as tarefas 1, 2, 5 e 6 estão feitas, e faltam a adaptação de bitrate, os encoders por hardware e o crash reporting.
+O M8 está em andamento: as tarefas 1, 2, 3, 5 e 6 estão feitas, e faltam os encoders por hardware e o crash reporting.
 Os números da seção 22 estão em [docs/benchmarks.md](docs/benchmarks.md) e a revisão de segurança em [docs/security-review.md](docs/security-review.md).
 A simulação de rede encontrou e corrigiu um congelamento do compartilhamento de tela sob perda, que era a diferença entre "degrada" e "para".
 

@@ -275,8 +275,8 @@ Result<std::monostate> CallSession::set_video_bitrate(int min_kbps, int max_kbps
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
-    options_.audio.video_min_bitrate_kbps = min_kbps;
-    options_.audio.video_max_bitrate_kbps = max_kbps;
+    options_.media.video_min_bitrate_kbps = min_kbps;
+    options_.media.video_max_bitrate_kbps = max_kbps;
     session = audio_;
   }
   if (session) {
@@ -289,7 +289,7 @@ Result<std::monostate> CallSession::set_video_bitrate(int min_kbps, int max_kbps
 
 std::pair<int, int> CallSession::video_bitrate() const {
   const std::lock_guard<std::mutex> lock(mutex_);
-  return {options_.audio.video_min_bitrate_kbps, options_.audio.video_max_bitrate_kbps};
+  return {options_.media.video_min_bitrate_kbps, options_.media.video_max_bitrate_kbps};
 }
 
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
@@ -312,7 +312,7 @@ Result<std::monostate> CallSession::set_input_device(const std::string& device_i
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
-    options_.audio.input_device = device_id;
+    options_.media.input_device = device_id;
     session = audio_;
   }
   if (!session) {
@@ -325,7 +325,7 @@ Result<std::monostate> CallSession::set_output_device(const std::string& device_
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
-    options_.audio.output_device = device_id;
+    options_.media.output_device = device_id;
     session = audio_;
   }
   if (!session) {
@@ -381,6 +381,15 @@ media::AudioStats CallSession::stats() const {
     session = audio_;
   }
   return session ? session->stats() : media::AudioStats{};
+}
+
+media::VideoStats CallSession::video_stats() const {
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    session = audio_;
+  }
+  return session ? session->video_stats() : media::VideoStats{};
 }
 
 void CallSession::handle_signaling_state(SignalingClient::State state, const std::string& detail) {
@@ -746,7 +755,7 @@ Result<std::monostate> CallSession::ensure_media_session() {
     }
   };
 
-  auto created = media_factory_(options_.audio, std::move(callbacks));
+  auto created = media_factory_(options_.media, std::move(callbacks));
   if (!created) {
     return Result<std::monostate>::failure(created.error());
   }
@@ -770,8 +779,8 @@ Result<std::monostate> CallSession::ensure_media_session() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     volumes = volumes_;
-    input_device = options_.audio.input_device;
-    output_device = options_.audio.output_device;
+    input_device = options_.media.input_device;
+    output_device = options_.media.output_device;
   }
 
   for (const auto& [user_id, volume] : volumes) {
@@ -865,6 +874,17 @@ void CallSession::metrics_loop() {
         "Audio: rtt {:.0f} ms, jitter {:.1f} ms, lost {} packets, up {:.0f} kbps, down {:.0f} kbps",
         stats.round_trip_time_ms, stats.jitter_ms, stats.packets_lost, stats.send_bitrate_kbps,
         stats.receive_bitrate_kbps);
+
+    // The screen share is only worth a line while there is one, and then the
+    // number that matters is what the network is willing to carry against what
+    // is being sent: those two apart is what a picture falling behind looks
+    // like from here.
+    if (const media::VideoStats video = session->video_stats(); video.frames_sent > 0) {
+      DV_LOG_INFO(
+          "Video: {}x{} at {:.1f} fps, up {:.0f} kbps, estimate {:.0f} kbps, {} frames dropped",
+          video.send_width, video.send_height, video.send_fps, video.send_bitrate_kbps,
+          video.available_send_bitrate_kbps, video.frames_dropped);
+    }
 
     if (callbacks.on_metrics) {
       callbacks.on_metrics(stats);

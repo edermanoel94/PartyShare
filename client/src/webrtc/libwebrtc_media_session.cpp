@@ -994,6 +994,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
           std::max(collected.round_trip_time_ms, remote->round_trip_time.value_or(0) * 1000.0);
     }
 
+    collect_video(report);
+
     const auto now = std::chrono::steady_clock::now();
 
     const std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -1012,6 +1014,64 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     }
 
     stats_ = collected;
+  }
+
+  /// The video half of the report.
+  ///
+  /// Separate from the audio because the two live in different places: the
+  /// audio numbers are the call as a whole, and the video ones sit next to
+  /// counters that the capture and encode path maintains itself.
+  void collect_video(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) {
+    std::uint64_t bytes_sent = 0;
+    std::uint64_t bytes_received = 0;
+    std::uint64_t keyframes = 0;
+    double target = 0;
+
+    for (const auto* outbound : report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>()) {
+      if (outbound->kind.value_or("") != "video") {
+        continue;
+      }
+      bytes_sent += outbound->bytes_sent.value_or(0);
+      keyframes += outbound->key_frames_encoded.value_or(0);
+      target = std::max(target, outbound->target_bitrate.value_or(0) / 1000.0);
+    }
+
+    for (const auto* inbound : report->GetStatsOfType<webrtc::RTCInboundRtpStreamStats>()) {
+      if (inbound->kind.value_or("") != "video") {
+        continue;
+      }
+      bytes_received += inbound->bytes_received.value_or(0);
+    }
+
+    // What the congestion controller decided the link can carry. It is
+    // reported on the candidate pair rather than on the stream, because it is
+    // a property of the transport that every stream shares.
+    double available = 0;
+    for (const auto* pair : report->GetStatsOfType<webrtc::RTCIceCandidatePairStats>()) {
+      available = std::max(available, pair->available_outgoing_bitrate.value_or(0) / 1000.0);
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const std::lock_guard<std::mutex> lock(video_mutex_);
+    const double elapsed_seconds =
+        std::chrono::duration<double>(now - last_video_collection_).count();
+    if (elapsed_seconds > 0.1) {
+      video_stats_.send_bitrate_kbps =
+          static_cast<double>(bytes_sent - video_bytes_sent_) * 8.0 / elapsed_seconds / 1000.0;
+      video_stats_.receive_bitrate_kbps =
+          static_cast<double>(bytes_received - video_bytes_received_) * 8.0 / elapsed_seconds /
+          1000.0;
+      video_stats_.receive_fps =
+          static_cast<double>(video_stats_.frames_received - video_frames_received_) /
+          elapsed_seconds;
+      video_bytes_sent_ = bytes_sent;
+      video_bytes_received_ = bytes_received;
+      video_frames_received_ = video_stats_.frames_received;
+      last_video_collection_ = now;
+    }
+    video_stats_.keyframes_sent = keyframes;
+    video_stats_.available_send_bitrate_kbps = available;
+    video_stats_.target_bitrate_kbps = target;
   }
 
   /// Converts what RFC 6464 puts in the RTP header into a level from 0 to 1.
@@ -1098,7 +1158,31 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   }
 
   /// Section 6 of SPEC.md: 1.5 to 3 Mbps for the screen.
+  ///
+  /// Two settings, because they answer two different questions.
+  ///
+  /// SetBitrate is the call as a whole, and it is what the congestion
+  /// controller works inside: the floor it may squeeze down to, where it
+  /// starts before it knows anything about the link, and the ceiling it may
+  /// grow to. Without a start value the estimator begins at libwebrtc's
+  /// default of 300 kbps and takes tens of seconds of probing to climb, which
+  /// on a screen share reads as a picture that is blurry for half a minute.
+  ///
+  /// The sender parameters are the video track alone, and only carry the
+  /// ceiling. Giving the encoding a minimum too would put a floor under the
+  /// allocator, and a floor is the one thing that makes adaptation impossible:
+  /// a link that cannot carry the minimum would be sent it anyway.
   void apply_video_bitrate() {
+    if (connection_ != nullptr) {
+      webrtc::BitrateSettings bitrate;
+      bitrate.min_bitrate_bps = options_.video_floor_bitrate_kbps * 1000;
+      bitrate.start_bitrate_bps = options_.video_min_bitrate_kbps * 1000;
+      bitrate.max_bitrate_bps = options_.video_max_bitrate_kbps * 1000;
+      if (const webrtc::RTCError error = connection_->SetBitrate(bitrate); !error.ok()) {
+        DV_LOG_WARN("Media: the call refused the bitrate range: {}", error.message());
+      }
+    }
+
     if (video_sender_ == nullptr) {
       return;
     }
@@ -1106,7 +1190,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     if (parameters.encodings.empty()) {
       return;
     }
-    parameters.encodings[0].min_bitrate_bps = options_.video_min_bitrate_kbps * 1000;
+    parameters.encodings[0].min_bitrate_bps.reset();
     parameters.encodings[0].max_bitrate_bps = options_.video_max_bitrate_kbps * 1000;
     if (const webrtc::RTCError error = video_sender_->SetParameters(parameters); !error.ok()) {
       DV_LOG_WARN("Media: the encoder refused the bitrate range: {}", error.message());
@@ -1164,6 +1248,11 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   mutable std::mutex video_mutex_;
   std::unique_ptr<video::ScreenCapturer> capturer_;
   VideoStats video_stats_;
+  /// The previous reading, so that a total from the report can become a rate.
+  std::uint64_t video_bytes_sent_ = 0;
+  std::uint64_t video_bytes_received_ = 0;
+  std::uint64_t video_frames_received_ = 0;
+  std::chrono::steady_clock::time_point last_video_collection_ = std::chrono::steady_clock::now();
   std::unique_ptr<RemoteVideoSink> remote_video_sink_;
   webrtc::scoped_refptr<webrtc::VideoTrackInterface> remote_video_track_;
 

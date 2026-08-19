@@ -5,7 +5,7 @@ find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 add_library(dv_server_core STATIC
   src/rooms/room_manager.cpp
   src/sfu/media_router.cpp
-  src/sfu/nack_requester.cpp
+  src/sfu/video_feedback.cpp
   src/signaling/authenticator.cpp
   src/signaling/hub.cpp
   src/signaling/server.cpp

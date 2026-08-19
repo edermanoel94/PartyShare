@@ -86,6 +86,18 @@ struct VideoStats {
   double receive_fps = 0;
   double send_bitrate_kbps = 0;
   double receive_bitrate_kbps = 0;
+
+  /// What the congestion controller believes the link can carry right now, in
+  /// kbps. Property of the transport rather than of the video, since audio and
+  /// video share one, but it lives here because video is what has to give way
+  /// when the number falls.
+  ///
+  /// Zero until the first estimate exists, which needs a few seconds of
+  /// traffic and feedback.
+  double available_send_bitrate_kbps = 0;
+  /// What the encoder is currently aiming at, in kbps, which is the estimate
+  /// above clamped into the configured range.
+  double target_bitrate_kbps = 0;
 };
 
 enum class MediaState : std::uint8_t {
@@ -251,11 +263,20 @@ struct MediaSessionOptions {
 
   /// Section 5.2 of SPEC.md: 1280x720 at 30 FPS.
   video::ScreenCaptureOptions capture;
-  /// Section 6 of SPEC.md: 1.5 to 3 Mbps for the screen. The encoder is left
-  /// to move inside the range on its own; the hook for driving it from the
-  /// congestion estimate is M8.
+  /// Section 6 of SPEC.md: 1.5 to 3 Mbps for the screen.
+  ///
+  /// The minimum is where the encoder starts and what it aims for on a healthy
+  /// link, not a floor it may never go below. A floor would mean that a link
+  /// which cannot carry 1.5 Mbps gets 1.5 Mbps anyway, which does not deliver
+  /// a picture, it delivers congestion. What congestion control is allowed to
+  /// fall to is `video_floor_bitrate_kbps`.
   int video_min_bitrate_kbps = 1500;
   int video_max_bitrate_kbps = 3000;
+  /// The lowest the screen share is allowed to be squeezed to before the
+  /// picture is worth less than the bandwidth. Below a few hundred kbps a
+  /// 1280x720 screen is unreadable, and at that point the honest answer is a
+  /// slow picture rather than a broken one.
+  int video_floor_bitrate_kbps = 300;
 
   /// Empty means the system default.
   std::string input_device;

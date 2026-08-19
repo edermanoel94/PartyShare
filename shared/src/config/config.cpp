@@ -111,6 +111,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(video, "fps", base.video.fps);
       read_field(video, "min_bitrate_kbps", base.video.min_bitrate_kbps);
       read_field(video, "max_bitrate_kbps", base.video.max_bitrate_kbps);
+      read_field(video, "floor_bitrate_kbps", base.video.floor_bitrate_kbps);
       read_field(video, "codec", base.video.codec);
     }
     if (root.contains("audio")) {
@@ -185,6 +186,7 @@ void apply_environment(Config& config) {
   apply_env_int("DV_VIDEO_FPS", config.video.fps);
   apply_env_int("DV_VIDEO_MIN_BITRATE_KBPS", config.video.min_bitrate_kbps);
   apply_env_int("DV_VIDEO_MAX_BITRATE_KBPS", config.video.max_bitrate_kbps);
+  apply_env_int("DV_VIDEO_FLOOR_BITRATE_KBPS", config.video.floor_bitrate_kbps);
   apply_env_string("DV_VIDEO_CODEC", config.video.codec);
 
   apply_env_int("DV_AUDIO_SAMPLE_RATE_HZ", config.audio.sample_rate_hz);
@@ -324,6 +326,13 @@ std::optional<Error> validate(const Config& config) {
   }
   if (config.video.max_bitrate_kbps < config.video.min_bitrate_kbps) {
     return invalid_value("video.max_bitrate_kbps", "must be at least min_bitrate_kbps");
+  }
+  if (config.video.floor_bitrate_kbps <= 0) {
+    return invalid_value("video.floor_bitrate_kbps", "must be positive");
+  }
+  if (config.video.floor_bitrate_kbps > config.video.min_bitrate_kbps) {
+    return invalid_value("video.floor_bitrate_kbps",
+                         "must not be above min_bitrate_kbps, which is where the encoder starts");
   }
 
   static constexpr std::array<int, 5> kOpusSampleRates{8000, 12000, 16000, 24000, 48000};

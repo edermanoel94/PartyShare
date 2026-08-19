@@ -131,6 +131,10 @@ Um espectador que perdeu um pacote pede aquele pacote ao SFU, que o reenvia de u
 O SFU faz o mesmo pedido para cima quando um pacote se perde a caminho dele, em vez de deixar o buraco seguir para todos os espectadores.
 Sem essa segunda metade, um enlace com perda transforma o compartilhamento de tela em uma sequência de pedidos de keyframe que nunca chegam inteiros; a medição está em [benchmarks.md](benchmarks.md).
 
+O SFU também diz ao compartilhador quanto enviar, uma vez por segundo, como REMB (`a=rtcp-fb:96 goog-remb`).
+O número sai da perda que o servidor observa na subida, limitado pelo menor que um espectador tenha relatado, e a libwebrtc o trata como teto do próprio controlador de congestionamento.
+Sem isso o remetente não tem como saber de uma perda que ninguém lhe conta.
+
 Um servidor sem roteamento de mídia responde `media_unavailable` a qualquer mensagem endereçada a `sfu`.
 
 ### 4.3.1 Reconexão

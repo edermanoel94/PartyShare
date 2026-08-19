@@ -8,17 +8,18 @@
 
 #include <chrono>
 #include <cstdint>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "sfu/nack_requester.hpp"
+#include "sfu/video_feedback.hpp"
 
 namespace {
 
-using dv::server::sfu::NackRequester;
+using dv::server::sfu::VideoFeedback;
 using namespace std::chrono_literals;
 
 constexpr std::uint32_t kSsrc = 0x1234ABCD;
@@ -50,10 +51,47 @@ class Sink {
     return [this](rtc::message_ptr message) { sent_.push_back(std::move(message)); };
   }
 
-  [[nodiscard]] std::size_t count() const { return sent_.size(); }
+  /// Only the NACKs. REMB travels on the same path and would otherwise be
+  /// counted as one.
+  [[nodiscard]] std::size_t count() const {
+    std::size_t nacks = 0;
+    for (const auto& message : sent_) {
+      if (payload_type(message) == 205) {
+        ++nacks;
+      }
+    }
+    return nacks;
+  }
+
+  /// The bitrate each REMB asked for, in kbps, in the order they were sent.
+  [[nodiscard]] std::vector<unsigned int> bandwidth_reports() const {
+    std::vector<unsigned int> reports;
+    for (const auto& message : sent_) {
+      if (payload_type(message) != 206) {
+        continue;
+      }
+      auto* remb = reinterpret_cast<rtc::RtcpRemb*>(message->data());
+      reports.push_back(remb->getBitrate() / 1000);
+    }
+    return reports;
+  }
+
+  /// The most recent REMB.
+  [[nodiscard]] const rtc::Message& last_report() const {
+    for (auto it = sent_.rbegin(); it != sent_.rend(); ++it) {
+      if (payload_type(*it) == 206) {
+        return **it;
+      }
+    }
+    throw std::out_of_range("no report was sent");
+  }
+
+  static std::uint8_t payload_type(const rtc::message_ptr& message) {
+    return reinterpret_cast<const rtc::RtcpHeader*>(message->data())->payloadType();
+  }
 
   [[nodiscard]] std::vector<std::uint16_t> requested(std::size_t index) const {
-    auto* nack = reinterpret_cast<rtc::RtcpNack*>(sent_.at(index)->data());
+    auto* nack = reinterpret_cast<rtc::RtcpNack*>(nack_at(index)->data());
     std::vector<std::uint16_t> numbers;
     for (unsigned int part = 0; part < nack->getSeqNoCount(); ++part) {
       for (const std::uint16_t number : nack->parts[part].getSequenceNumbers()) {
@@ -66,7 +104,7 @@ class Sink {
   /// Everything asked for across every packet sent so far.
   [[nodiscard]] std::vector<std::uint16_t> all_requested() const {
     std::vector<std::uint16_t> numbers;
-    for (std::size_t i = 0; i < sent_.size(); ++i) {
+    for (std::size_t i = 0; i < count(); ++i) {
       for (const std::uint16_t number : requested(i)) {
         numbers.push_back(number);
       }
@@ -77,22 +115,32 @@ class Sink {
   /// How many feedback entries the packet carries, as opposed to how many
   /// sequence numbers they name between them.
   [[nodiscard]] unsigned int entries(std::size_t index) const {
-    return reinterpret_cast<rtc::RtcpNack*>(sent_.at(index)->data())->getSeqNoCount();
+    return reinterpret_cast<rtc::RtcpNack*>(nack_at(index)->data())->getSeqNoCount();
   }
 
-  [[nodiscard]] const rtc::Message& message(std::size_t index) const { return *sent_.at(index); }
+  [[nodiscard]] const rtc::Message& message(std::size_t index) const { return *nack_at(index); }
 
  private:
+  [[nodiscard]] const rtc::message_ptr& nack_at(std::size_t index) const {
+    std::size_t seen = 0;
+    for (const auto& message : sent_) {
+      if (payload_type(message) == 205 && seen++ == index) {
+        return message;
+      }
+    }
+    throw std::out_of_range("no such NACK");
+  }
+
   std::vector<rtc::message_ptr> sent_;
 };
 
-void feed(NackRequester& requester, Sink& sink, std::vector<rtc::message_ptr> packets) {
+void feed(VideoFeedback& requester, Sink& sink, std::vector<rtc::message_ptr> packets) {
   rtc::message_vector messages(std::make_move_iterator(packets.begin()),
                                std::make_move_iterator(packets.end()));
   requester.incoming(messages, sink.callback());
 }
 
-void feed(NackRequester& requester, Sink& sink, std::initializer_list<std::uint16_t> numbers) {
+void feed(VideoFeedback& requester, Sink& sink, std::initializer_list<std::uint16_t> numbers) {
   std::vector<rtc::message_ptr> packets;
   for (const std::uint16_t number : numbers) {
     packets.push_back(rtp_packet(number));
@@ -100,8 +148,8 @@ void feed(NackRequester& requester, Sink& sink, std::initializer_list<std::uint1
   feed(requester, sink, std::move(packets));
 }
 
-TEST(NackRequesterTest, AStreamWithNoLossIsNeverAskedForAnything) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, AStreamWithNoLossIsNeverAskedForAnything) {
+  VideoFeedback requester;
   Sink sink;
   for (std::uint16_t number = 1; number <= 50; ++number) {
     feed(requester, sink, {number});
@@ -110,8 +158,8 @@ TEST(NackRequesterTest, AStreamWithNoLossIsNeverAskedForAnything) {
   EXPECT_EQ(requester.packets_missing(), 0U);
 }
 
-TEST(NackRequesterTest, AGapIsAskedForByNumber) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, AGapIsAskedForByNumber) {
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {1, 2, 5});
 
@@ -121,8 +169,8 @@ TEST(NackRequesterTest, AGapIsAskedForByNumber) {
   EXPECT_EQ(requester.requests_sent(), 1U);
 }
 
-TEST(NackRequesterTest, TheFeedbackPacketIsAGenericNack) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, TheFeedbackPacketIsAGenericNack) {
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {1, 3});
   ASSERT_EQ(sink.count(), 1U);
@@ -140,11 +188,11 @@ TEST(NackRequesterTest, TheFeedbackPacketIsAGenericNack) {
   EXPECT_EQ(nack->header.header.lengthInBytes(), sink.message(0).size());
 }
 
-TEST(NackRequesterTest, PacketsLostTogetherTravelInOneRequest) {
+TEST(VideoFeedbackTest, PacketsLostTogetherTravelInOneRequest) {
   // One feedback entry carries a sequence number and a mask of the sixteen
   // that follow it, which is what keeps a burst of loss from turning into a
   // burst of feedback.
-  NackRequester requester;
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {10, 20});
 
@@ -153,8 +201,8 @@ TEST(NackRequesterTest, PacketsLostTogetherTravelInOneRequest) {
   EXPECT_EQ(sink.entries(0), 1U) << "nine consecutive losses did not fit in one entry";
 }
 
-TEST(NackRequesterTest, APacketThatComesBackIsNotAskedForAgain) {
-  NackRequester requester{{.max_requests = 5, .retry_after = 1ms}};
+TEST(VideoFeedbackTest, APacketThatComesBackIsNotAskedForAgain) {
+  VideoFeedback requester{{.max_requests = 5, .retry_after = 1ms}};
   Sink sink;
   feed(requester, sink, {1, 4});
   ASSERT_EQ(sink.count(), 1U);
@@ -169,11 +217,11 @@ TEST(NackRequesterTest, APacketThatComesBackIsNotAskedForAgain) {
   EXPECT_EQ(sink.count(), 1U) << "a packet that had already arrived was asked for again";
 }
 
-TEST(NackRequesterTest, APacketIsNotAskedForForever) {
+TEST(VideoFeedbackTest, APacketIsNotAskedForForever) {
   // A packet that has not arrived after a couple of tries is one the decoder
   // has moved past, and asking again would add traffic to a link already
   // losing it.
-  NackRequester requester{{.max_requests = 2, .retry_after = 1ms}};
+  VideoFeedback requester{{.max_requests = 2, .retry_after = 1ms}};
   Sink sink;
   feed(requester, sink, {1, 3});
 
@@ -189,11 +237,11 @@ TEST(NackRequesterTest, APacketIsNotAskedForForever) {
   }
 }
 
-TEST(NackRequesterTest, AJumpTooBigToBeLossIsTreatedAsARestart) {
+TEST(VideoFeedbackTest, AJumpTooBigToBeLossIsTreatedAsARestart) {
   // A share that stops and starts again, or a handler that joined in the
   // middle. Asking for the thousands of numbers in between would be a flood of
   // requests for packets that were never sent.
-  NackRequester requester{{.max_gap = 256}};
+  VideoFeedback requester{{.max_gap = 256}};
   Sink sink;
   feed(requester, sink, {100, 5000});
 
@@ -205,8 +253,8 @@ TEST(NackRequesterTest, AJumpTooBigToBeLossIsTreatedAsARestart) {
   EXPECT_EQ(requester.packets_missing(), 2U);
 }
 
-TEST(NackRequesterTest, TheSequenceNumberWraps) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, TheSequenceNumberWraps) {
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {65534, 65535, 0, 1});
   EXPECT_EQ(sink.count(), 0U) << "an ordered stream across the wrap looked like loss";
@@ -216,8 +264,8 @@ TEST(NackRequesterTest, TheSequenceNumberWraps) {
   EXPECT_EQ(sink.requested(0), (std::vector<std::uint16_t>{2, 3}));
 }
 
-TEST(NackRequesterTest, ALossAcrossTheWrapIsAskedForByNumber) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, ALossAcrossTheWrapIsAskedForByNumber) {
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {65534, 1});
 
@@ -230,8 +278,8 @@ TEST(NackRequesterTest, ALossAcrossTheWrapIsAskedForByNumber) {
   EXPECT_EQ(sink.entries(0), 2U);
 }
 
-TEST(NackRequesterTest, ANewSourceStartsANewSequenceSpace) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, ANewSourceStartsANewSequenceSpace) {
+  VideoFeedback requester;
   Sink sink;
   feed(requester, sink, {5000});
 
@@ -244,8 +292,8 @@ TEST(NackRequesterTest, ANewSourceStartsANewSequenceSpace) {
   EXPECT_EQ(requester.packets_missing(), 0U);
 }
 
-TEST(NackRequesterTest, ReportsAndShortPacketsAreLeftAlone) {
-  NackRequester requester;
+TEST(VideoFeedbackTest, ReportsAndShortPacketsAreLeftAlone) {
+  VideoFeedback requester;
   Sink sink;
 
   std::vector<rtc::message_ptr> packets;
@@ -260,10 +308,10 @@ TEST(NackRequesterTest, ReportsAndShortPacketsAreLeftAlone) {
   EXPECT_EQ(requester.packets_missing(), 0U);
 }
 
-TEST(NackRequesterTest, TheIncomingStreamIsPassedOnUntouched) {
+TEST(VideoFeedbackTest, TheIncomingStreamIsPassedOnUntouched) {
   // The handler observes; it must not swallow or reorder what it is watching,
   // because the next handler in the chain is the one that forwards it.
-  NackRequester requester;
+  VideoFeedback requester;
   Sink sink;
 
   rtc::message_vector messages;
@@ -275,6 +323,95 @@ TEST(NackRequesterTest, TheIncomingStreamIsPassedOnUntouched) {
 
   ASSERT_EQ(messages.size(), 2U);
   EXPECT_EQ(messages.front().get(), first);
+}
+
+TEST(VideoFeedbackTest, TheSenderIsToldWhatToAimFor) {
+  VideoFeedback feedback{{.bandwidth_interval = 10ms,
+                          .bandwidth = {.start_kbps = 1500, .min_kbps = 300, .max_kbps = 3000}}};
+  Sink sink;
+
+  feed(feedback, sink, {1});
+  EXPECT_TRUE(sink.bandwidth_reports().empty())
+      << "the first packet reported on an interval that had not happened yet";
+
+  std::this_thread::sleep_for(15ms);
+  feed(feedback, sink, {2});
+
+  ASSERT_EQ(sink.bandwidth_reports().size(), 1U);
+  // A clean interval, so the target grew from where it started.
+  EXPECT_GT(sink.bandwidth_reports().front(), 1500U);
+  EXPECT_EQ(feedback.bandwidth_reports_sent(), 1U);
+  EXPECT_EQ(feedback.target_kbps(), static_cast<int>(sink.bandwidth_reports().front()));
+}
+
+TEST(VideoFeedbackTest, TheReportIsARemb) {
+  VideoFeedback feedback{{.bandwidth_interval = 10ms}};
+  Sink sink;
+  feed(feedback, sink, {1});
+  std::this_thread::sleep_for(15ms);
+  feed(feedback, sink, {2});
+
+  ASSERT_EQ(sink.bandwidth_reports().size(), 1U);
+  const auto& message = sink.last_report();
+  auto* remb = reinterpret_cast<rtc::RtcpRemb*>(const_cast<std::byte*>(message.data()));
+  // RFC 4585 payload specific feedback, with the application layer format and
+  // the four character identifier that says which application.
+  EXPECT_EQ(remb->header.header.payloadType(), 206);
+  EXPECT_EQ(remb->header.header.reportCount(), 15);
+  EXPECT_TRUE(remb->hasValidId());
+  EXPECT_EQ(remb->getSSRCCount(), 1);
+  EXPECT_EQ(remb->getSSRC(0), kSsrc);
+  EXPECT_EQ(message.type, rtc::Message::Control);
+}
+
+TEST(VideoFeedbackTest, HeavyLossMakesTheSenderBeAskedForLess) {
+  VideoFeedback feedback{{.bandwidth_interval = 10ms,
+                          .bandwidth = {.start_kbps = 3000, .min_kbps = 300, .max_kbps = 3000}}};
+  Sink sink;
+
+  // A stream where every fifth packet never arrives, fed a few intervals long.
+  std::uint16_t sequence_number = 1;
+  for (int round = 0; round < 40; ++round) {
+    feed(feedback, sink,
+         {sequence_number, static_cast<std::uint16_t>(sequence_number + 1),
+          static_cast<std::uint16_t>(sequence_number + 2),
+          static_cast<std::uint16_t>(sequence_number + 3)});
+    // The fifth is skipped, which is the loss.
+    sequence_number = static_cast<std::uint16_t>(sequence_number + 5);
+    std::this_thread::sleep_for(2ms);
+  }
+
+  const auto reports = sink.bandwidth_reports();
+  ASSERT_GE(reports.size(), 2U);
+  EXPECT_LT(reports.back(), 3000U) << "20% loss did not bring the target down";
+  EXPECT_GE(reports.back(), 300U) << "the target fell below the floor";
+}
+
+TEST(VideoFeedbackTest, TheSlowestViewerCapsTheReport) {
+  VideoFeedback feedback{{.bandwidth_interval = 10ms,
+                          .bandwidth = {.start_kbps = 3000, .min_kbps = 300, .max_kbps = 3000}}};
+  Sink sink;
+  feedback.set_bandwidth_ceiling(700);
+
+  feed(feedback, sink, {1});
+  std::this_thread::sleep_for(15ms);
+  feed(feedback, sink, {2});
+
+  ASSERT_EQ(sink.bandwidth_reports().size(), 1U);
+  EXPECT_EQ(sink.bandwidth_reports().front(), 700U);
+}
+
+TEST(VideoFeedbackTest, AStreamThatStoppedIsNotReportedOn) {
+  // incoming() only runs when a packet arrives, so a share that stops stops
+  // the feedback too. Worth pinning down: a REMB sent about an interval with
+  // no traffic would be a statement about a link nothing was using.
+  VideoFeedback feedback{{.bandwidth_interval = 10ms}};
+  Sink sink;
+  feed(feedback, sink, {1});
+  std::this_thread::sleep_for(30ms);
+
+  EXPECT_TRUE(sink.bandwidth_reports().empty());
+  EXPECT_EQ(feedback.bandwidth_reports_sent(), 0U);
 }
 
 }  // namespace

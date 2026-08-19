@@ -137,6 +137,18 @@ TEST(Config, ValidationRejectsABitrateRangeThatIsInverted) {
   EXPECT_TRUE(dv::config::validate(config).has_value());
 }
 
+TEST(Config, ValidationRejectsAFloorAboveWhereTheEncoderStarts) {
+  // The floor is what congestion control may squeeze down to, so a floor above
+  // the starting point is a range with nothing in it.
+  Config config;
+  config.video.min_bitrate_kbps = 1500;
+  config.video.floor_bitrate_kbps = 2000;
+  EXPECT_TRUE(dv::config::validate(config).has_value());
+
+  config.video.floor_bitrate_kbps = 0;
+  EXPECT_TRUE(dv::config::validate(config).has_value());
+}
+
 TEST(Config, ValidationRejectsASampleRateOpusCannotUse) {
   Config config;
   config.audio.sample_rate_hz = 44100;

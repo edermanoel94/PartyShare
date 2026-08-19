@@ -1,5 +1,6 @@
 #include "sfu/media_router.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -24,6 +25,23 @@ constexpr int kOpusClockRate = 48000;
 /// same id.
 constexpr int kAudioLevelExtensionId = 1;
 constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
+
+/// True when the RTP header says the packet carries padding.
+///
+/// Such a packet is dropped rather than forwarded, because libdatachannel's
+/// sender report builder asserts on one and takes the whole server down with
+/// it. A participant that sends padded packets therefore damages its own
+/// picture, which the retransmission path then repairs, instead of ending
+/// everybody's call.
+///
+/// This is not hypothetical. Negotiating the abs-send-time extension, which is
+/// what a viewer needs before it can report a delay based estimate, makes
+/// libwebrtc probe for bandwidth, and probing is padding. The extension is not
+/// negotiated for that reason, and this guard is here because a client we did
+/// not write can still send one.
+[[nodiscard]] bool is_padded(const rtc::binary& packet) {
+  return reinterpret_cast<const rtc::RtpHeader*>(packet.data())->padding();
+}
 
 /// H.264 RTP runs on a 90 kHz clock, which is what every video profile uses.
 constexpr int kVideoClockRate = 90000;
@@ -182,9 +200,11 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   session.video_inbound = session.connection->addTrack(video_inbound);
   auto video_receiving = std::make_shared<rtc::RtcpReceivingSession>();
   // Repairs the incoming screen share instead of letting the loss travel on to
-  // every viewer. See sfu/nack_requester.hpp.
-  session.video_nacks = std::make_shared<NackRequester>();
-  video_receiving->addToChain(session.video_nacks);
+  // every viewer, and tells the sharer how much the link can carry. See
+  // sfu/video_feedback.hpp.
+  session.video_feedback = std::make_shared<VideoFeedback>(
+      VideoFeedback::Options{.bandwidth = options_.bandwidth});
+  video_receiving->addToChain(session.video_feedback);
   session.video_inbound->setMediaHandler(video_receiving);
   session.video_inbound->onMessage(
       [this, user_id, room_id](const rtc::binary& packet) {
@@ -307,17 +327,55 @@ bool MediaRouter::has_video_tracks(const std::string& user_id) const {
          session->video_outbound.has_value();
 }
 
+void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std::string& room_id,
+                                        unsigned int bitrate_bps) {
+  const auto kbps = static_cast<int>(bitrate_bps / 1000);
+  if (kbps <= 0) {
+    return;
+  }
+  viewer_reports_received_.fetch_add(1, std::memory_order_relaxed);
+
+  int smallest = kbps;
+  {
+    const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
+    viewer_bandwidth_kbps_[viewer_id] = kbps;
+    viewer_room_[viewer_id] = room_id;
+    for (const auto& [other_id, other_kbps] : viewer_bandwidth_kbps_) {
+      const auto room = viewer_room_.find(other_id);
+      if (room == viewer_room_.end() || room->second != room_id) {
+        continue;
+      }
+      smallest = std::min(smallest, other_kbps);
+    }
+  }
+  viewer_ceiling_kbps_.store(smallest, std::memory_order_relaxed);
+
+  // Through the published table, never through `sessions_`: this runs on a
+  // libdatachannel thread that already holds the peer connection's lock.
+  const std::shared_ptr<const RoutingTable> table = routes();
+  const auto feedback = table->video_feedback_by_room.find(room_id);
+  if (feedback == table->video_feedback_by_room.end()) {
+    return;
+  }
+  for (const auto& handler : feedback->second) {
+    handler->set_bandwidth_ceiling(smallest);
+  }
+}
+
 MediaRouter::VideoRepairStats MediaRouter::video_repair_stats() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   VideoRepairStats total;
   for (const auto& [user_id, session] : sessions_) {
-    if (session.video_nacks == nullptr) {
+    if (session.video_feedback == nullptr) {
       continue;
     }
-    total.requests_sent += session.video_nacks->requests_sent();
-    total.packets_missing += session.video_nacks->packets_missing();
-    total.packets_repaired += session.video_nacks->packets_repaired();
+    total.requests_sent += session.video_feedback->requests_sent();
+    total.packets_missing += session.video_feedback->packets_missing();
+    total.packets_repaired += session.video_feedback->packets_repaired();
+    total.target_kbps = std::max(total.target_kbps, session.video_feedback->target_kbps());
   }
+  total.viewer_ceiling_kbps = viewer_ceiling_kbps_.load(std::memory_order_relaxed);
+  total.viewer_reports_received = viewer_reports_received_.load(std::memory_order_relaxed);
   return total;
 }
 
@@ -427,6 +485,15 @@ void MediaRouter::add_video_outbound_track(Session& session) {
   // while the SFU carried eight keyframe requests. Retransmission is what
   // turns that into a picture that degrades instead of freezing.
   reporter->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+
+  // What this viewer says its own link can carry. The SFU is the only party
+  // that hears all of them, and it is the sharer, not the viewer, who has to
+  // act on the slowest one.
+  const std::string viewer_id = session.user_id;
+  reporter->addToChain(
+      std::make_shared<rtc::RembHandler>([this, viewer_id, room_id](unsigned int bitrate_bps) {
+        note_viewer_bandwidth(viewer_id, room_id, bitrate_bps);
+      }));
   outbound.track->setMediaHandler(reporter);
 
   session.video_outbound = std::move(outbound);
@@ -438,7 +505,7 @@ void MediaRouter::forward_video(const std::string& from_user_id, const std::stri
   if (rtc::IsRtcp(packet)) {
     return;
   }
-  if (packet.size() < sizeof(rtc::RtpHeader)) {
+  if (packet.size() < sizeof(rtc::RtpHeader) || is_padded(packet)) {
     return;
   }
   video_packets_received_.fetch_add(1, std::memory_order_relaxed);
@@ -509,6 +576,9 @@ void MediaRouter::publish_routes() {
     if (session.video_inbound != nullptr) {
       table->video_inbound_by_room[session.room_id].push_back(session.video_inbound);
     }
+    if (session.video_feedback != nullptr) {
+      table->video_feedback_by_room[session.room_id].push_back(session.video_feedback);
+    }
   }
 
   routes_.store(std::shared_ptr<const RoutingTable>(std::move(table)));
@@ -524,7 +594,7 @@ void MediaRouter::forward_audio(const std::string& from_user_id, const std::stri
     // Handled by the track's own RTCP session, not something to forward.
     return;
   }
-  if (packet.size() < sizeof(rtc::RtpHeader)) {
+  if (packet.size() < sizeof(rtc::RtpHeader) || is_padded(packet)) {
     return;
   }
   audio_packets_received_.fetch_add(1, std::memory_order_relaxed);

@@ -13,7 +13,8 @@ add_executable(dv_unit_tests
   unit/test_reconnect_delay.cpp
   unit/test_network_quality.cpp
   unit/test_network_impairment.cpp
-  unit/test_nack_requester.cpp
+  unit/test_video_feedback.cpp
+  unit/test_bandwidth_estimator.cpp
 )
 
 target_link_libraries(dv_unit_tests PRIVATE

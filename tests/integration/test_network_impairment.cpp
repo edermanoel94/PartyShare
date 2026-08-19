@@ -206,4 +206,55 @@ TEST_F(ImpairedNetworkTest, AScreenShareKeepsArrivingUnderPacketLoss) {
   EXPECT_EQ(bruno().session().state(), CallSession::State::InCall);
 }
 
+TEST_F(ImpairedNetworkTest, TheSenderIsSlowedDownWhenTheLinkStartsLosingPackets) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  start_a_call();
+  ASSERT_TRUE(ana().session().start_screen_share("").ok());
+  ASSERT_TRUE(wait_until([&] { return bruno().remote_frames() > 0; }, 30000ms));
+
+  auto* router = server_->media_router();
+  const auto estimate = [&] { return ana().session().video_stats().available_send_bitrate_kbps; };
+
+  // A healthy link, probed upwards until it stops growing. This is already
+  // half the point: without the SFU telling it anything, the sender sits at
+  // whatever it started with.
+  ASSERT_TRUE(wait_until([&] { return estimate() > 2500; }, 40000ms))
+      << "the estimate never grew on a clean link, it sat at " << estimate() << " kbps";
+  const double healthy = estimate();
+
+  dv::client::media::set_network_impairment({.loss = 0.20});
+  // Twenty percent loss takes a tenth off the target every second, so a third
+  // off takes about four seconds. Twenty is patient without being a wait for
+  // convergence.
+  const bool fell = wait_until([&] { return estimate() < healthy * 0.66; }, 20000ms);
+  const double squeezed = estimate();
+  const int asked_for = router->video_repair_stats().target_kbps;
+
+  dv::client::media::set_network_impairment({});
+  const bool recovered = wait_until([&] { return estimate() > squeezed * 1.3; }, 20000ms);
+
+  std::printf("\n--- what the SFU asks a screen share to aim for ---\n");
+  std::printf("clean link       %.0f kbps\n", healthy);
+  std::printf("under 20%% loss   %.0f kbps, the SFU asking for %d\n", squeezed, asked_for);
+  std::printf("after recovery   %.0f kbps\n", estimate());
+  std::fflush(stdout);
+
+  EXPECT_TRUE(fell) << "the link started losing a fifth of its packets and the sender kept "
+                       "sending the same amount: "
+                    << squeezed << " kbps against " << healthy;
+  // The two numbers are the two ends of the same loop: the SFU decides, REMB
+  // carries it, and libwebrtc's congestion controller obeys. If they disagree
+  // the loop is broken somewhere in between.
+  EXPECT_NEAR(squeezed, asked_for, healthy * 0.15)
+      << "the sender is not aiming at what the SFU asked for";
+  EXPECT_GT(router->video_repair_stats().target_kbps, 0);
+
+  EXPECT_TRUE(recovered) << "the loss stopped and the sender stayed squeezed at " << estimate()
+                         << " kbps";
+  EXPECT_EQ(ana().session().state(), CallSession::State::InCall);
+}
+
 }  // namespace

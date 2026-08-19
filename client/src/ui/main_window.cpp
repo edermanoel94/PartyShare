@@ -353,13 +353,25 @@ void MainWindow::wire_session() {
           },
       .on_metrics =
           [this](client::media::AudioStats stats) {
-            const QString summary =
+            QString summary =
                 QStringLiteral("rtt %1 ms · jitter %2 ms · perdidos %3 · %4 kbps ↑ · %5 kbps ↓")
                     .arg(stats.round_trip_time_ms, 0, 'f', 0)
                     .arg(stats.jitter_ms, 0, 'f', 1)
                     .arg(stats.packets_lost)
                     .arg(stats.send_bitrate_kbps, 0, 'f', 0)
                     .arg(stats.receive_bitrate_kbps, 0, 'f', 0);
+
+            // The screen share is the part of the call that gives way when the
+            // network does, so while there is one its rate is worth seeing:
+            // a picture that went soft and a number that fell are the same
+            // event, and only one of them is legible.
+            const client::media::VideoStats video = session_.video_stats();
+            if (video.frames_sent > 0) {
+              summary += QStringLiteral(" · tela %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
+            } else if (video.frames_received > 0) {
+              summary += QStringLiteral(" · tela %1 kbps ↓")
+                             .arg(video.receive_bitrate_kbps, 0, 'f', 0);
+            }
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary),
                                       Q_ARG(int, static_cast<int>(client::app::quality_of(stats))));

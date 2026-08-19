@@ -1,6 +1,6 @@
 # SPEC.md
 
-# Desktop Screen Sharing & Voice App
+# PartyShare - compartilhamento de tela e voz no desktop
 
 ## 1. Objetivo
 

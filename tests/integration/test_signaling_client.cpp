@@ -170,7 +170,7 @@ TEST_F(SignalingClientTest, ConnectsAndAuthenticates) {
   EXPECT_EQ(user.display_name, "Ana");
 }
 
-TEST_F(SignalingClientTest, ReportsAServerThatIsNotThere) {
+TEST_F(SignalingClientTest, ReportsAServerThatIsNotThereAndKeepsTrying) {
   // Port 1 is reserved and nothing listens there, so this is a refused
   // connection rather than a timeout.
   //
@@ -178,11 +178,86 @@ TEST_F(SignalingClientTest, ReportsAServerThatIsNotThere) {
   // client reports the failure from a libdatachannel thread, which can still be
   // running when this scope ends.
   Recorder& recorder = new_recorder();
-  SignalingClient client(SignalingClient::Options{"ws://127.0.0.1:1"});
+  SignalingClient::Options options;
+  options.url = "ws://127.0.0.1:1";
+  options.reconnect_initial_delay = 50ms;
+  SignalingClient client(options);
+  recorder.attach(client);
+
+  ASSERT_TRUE(client.connect().ok());
+
+  // Reconnecting rather than Failed: a server that is not there right now may
+  // be there in a moment, and the client is expected to be waiting when it is.
+  EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Reconnecting, kTimeout));
+}
+
+TEST_F(SignalingClientTest, GivesUpAfterTheAllowedNumberOfAttempts) {
+  Recorder& recorder = new_recorder();
+  SignalingClient::Options options;
+  options.url = "ws://127.0.0.1:1";
+  options.reconnect_initial_delay = 20ms;
+  options.max_reconnect_attempts = 2;
+  SignalingClient client(options);
+  recorder.attach(client);
+
+  ASSERT_TRUE(client.connect().ok());
+
+  // A client that retries forever against a URL that will never answer is a
+  // client that never tells anyone anything is wrong.
+  EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Failed, kTimeout));
+}
+
+TEST_F(SignalingClientTest, WithReconnectionOffAFailureIsFinal) {
+  Recorder& recorder = new_recorder();
+  SignalingClient::Options options;
+  options.url = "ws://127.0.0.1:1";
+  options.auto_reconnect = false;
+  SignalingClient client(options);
   recorder.attach(client);
 
   ASSERT_TRUE(client.connect().ok());
   EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Failed, kTimeout));
+}
+
+TEST_F(SignalingClientTest, ItComesBackWhenTheServerDoes) {
+  // The case this whole mechanism exists for: the server restarts and the
+  // client is expected to be there afterwards without anyone touching it.
+  Recorder& recorder = new_recorder();
+  SignalingClient::Options options;
+  options.url = "ws://127.0.0.1:" + std::to_string(server_->port());
+  options.reconnect_initial_delay = 50ms;
+  SignalingClient client(options);
+  recorder.attach(client);
+
+  ASSERT_TRUE(client.connect().ok());
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
+
+  const std::uint16_t port = server_->port();
+  server_->stop();
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Reconnecting, kTimeout));
+
+  // Back on the same port, which is what a restart looks like from here.
+  dv::server::SignalingServer::Options server_options;
+  server_options.bind_address = "127.0.0.1";
+  server_options.port = port;
+  server_options.enable_sfu = false;
+  auto restarted = std::make_unique<dv::server::SignalingServer>(server_options);
+  ASSERT_TRUE(restarted->add_user("ana", "senha", "Ana").ok());
+  restarted->start();
+
+  // Waited on the counter rather than on the state: the recorder only knows
+  // whether a state was ever seen, and Connected was seen before the server
+  // went away.
+  const auto deadline = std::chrono::steady_clock::now() + 30000ms;
+  while (client.reconnects() == 0 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(50ms);
+  }
+
+  EXPECT_GE(client.reconnects(), 1U) << "the client never came back after the server did";
+  EXPECT_TRUE(client.is_connected());
+
+  client.disconnect();
+  restarted->stop();
 }
 
 TEST_F(SignalingClientTest, CreatesAndJoinsARoom) {

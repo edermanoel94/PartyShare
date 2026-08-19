@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -136,6 +137,11 @@ class CallSession {
   /// The monitors this machine can share.
   [[nodiscard]] Result<std::vector<video::Monitor>> monitors() const;
 
+  /// The bitrate range the screen encoder may use, in kbps. Remembered, so a
+  /// choice made before a call survives into it.
+  [[nodiscard]] Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps);
+  [[nodiscard]] std::pair<int, int> video_bitrate() const;
+
   /// Playback volume for one participant, from 0 to 1, with up to 10 allowed
   /// as amplification. Remembered and reapplied if their audio arrives later.
   [[nodiscard]] Result<std::monostate> set_participant_volume(const std::string& user_id,
@@ -196,6 +202,8 @@ class CallSession {
   /// `authenticate` on a connection that exists.
   std::string pending_username_;
   std::string pending_password_;
+  /// The name to rejoin under after a reconnection.
+  std::string display_name_;
 
   Callbacks callbacks_;
   std::function<void(std::string)> room_created_handler_;

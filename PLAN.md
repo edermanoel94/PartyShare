@@ -384,19 +384,48 @@ Objetivo: a UI da seção 19, agora sobre um core já funcional.
 
 Tarefas:
 
-1. Tela de login.
-2. Tela inicial com criar sala e entrar em sala.
-3. Tela da sala: área de compartilhamento, lista de participantes com estado de áudio, barra de controles com mute, compartilhar tela e sair.
-4. Diálogo de configurações: dispositivo de entrada, dispositivo de saída, monitor, bitrate.
-5. Indicador de estado da conexão e de qualidade da rede.
-6. Tratamento visual de erros: servidor fora do ar, sala cheia, sala inexistente, permissão de captura negada.
-7. Reconexão automática ao signaling com backoff exponencial.
+1. [x] Tela de login.
+2. [x] Tela inicial com criar sala e entrar em sala.
+3. [x] Tela da sala: área de compartilhamento, lista de participantes com estado de áudio, barra de controles com mute, compartilhar tela e sair.
+4. [x] Diálogo de configurações: dispositivo de entrada, dispositivo de saída, monitor, bitrate.
+5. [x] Indicador de estado da conexão e de qualidade da rede.
+6. [x] Tratamento visual de erros: servidor fora do ar, sala cheia, sala inexistente, permissão de captura negada.
+7. [x] Reconexão automática ao signaling com backoff exponencial.
 
 Critérios de aceitação:
 
-- Todos os fluxos da seção 19 são navegáveis sem passar pelo terminal.
+- [x] Todos os fluxos da seção 19 são navegáveis sem passar pelo terminal.
+  Login, criar sala, entrar, mutar, compartilhar, configurar e sair, verificados na aplicação real.
 - Nenhuma operação bloqueante roda na thread de UI, verificado com profiler.
+  A regra é respeitada por construção, e o perfil ainda não foi levantado. Ver abaixo.
 - O startup fica abaixo de 3 segundos.
+  Não medido.
+
+### Deadlock no SFU, encontrado aqui e corrigido
+
+A suíte de mídia travava até o limite de 180 s do ctest, em um caso diferente a cada execução, mais ou menos uma vez a cada três ou quatro rodadas.
+Foi o mesmo travamento registrado no M5 como não reproduzido.
+
+Não era o teste. Era um deadlock no servidor, entre um lock nosso e um lock interno da libdatachannel, tomados em ordens opostas por duas threads:
+
+```text
+on_participant_joined  ->  toma MediaRouter::mutex_, chama addTrack, espera o lock da PeerConnection
+forward_audio          ->  chega segurando o lock da PeerConnection, espera MediaRouter::mutex_
+```
+
+Basta um pacote RTP chegar no instante em que alguém entra na sala, e o servidor inteiro para.
+Cinco participantes falando tornam essa janela comum, não rara.
+
+A correção é uma tabela de rotas imutável: montada sob o `mutex_` e publicada inteira, lida por ponteiro atômico no caminho de encaminhamento.
+Assim nenhum callback da libdatachannel toma lock nosso, o ciclo não existe, e de quebra o caminho quente deixa de disputar um mutex global a cada pacote.
+
+Oito execuções seguidas da suíte completa passaram depois disso.
+
+### Sobre a thread de UI
+
+O critério pede um profiler, e o que existe hoje é a garantia estrutural: todo callback do core chega por `QMetaObject::invokeMethod` com `Qt::QueuedConnection`, e o `ScreenView` guarda um frame pendente por vez em vez de despejar trinta por segundo no event loop.
+Duas coisas ainda rodam na thread de UI e são chamadas do usuário, não do core: abrir o diálogo de configurações enumera dispositivos e monitores, e `start_screen_share` espera a captura começar.
+Nenhuma delas acontece durante uma chamada em andamento sem alguém ter clicado, mas ambas merecem medição antes de o critério ser marcado.
 
 ---
 
@@ -494,6 +523,9 @@ Signaling, SFU, mídia do cliente, métricas e UI provisória existem, são test
 O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
+
+O M7 está entregue nas sete tarefas: três telas, diálogo de configurações, indicador de rede, erros em português e reconexão automática.
+Faltam as duas medições dos critérios, o perfil da thread de UI e o tempo de startup.
 
 O M6 está entregue nas nove tarefas.
 Captura, fila, escala, limite de taxa, H.264, encaminhamento no SFU com PLI, renderização em Qt e os controles funcionam, verificados por teste e na aplicação real com dois clientes.

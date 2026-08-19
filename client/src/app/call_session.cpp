@@ -114,6 +114,9 @@ Result<std::monostate> CallSession::join(const std::string& room_id,
     const std::lock_guard<std::mutex> lock(mutex_);
     user_id = local_user_.id;
     room_id_ = room_id;
+    // Kept so that a reconnection can walk back into the same room without
+    // asking the interface to do it again.
+    display_name_ = display_name;
   }
   if (user_id.empty()) {
     return Result<std::monostate>::failure("unauthorized", "authenticate before joining a room");
@@ -255,6 +258,33 @@ Result<std::vector<video::Monitor>> CallSession::monitors() const {
   return video::monitors();
 }
 
+Result<std::monostate> CallSession::set_video_bitrate(int min_kbps, int max_kbps) {
+  if (min_kbps <= 0 || max_kbps < min_kbps) {
+    return Result<std::monostate>::failure(
+        "invalid_value",
+        "the bitrate range has to be positive and the maximum at least the minimum");
+  }
+
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.audio.video_min_bitrate_kbps = min_kbps;
+    options_.audio.video_max_bitrate_kbps = max_kbps;
+    session = audio_;
+  }
+  if (session) {
+    return session->set_video_bitrate(min_kbps, max_kbps);
+  }
+  // Chosen before there was a session to tell. It is kept in the options and
+  // applied when one is created.
+  return std::monostate{};
+}
+
+std::pair<int, int> CallSession::video_bitrate() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return {options_.audio.video_min_bitrate_kbps, options_.audio.video_max_bitrate_kbps};
+}
+
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
   std::shared_ptr<media::MediaSession> session;
@@ -366,6 +396,12 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
     case SignalingClient::State::Failed:
       set_state(State::Failed, detail);
       break;
+    case SignalingClient::State::Reconnecting:
+      // Not Failed: the connection is coming back on its own, and the
+      // interface has something different to say while it does. The room and
+      // the identity are kept, and walked back into once the socket is up.
+      set_state(State::Connecting, detail);
+      break;
     case SignalingClient::State::Disconnected:
     case SignalingClient::State::Connecting:
       break;
@@ -374,14 +410,36 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
 
 void CallSession::handle_signal(protocol::Message message) {
   if (const auto* authenticated = std::get_if<protocol::Authenticated>(&message)) {
+    std::string rejoin_room;
+    std::string rejoin_name;
+    std::string user_id;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       local_user_ = authenticated->user;
-      // The password is not needed again, and there is no reason to keep it
-      // in memory for the rest of the call.
-      pending_password_.clear();
+      user_id = authenticated->user.id;
+      // The password stays. It is the only credential the protocol has, and
+      // reconnecting after the server restarts means authenticating again
+      // without asking the user to type it a second time. A resume token
+      // would let this be dropped, and that belongs with the rest of the
+      // authentication work in M8.
+      rejoin_room = room_id_;
+      rejoin_name = display_name_;
+      // Whoever was in the room is about to be announced again from scratch.
+      participants_.clear();
+      screen_sharer_.clear();
     }
     set_state(State::Authenticated, authenticated->user.id);
+
+    // Authenticating with a room already set means this is a reconnection.
+    // Walking back in is what makes a server restart look like a pause rather
+    // than the end of the call.
+    if (!rejoin_room.empty()) {
+      DV_LOG_INFO("Call session: rejoining room {} after reconnecting", rejoin_room);
+      if (auto sent = signaling_.send(protocol::JoinRoom{rejoin_room, user_id, rejoin_name});
+          !sent) {
+        report(sent.error());
+      }
+    }
     return;
   }
 

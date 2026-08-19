@@ -10,6 +10,8 @@ add_executable(dv_unit_tests
   unit/test_authenticator.cpp
   unit/test_hub.cpp
   unit/test_video_pipeline.cpp
+  unit/test_reconnect_delay.cpp
+  unit/test_network_quality.cpp
 )
 
 target_link_libraries(dv_unit_tests PRIVATE

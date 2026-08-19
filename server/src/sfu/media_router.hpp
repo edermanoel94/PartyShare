@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -120,6 +121,32 @@ class MediaRouter : public MediaSignals {
     int payload_type = 0;
   };
 
+  /// Where one participant's media has to go, and what to rewrite it to.
+  struct Route {
+    std::string room_id;
+    std::vector<Outbound> audio;
+    std::vector<Outbound> video;
+  };
+
+  /// Everything the forwarding path needs, by source participant, plus the
+  /// inbound video tracks by room for keyframe requests.
+  ///
+  /// This exists so that forwarding takes no lock at all.
+  ///
+  /// libdatachannel delivers media on its own thread while holding an internal
+  /// lock on the peer connection, and it takes that same lock from addTrack.
+  /// A router that took its own mutex on the forwarding path would therefore
+  /// have two threads acquiring two locks in opposite orders: one arriving
+  /// through a join and one through an RTP packet. That deadlocks the whole
+  /// server, and needs no more than a packet landing while somebody joins.
+  ///
+  /// So the table is built under `mutex_` and published as a whole. Readers
+  /// take a copy of the pointer and walk a structure nobody will modify.
+  struct RoutingTable {
+    std::unordered_map<std::string, Route> by_source;
+    std::unordered_map<std::string, std::vector<std::shared_ptr<rtc::Track>>> video_inbound_by_room;
+  };
+
   struct Session {
     std::string user_id;
     std::string room_id;
@@ -165,6 +192,15 @@ class MediaRouter : public MediaSignals {
   /// called with `mutex_` held.
   void negotiate(Session& session);
 
+  /// Rebuilds the routing table from the sessions. Must be called with
+  /// `mutex_` held, after any change to who is in a room or which tracks they
+  /// have.
+  void publish_routes();
+
+  /// The current table. Takes no lock: the pointer is read atomically and what
+  /// it points at is never modified.
+  [[nodiscard]] std::shared_ptr<const RoutingTable> routes() const;
+
   void forward_audio(const std::string& from_user_id, const std::string& room_id,
                      rtc::binary packet);
 
@@ -192,6 +228,9 @@ class MediaRouter : public MediaSignals {
   mutable std::mutex mutex_;
   std::unordered_map<std::string, Session> sessions_;  // by user id
   std::uint32_t next_ssrc_ = 1;
+
+  /// Replaced wholesale under `mutex_`, read without it. See RoutingTable.
+  std::atomic<std::shared_ptr<const RoutingTable>> routes_{std::make_shared<const RoutingTable>()};
 
   /// Guards the queue and the handler. Never held while a task runs.
   std::mutex worker_mutex_;

@@ -5,6 +5,8 @@
 
 #include <rtc/rtc.hpp>
 
+#include <algorithm>
+
 #include <dv/logging/logger.hpp>
 
 namespace dv::client {
@@ -31,14 +33,41 @@ std::string_view to_string(SignalingClient::State state) noexcept {
       return "connected";
     case SignalingClient::State::Failed:
       return "failed";
+    case SignalingClient::State::Reconnecting:
+      return "reconnecting";
   }
   return "unknown";
+}
+
+std::chrono::milliseconds reconnect_delay(int attempt, const SignalingClient::Options& options) {
+  if (attempt <= 1) {
+    return options.reconnect_initial_delay;
+  }
+
+  // Doubling, in integers, and stopping at the ceiling before it can overflow.
+  auto delay = options.reconnect_initial_delay;
+  for (int i = 1; i < attempt; ++i) {
+    if (delay >= options.reconnect_max_delay / 2) {
+      return options.reconnect_max_delay;
+    }
+    delay *= 2;
+  }
+  return std::min(delay, options.reconnect_max_delay);
 }
 
 SignalingClient::SignalingClient(Options options) : options_(std::move(options)) {}
 
 SignalingClient::~SignalingClient() {
   disconnect();
+
+  {
+    const std::lock_guard<std::mutex> lock(retry_mutex_);
+    stopping_ = true;
+  }
+  retry_changed_.notify_all();
+  if (retry_thread_.joinable()) {
+    retry_thread_.join();
+  }
 
   // disconnect() has already detached the socket callbacks, so nothing can be
   // in flight into this object any more. Clearing the handlers is what makes
@@ -67,33 +96,56 @@ Result<std::monostate> SignalingClient::connect() {
         "invalid_value", "the signaling URL must start with ws:// or wss://: " + options_.url);
   }
 
-  std::shared_ptr<rtc::WebSocket> socket;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (socket_) {
       return Result<std::monostate>::failure("already_connected",
                                              "disconnect() before connecting again");
     }
-    socket = std::make_shared<rtc::WebSocket>();
+  }
+
+  {
+    const std::lock_guard<std::mutex> lock(retry_mutex_);
+    wanted_ = true;
+    attempts_ = 0;
+    if (options_.auto_reconnect && !retry_thread_.joinable()) {
+      retry_thread_ = std::thread([this] { reconnect_loop(); });
+    }
+  }
+
+  return open_socket();
+}
+
+Result<std::monostate> SignalingClient::open_socket() {
+  auto socket = std::make_shared<rtc::WebSocket>();
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
     socket_ = socket;
   }
 
+  // Outside the lock, because publishing a state runs the interface's handler
+  // and that handler is free to call back into this client.
   set_state(State::Connecting, options_.url);
 
   // The callbacks outlive this call and run on libdatachannel's threads.
   // Capturing `this` is safe because the destructor closes the socket and
   // clears the handlers before any member goes away.
-  socket->onOpen([this] { set_state(State::Connected, options_.url); });
-
-  socket->onClosed([this] {
-    // A close after `disconnect()` is the expected end of the session, not a
-    // failure, and disconnect() has already published Disconnected.
-    if (state_.load() != State::Disconnected) {
-      set_state(State::Failed, "the connection was closed by the peer");
+  socket->onOpen([this] {
+    {
+      const std::lock_guard<std::mutex> lock(retry_mutex_);
+      if (attempts_ > 0) {
+        reconnects_.fetch_add(1);
+      }
+      // The next drop starts counting from zero again. A connection that
+      // lasted is evidence that the trouble is over.
+      attempts_ = 0;
     }
+    set_state(State::Connected, options_.url);
   });
 
-  socket->onError([this](const std::string& error) { set_state(State::Failed, error); });
+  socket->onClosed([this] { handle_drop("the connection was closed by the peer"); });
+
+  socket->onError([this](const std::string& error) { handle_drop(error); });
 
   socket->onMessage([this](rtc::message_variant data) {
     if (!std::holds_alternative<std::string>(data)) {
@@ -107,13 +159,88 @@ Result<std::monostate> SignalingClient::connect() {
   return std::monostate{};
 }
 
+void SignalingClient::handle_drop(const std::string& detail) {
+  // A close after `disconnect()` is the expected end of the session, not a
+  // failure, and disconnect() has already published Disconnected.
+  if (state_.load() == State::Disconnected) {
+    return;
+  }
+
+  bool retry = false;
+  std::chrono::milliseconds wait{0};
+  {
+    const std::lock_guard<std::mutex> lock(retry_mutex_);
+    if (wanted_ && options_.auto_reconnect &&
+        (options_.max_reconnect_attempts <= 0 || attempts_ < options_.max_reconnect_attempts)) {
+      ++attempts_;
+      wait = reconnect_delay(attempts_, options_);
+      retry_at_ = std::chrono::steady_clock::now() + wait;
+      retry = true;
+    }
+  }
+
+  if (!retry) {
+    set_state(State::Failed, detail);
+    return;
+  }
+
+  set_state(State::Reconnecting,
+            detail + ", retrying in " + std::to_string(wait.count()) + " ms");
+  retry_changed_.notify_all();
+}
+
+void SignalingClient::reconnect_loop() {
+  std::unique_lock<std::mutex> lock(retry_mutex_);
+  while (!stopping_) {
+    if (retry_at_ == std::chrono::steady_clock::time_point{}) {
+      retry_changed_.wait(lock);
+      continue;
+    }
+
+    const auto due = retry_at_;
+    if (retry_changed_.wait_until(lock, due) != std::cv_status::timeout) {
+      // Woken early: either the schedule changed or we are shutting down.
+      continue;
+    }
+    if (stopping_ || !wanted_ || retry_at_ != due) {
+      continue;
+    }
+    retry_at_ = {};
+
+    lock.unlock();
+    {
+      // The old socket is dropped first. libdatachannel will not reuse one
+      // that has closed, and holding it would leak a thread per attempt.
+      std::shared_ptr<rtc::WebSocket> old;
+      {
+        const std::lock_guard<std::mutex> socket_lock(mutex_);
+        old.swap(socket_);
+      }
+      if (old) {
+        old->resetCallbacks();
+      }
+      (void)open_socket();
+    }
+    lock.lock();
+  }
+}
+
 void SignalingClient::disconnect() {
+  {
+    // Asked for, so no drop after this counts as something to recover from.
+    const std::lock_guard<std::mutex> lock(retry_mutex_);
+    wanted_ = false;
+    retry_at_ = {};
+  }
+  retry_changed_.notify_all();
+
   std::shared_ptr<rtc::WebSocket> socket;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     socket.swap(socket_);
   }
   if (!socket) {
+    set_state(State::Disconnected, "closed by the client");
     return;
   }
 

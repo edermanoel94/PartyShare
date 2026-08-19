@@ -188,6 +188,7 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
     negotiate(other);
   }
 
+  publish_routes();
   negotiate(created);
   DV_LOG_INFO("SFU: session for {} in room {} ({} sessions)", user.id, room_id, sessions_.size());
 }
@@ -218,6 +219,8 @@ void MediaRouter::on_participant_left(const std::string& room_id, const std::str
       other.outbound.erase(outbound);
       negotiate(other);
     }
+
+    publish_routes();
   }
 
   // Closed outside the lock: it waits for the callbacks, which take the lock.
@@ -390,49 +393,79 @@ void MediaRouter::forward_video(const std::string& from_user_id, const std::stri
   }
   video_packets_received_.fetch_add(1, std::memory_order_relaxed);
 
-  const std::lock_guard<std::mutex> lock(mutex_);
+  const std::shared_ptr<const RoutingTable> table = routes();
+  const auto route = table->by_source.find(from_user_id);
+  if (route == table->by_source.end() || route->second.room_id != room_id) {
+    return;
+  }
 
-  for (auto& [user_id, session] : sessions_) {
-    if (user_id == from_user_id || session.room_id != room_id) {
-      continue;
-    }
-    if (!session.video_outbound.has_value() || !session.video_outbound->track->isOpen()) {
+  for (const Outbound& destination : route->second.video) {
+    if (!destination.track->isOpen()) {
       continue;
     }
 
     rtc::binary copy = packet;
     auto* header = reinterpret_cast<rtc::RtpHeader*>(copy.data());
-    header->setSsrc(session.video_outbound->ssrc);
-    header->setPayloadType(static_cast<std::uint8_t>(session.video_outbound->payload_type));
+    header->setSsrc(destination.ssrc);
+    header->setPayloadType(static_cast<std::uint8_t>(destination.payload_type));
 
-    session.video_outbound->track->send(std::move(copy));
+    destination.track->send(std::move(copy));
     video_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
 void MediaRouter::request_keyframe_from_sharer(const std::string& room_id) {
-  // Collected under the lock and asked for outside it: requestKeyframe sends,
-  // and sending under our own mutex is how a deadlock starts.
-  std::vector<std::shared_ptr<rtc::Track>> ask;
-  {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& [user_id, session] : sessions_) {
-      if (session.room_id == room_id && session.video_inbound != nullptr &&
-          session.video_inbound->isOpen()) {
-        ask.push_back(session.video_inbound);
-      }
-    }
+  // Read from the routing table rather than from the sessions, for the same
+  // reason forwarding is: this arrives on a libdatachannel thread that is
+  // already holding a lock of its own.
+  const std::shared_ptr<const RoutingTable> table = routes();
+  const auto tracks = table->video_inbound_by_room.find(room_id);
+  if (tracks == table->video_inbound_by_room.end()) {
+    return;
   }
 
   // Asked of everyone in the room rather than of the sharer alone. The router
   // does not track who is sharing, and does not need to: a participant who is
   // not sending video has nothing to produce an intra frame from, so the
   // request costs them one ignored RTCP packet.
-  for (const auto& track : ask) {
-    if (track->requestKeyframe()) {
+  for (const auto& track : tracks->second) {
+    if (track->isOpen() && track->requestKeyframe()) {
       keyframe_requests_forwarded_.fetch_add(1, std::memory_order_relaxed);
     }
   }
+}
+
+void MediaRouter::publish_routes() {
+  auto table = std::make_shared<RoutingTable>();
+
+  for (const auto& [user_id, session] : sessions_) {
+    Route route;
+    route.room_id = session.room_id;
+
+    for (const auto& [other_id, other] : sessions_) {
+      if (other_id == user_id || other.room_id != session.room_id) {
+        continue;
+      }
+      if (const auto outbound = other.outbound.find(user_id); outbound != other.outbound.end()) {
+        route.audio.push_back(outbound->second);
+      }
+      if (other.video_outbound.has_value()) {
+        route.video.push_back(*other.video_outbound);
+      }
+    }
+
+    table->by_source.emplace(user_id, std::move(route));
+
+    if (session.video_inbound != nullptr) {
+      table->video_inbound_by_room[session.room_id].push_back(session.video_inbound);
+    }
+  }
+
+  routes_.store(std::shared_ptr<const RoutingTable>(std::move(table)));
+}
+
+std::shared_ptr<const MediaRouter::RoutingTable> MediaRouter::routes() const {
+  return routes_.load();
 }
 
 void MediaRouter::forward_audio(const std::string& from_user_id, const std::string& room_id,
@@ -446,14 +479,17 @@ void MediaRouter::forward_audio(const std::string& from_user_id, const std::stri
   }
   audio_packets_received_.fetch_add(1, std::memory_order_relaxed);
 
-  const std::lock_guard<std::mutex> lock(mutex_);
+  // No lock here, on purpose. See RoutingTable: this runs on a libdatachannel
+  // thread that already holds a lock inside the peer connection, and taking
+  // ours as well would deadlock against a join.
+  const std::shared_ptr<const RoutingTable> table = routes();
+  const auto route = table->by_source.find(from_user_id);
+  if (route == table->by_source.end() || route->second.room_id != room_id) {
+    return;
+  }
 
-  for (auto& [user_id, session] : sessions_) {
-    if (user_id == from_user_id || session.room_id != room_id) {
-      continue;
-    }
-    const auto it = session.outbound.find(from_user_id);
-    if (it == session.outbound.end() || !it->second.track->isOpen()) {
+  for (const Outbound& destination : route->second.audio) {
+    if (!destination.track->isOpen()) {
       continue;
     }
 
@@ -461,10 +497,10 @@ void MediaRouter::forward_audio(const std::string& from_user_id, const std::stri
     // keeps the receiver from seeing several participants as one stream.
     rtc::binary copy = packet;
     auto* header = reinterpret_cast<rtc::RtpHeader*>(copy.data());
-    header->setSsrc(it->second.ssrc);
-    header->setPayloadType(static_cast<std::uint8_t>(it->second.payload_type));
+    header->setSsrc(destination.ssrc);
+    header->setPayloadType(static_cast<std::uint8_t>(destination.payload_type));
 
-    it->second.track->send(std::move(copy));
+    destination.track->send(std::move(copy));
     audio_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
   }
 }

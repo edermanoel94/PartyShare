@@ -128,6 +128,15 @@ Pedidos de keyframe atravessam o SFU. Um espectador que precisa de um quadro int
 
 Um servidor sem roteamento de mídia responde `media_unavailable` a qualquer mensagem endereçada a `sfu`.
 
+### 4.3.1 Reconexão
+
+O cliente reconecta sozinho quando a conexão cai, com o intervalo dobrando a cada tentativa até um teto.
+Só um pedido explícito de desconexão encerra isso.
+
+Reconectar é começar do zero do ponto de vista do protocolo: uma conexão nova, um `authenticate` novo e um `join_room` novo, na mesma sala.
+Não existe retomada de sessão, e a identidade do usuário é reemitida pelo servidor como em qualquer outro login.
+Quem já estava na sala vê o participante sair e entrar de novo.
+
 ### 4.4 Mudanças de estado
 
 | Tipo | Campos obrigatórios |

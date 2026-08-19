@@ -62,6 +62,8 @@ struct FakeMediaState {
   /// Set to make start_screen_share fail, the way a refused permission does.
   std::string share_failure;
   std::atomic<int> share_starts{0};
+  int video_min_kbps = 0;
+  int video_max_kbps = 0;
   std::atomic<int> share_stops{0};
 
   [[nodiscard]] double volume_of(const std::string& user_id) {
@@ -170,6 +172,16 @@ class FakeMediaSession : public media::MediaSession {
   }
 
   [[nodiscard]] bool sharing_screen() const override { return state_->sharing.load(); }
+
+  dv::Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
+    if (min_kbps <= 0 || max_kbps < min_kbps) {
+      return dv::Result<std::monostate>::failure("invalid_value", "bad bitrate range");
+    }
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->video_min_kbps = min_kbps;
+    state_->video_max_kbps = max_kbps;
+    return std::monostate{};
+  }
 
   [[nodiscard]] media::VideoStats video_stats() const override {
     media::VideoStats stats;

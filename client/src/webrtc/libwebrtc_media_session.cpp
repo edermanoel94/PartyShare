@@ -706,6 +706,18 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   [[nodiscard]] bool sharing_screen() const override { return sharing_.load(); }
 
+  Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
+    if (min_kbps <= 0 || max_kbps < min_kbps) {
+      return Result<std::monostate>::failure(
+          "invalid_value", "the bitrate range has to be positive and the maximum at least the "
+                           "minimum");
+    }
+    options_.video_min_bitrate_kbps = min_kbps;
+    options_.video_max_bitrate_kbps = max_kbps;
+    apply_video_bitrate();
+    return std::monostate{};
+  }
+
   [[nodiscard]] VideoStats video_stats() const override {
     const std::lock_guard<std::mutex> lock(video_mutex_);
     VideoStats copy = video_stats_;

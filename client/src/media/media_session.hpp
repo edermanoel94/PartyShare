@@ -214,6 +214,13 @@ class MediaSession {
 
   [[nodiscard]] virtual bool sharing_screen() const = 0;
 
+  /// The range the screen encoder may use, in kbps. Section 6 of SPEC.md puts
+  /// it between 1.5 and 3 Mbps by default, and makes it configurable.
+  ///
+  /// Takes effect immediately, without renegotiating: it is a property of the
+  /// sender, not of the session.
+  [[nodiscard]] virtual Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) = 0;
+
   /// The last stats snapshot. Collection is asynchronous, so this returns what
   /// was gathered most recently rather than blocking for a fresh reading.
   [[nodiscard]] virtual AudioStats stats() const = 0;

@@ -1,35 +1,39 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 
 #include <QHash>
 #include <QMainWindow>
 #include <QString>
 
 #include "app/call_session.hpp"
+#include "app/network_quality.hpp"
 
-class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class QStackedWidget;
 
 namespace dv::ui {
 
 class ScreenView;
 
-/// The provisional interface of M4: log in, create or join a room, mute.
+/// The interface of section 19 of SPEC.md: three screens and a settings
+/// dialog, over the core built in M2 to M6.
 ///
-/// Section 19 of SPEC.md describes the real one, which is M7. What matters
-/// here is the wiring, not the looks: this window drives client::app::CallSession and
-/// never touches signaling, media or capture itself.
+/// Login, then the home screen with create and join, then the room. They are
+/// pages of one stack rather than separate windows, because a call is one
+/// continuous thing and a window that disappears and reappears loses its place
+/// on the desktop every time.
 ///
-/// The session reports from networking and media threads. Every one of those
-/// reports is turned into a queued invocation before a widget is touched,
-/// because Qt widgets may only be used from the thread that owns them.
+/// This window drives client::app::CallSession and never touches signaling,
+/// media or capture itself. The session reports from networking and media
+/// threads, and every one of those reports is turned into a queued invocation
+/// before a widget is touched, because Qt widgets may only be used from the
+/// thread that owns them.
 class MainWindow : public QMainWindow {
   Q_OBJECT
 
@@ -43,50 +47,61 @@ class MainWindow : public QMainWindow {
   void on_join_room();
   void on_leave_room();
   void on_toggle_mute();
-  void on_input_device_changed(int index);
-  void on_output_device_changed(int index);
+  void on_toggle_share();
+  void on_open_settings();
   void on_participant_selected();
   void on_volume_changed(int value);
-  void on_toggle_share();
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
   void apply_participants(const QStringList& names);
-  void apply_metrics(const QString& summary);
+  void apply_metrics(const QString& summary, int quality);
   void apply_local_level(double level, bool speaking);
   void apply_error(const QString& code, const QString& message);
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
 
  private:
-  void build_widgets();
+  void build_login_page();
+  void build_home_page();
+  void build_room_page();
   void wire_session();
   void refresh_controls();
-  void load_devices();
-  void load_monitors();
   void update_volume_label(const QString& participant, int volume);
+  void show_page();
 
   client::app::CallSession& session_;
 
+  QStackedWidget* pages_ = nullptr;
+
+  // Login.
   QLineEdit* username_ = nullptr;
   QLineEdit* password_ = nullptr;
-  QLineEdit* room_id_ = nullptr;
   QPushButton* connect_button_ = nullptr;
+  QLabel* login_error_ = nullptr;
+
+  // Home.
+  QLabel* welcome_ = nullptr;
+  QLineEdit* room_id_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
-  QPushButton* leave_button_ = nullptr;
-  QPushButton* mute_button_ = nullptr;
-  QListWidget* participants_ = nullptr;
-  QComboBox* input_device_ = nullptr;
-  QComboBox* output_device_ = nullptr;
-  QProgressBar* microphone_level_ = nullptr;
-  QComboBox* monitor_ = nullptr;
-  QPushButton* share_button_ = nullptr;
-  QLabel* sharing_label_ = nullptr;
+
+  // Room.
+  QLabel* room_title_ = nullptr;
   ScreenView* screen_view_ = nullptr;
+  QListWidget* participants_ = nullptr;
+  QProgressBar* microphone_level_ = nullptr;
   QSlider* volume_ = nullptr;
   QLabel* volume_label_ = nullptr;
+  QPushButton* mute_button_ = nullptr;
+  QPushButton* share_button_ = nullptr;
+  QPushButton* settings_button_ = nullptr;
+  QPushButton* leave_button_ = nullptr;
+  QLabel* sharing_label_ = nullptr;
+
+  // Status bar.
   QLabel* status_ = nullptr;
+  QLabel* quality_ = nullptr;
   QLabel* metrics_ = nullptr;
 
   client::app::CallSession::State state_ = client::app::CallSession::State::Idle;
@@ -95,6 +110,8 @@ class MainWindow : public QMainWindow {
   /// The volume applied to each participant, by user id, as a percentage.
   /// Anyone missing is at 100, which is the volume they were sent at.
   QHash<QString, int> volumes_;
+  /// The monitor chosen in the settings dialog, empty for the primary one.
+  QString monitor_id_;
 };
 
 }  // namespace dv::ui

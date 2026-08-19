@@ -40,10 +40,8 @@ class CrashReporterTest : public ::testing::Test {
   void TearDown() override { std::filesystem::remove_all(directory_); }
 
   [[nodiscard]] CrashReporterOptions options() const {
-    return CrashReporterOptions{.directory = directory_,
-                                .application = "partyshare-test",
-                                .version = "0.1.0",
-                                .keep = 3};
+    return CrashReporterOptions{
+        .directory = directory_, .application = "partyshare-test", .version = "0.1.0", .keep = 3};
   }
 
   [[nodiscard]] std::string read(const std::filesystem::path& path) const {

@@ -11,5 +11,5 @@
     "libdatachannel",
     "openssl"
   ],
-  "comment": "Qt 6 is installed through the platform SDK, not through vcpkg. libdatachannel provides both the signaling WebSocket (M2) and the SFU (M4)."
+  "$comment": "Qt 6 is installed through the platform SDK, not through vcpkg. libdatachannel provides both the signaling WebSocket (M2) and the SFU (M4)."
 }

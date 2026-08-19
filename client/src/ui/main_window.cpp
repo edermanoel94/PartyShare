@@ -367,10 +367,11 @@ void MainWindow::wire_session() {
             // event, and only one of them is legible.
             const client::media::VideoStats video = session_.video_stats();
             if (video.frames_sent > 0) {
-              summary += QStringLiteral(" · tela %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
+              summary +=
+                  QStringLiteral(" · tela %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
             } else if (video.frames_received > 0) {
-              summary += QStringLiteral(" · tela %1 kbps ↓")
-                             .arg(video.receive_bitrate_kbps, 0, 'f', 0);
+              summary +=
+                  QStringLiteral(" · tela %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
             }
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary),

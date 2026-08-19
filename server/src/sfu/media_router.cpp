@@ -202,8 +202,8 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   // Repairs the incoming screen share instead of letting the loss travel on to
   // every viewer, and tells the sharer how much the link can carry. See
   // sfu/video_feedback.hpp.
-  session.video_feedback = std::make_shared<VideoFeedback>(
-      VideoFeedback::Options{.bandwidth = options_.bandwidth});
+  session.video_feedback =
+      std::make_shared<VideoFeedback>(VideoFeedback::Options{.bandwidth = options_.bandwidth});
   video_receiving->addToChain(session.video_feedback);
   session.video_inbound->setMediaHandler(video_receiving);
   session.video_inbound->onMessage(

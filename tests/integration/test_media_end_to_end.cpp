@@ -360,7 +360,20 @@ TEST_F(MediaEndToEndTest, TheScreenIsEncodedBySomethingThatSaysWhatItIs) {
   // marks an encoder power efficient exactly when it is hardware, and a
   // software encoder that claimed to be one would send the bitrate controller
   // down the wrong path.
-  const bool hardware_available = dv::client::media::hardware_encoding().available;
+  const dv::client::media::HardwareEncoding hardware = dv::client::media::hardware_encoding();
+  std::printf("hardware encoding: %s (%s)\n", hardware.available ? "available" : "unavailable",
+              hardware.detail.c_str());
+  std::fflush(stdout);
+
+  // Whether there is hardware here or not, there has to be a reason on record.
+  // "no hardware encoding" with no explanation is the kind of answer that
+  // sends somebody looking through driver documentation for an afternoon.
+  EXPECT_FALSE(hardware.detail.empty());
+  if (hardware.compiled_in) {
+    EXPECT_FALSE(hardware.implementation.empty());
+  }
+
+  const bool hardware_available = hardware.available;
   EXPECT_EQ(stats.hardware_encoder, hardware_available && stats.encoder != "OpenH264")
       << "the encoder in use and what this machine supports disagree";
 }

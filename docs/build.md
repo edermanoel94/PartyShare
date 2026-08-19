@@ -105,6 +105,29 @@ O script diz isso em vez de deixar o `tc` responder que a qdisc é desconhecida.
 
 A diferença entre os dois caminhos, e os números medidos com cada um, estão em [benchmarks.md](benchmarks.md).
 
+### Encoder por hardware
+
+O compartilhamento de tela é codificado pela placa quando existe uma, e pelo processador quando não.
+No Linux o backend é NVENC, ligado por padrão e desligável com `-DDV_HARDWARE_ENCODER_NVENC=OFF`.
+
+Nada é linkado: `libnvidia-encode.so.1` e `libcuda.so.1` são abertas em tempo de execução, então o mesmo binário roda em uma máquina sem placa NVIDIA.
+O cabeçalho da API está em `third_party/nvcodec`, com a procedência ao lado.
+
+Qual codificador está rodando aparece no log a cada intervalo de métricas, lido das estatísticas da libwebrtc:
+
+```text
+Video: 1280x720 at 30.0 fps, up 835 kbps, estimate 1621 kbps, 0 frames dropped, encoder OpenH264
+```
+
+Quando não há hardware, o motivo é dito uma vez, na criação da engine, e vale a pena ler antes de procurar o problema no driver:
+
+```text
+Media: no hardware encoding (the NVIDIA driver does not match its own kernel module, which is
+what an upgrade without a reboot leaves behind), the screen is encoded in software
+```
+
+`DV_DISABLE_HARDWARE_ENCODER=1` força o software mesmo com placa capaz, que é como se compara os dois.
+
 ### Relatórios de crash
 
 Um crash que não deixa nada para trás vira um relato que diz "fechou sozinho".

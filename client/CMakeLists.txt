@@ -50,9 +50,17 @@ if(DV_BUILD_CLIENT_MEDIA)
 
   # A target of its own because the strict warning set cannot be applied to a
   # translation unit that includes libwebrtc headers.
+  # NVENC is the hardware encoder this project has. The plan named VAAPI for
+  # Linux, which is right on Intel and AMD and is not an answer on NVIDIA,
+  # whose driver does no encoding through it. Nothing is linked: the driver's
+  # libraries are opened at runtime, so a binary built with this still runs on
+  # a machine with no NVIDIA card.
+  option(DV_HARDWARE_ENCODER_NVENC "Build the NVENC hardware encoder backend" ON)
+
   add_library(dv_client_media STATIC
     src/webrtc/hardware_encoder.hpp
     src/webrtc/hardware_encoder_none.cpp
+    src/webrtc/hardware_encoder_nvenc.cpp
     src/webrtc/impaired_socket_factory.cpp
     src/webrtc/impaired_socket_factory.hpp
     src/webrtc/video_encoder_factory.cpp
@@ -62,6 +70,17 @@ if(DV_BUILD_CLIENT_MEDIA)
   )
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+  if(DV_HARDWARE_ENCODER_NVENC AND NOT APPLE)
+    target_compile_definitions(dv_client_media PRIVATE DV_WITH_NVENC)
+    target_include_directories(dv_client_media PRIVATE
+      ${CMAKE_SOURCE_DIR}/third_party/nvcodec)
+    # Only for dlopen: the encoder itself is found at runtime.
+    target_link_libraries(dv_client_media PRIVATE ${CMAKE_DL_LIBS})
+    message(STATUS "Hardware encoder: NVENC")
+  else()
+    message(STATUS "Hardware encoder: none, the screen is encoded in software")
+  endif()
   # The two libraries depend on each other: the core calls into the media layer
   # to create a session, and the media layer calls back into the core for the
   # network impairment counters. Declaring both directions is what makes CMake

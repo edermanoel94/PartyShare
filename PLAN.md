@@ -438,7 +438,7 @@ Tarefas:
 1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
 2. [x] Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
 3. [x] Ativar a adaptação de bitrate com base no feedback de congestion control.
-4. Parcial. Encoders por hardware: a fábrica, a seleção e o fallback automático existem e são exercitados; falta um backend, e o motivo está abaixo.
+4. Parcial. Encoders por hardware: a fábrica, a seleção, o fallback automático e o backend NVENC estão escritos; falta executar o NVENC, que depende de a máquina ser reiniciada.
 5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
 6. [x] Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
 7. [x] Crash reporting.
@@ -521,21 +521,28 @@ A extensão fica de fora até que isso seja resolvido no upstream.
 O que ficou é a defesa: o SFU descarta pacotes com padding em vez de encaminhá-los.
 Qualquer participante pode enviar um, e o resultado era o servidor abortando - o que é um jeito de derrubar a chamada de todo mundo com um pacote.
 
-### Encoder por hardware: a costura existe, o backend não
+### Encoder por hardware: escrito, ainda não executado
 
 A tarefa 4 pede encoders por hardware atrás de uma interface, com fallback automático para software.
 A interface é a `webrtc::VideoEncoderFactory`, como já estava registrado no M6, e o que foi escrito é ela:
 
 - `client/src/webrtc/video_encoder_factory.hpp` decide qual codificador usar, e embrulha os dois no `CreateVideoEncoderSoftwareFallbackWrapper` da própria libwebrtc, que é o que o Chrome usa para trocar de hardware para software no meio de um stream sem a chamada perceber.
-- `client/src/webrtc/hardware_encoder.hpp` é onde cada plataforma entra. Hoje só existe a implementação vazia, e um build sem backend nenhum continua compilando e codificando.
+- `client/src/webrtc/hardware_encoder.hpp` é onde cada plataforma entra, com uma implementação vazia ao lado para que um build sem backend nenhum continue compilando e codificando.
 - Qual codificador está de fato rodando passou a ser um número medido, lido das estatísticas da libwebrtc e não do que se pediu, porque são coisas diferentes: um codificador de hardware pode ser criado, aceitar o stream e ser substituído pelo de software no meio do caminho.
 
-O que falta é um backend, e a razão de não haver um é a máquina.
-A placa aqui é NVIDIA, e a VAAPI que o plano cita não faz encode em NVIDIA.
-O caminho testável seria NVENC, e ele também não roda: a `libcuda` do sistema está na versão 610.57.04 e o módulo do kernel carregado está na 610.43.03, então `cuInit` devolve `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH`.
+O backend é NVENC, e não a VAAPI que o plano cita.
+A VAAPI é a resposta certa em Intel e AMD, e não é resposta nenhuma em NVIDIA, cujo driver não codifica através dela; a placa desta máquina é NVIDIA.
+O NVENC é a mesma API no Linux e no Windows, o que quer dizer que a tarefa 4 no Windows passa a ser configuração e não implementação.
 
+Nada é linkado: `libnvidia-encode.so.1` e `libcuda.so.1` são abertas em tempo de execução, então um binário compilado com NVENC roda igual em uma máquina sem placa NVIDIA nenhuma - a consulta responde que não há hardware e o codificador de software é usado.
+O cabeçalho da API está em `third_party/nvcodec`, com a procedência registrada ao lado, porque ele não é distribuído como pacote em toda plataforma e o ffmpeg resolve isso do mesmo jeito.
+
+**O que falta é executá-lo.**
+A `libcuda` do sistema está na versão 610.57.04 e o módulo do kernel carregado está na 610.43.03, então `cuInit` devolve `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH`.
 É a mesma condição que impede o `tc netem`: o sistema foi atualizado e não foi reiniciado.
-Escrever centenas de linhas de NVENC que nunca puderam ser executadas seria escrever exatamente o tipo de código que este projeto vem se recusando a declarar pronto, então a tarefa fica marcada como parcial até que a máquina permita verificar.
+
+O que já se verificou é o caminho de recusa, que é metade do que a tarefa pede: a consulta responde exatamente por que não há hardware - "the NVIDIA driver does not match its own kernel module" - e a chamada segue em software sem nenhuma diferença visível.
+Depois do reboot faltam três coisas: um compartilhamento de tela real codificado pela placa e decodificado do outro lado, o número de CPU com e sem, e o `netem`.
 
 ### Crash reporting
 

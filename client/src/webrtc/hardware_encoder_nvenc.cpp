@@ -443,15 +443,43 @@ class NvencVideoEncoder : public webrtc::VideoEncoder {
     return true;
   }
 
+  /// Below this quantiser a shared screen stops looking better and only costs
+  /// more. It is the point libwebrtc's own quality scaler treats as the good
+  /// end of the H.264 range, so encoding past it produces a stream the rest of
+  /// the stack already considers over provisioned.
+  static constexpr uint32_t kMinQp = 24;
+
   /// Fills `init_params_` rate control from the current bitrate and framerate.
+  ///
+  /// VBR and not CBR, which is the difference between encoding a screen on the
+  /// card being worth it and not. CBR fills its target whatever the picture is
+  /// doing: measured against a still screen it sent 1795 kbps where the
+  /// software encoder sent 9, and what the card saved in encoding was spent
+  /// again packetising and sending eight times the RTP. A shared screen is
+  /// still most of the time, and a still screen has to cost almost nothing.
+  ///
+  /// The number that arrives here is a ceiling and not a quota. It comes from
+  /// the SFU's estimate over REMB, through libwebrtc's allocation, and it says
+  /// what the slowest link in the room can take, so nothing may exceed it and
+  /// anything may stay under it.
   void apply_rate_control() {
-    config_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
+    config_.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
     config_.rcParams.averageBitRate = bitrate_bps_;
+    // Equal to the average rather than a multiple of it: a peak above what
+    // congestion control allowed is the queue this whole path exists to avoid.
+    config_.rcParams.maxBitRate = bitrate_bps_;
     // A one second buffer: enough for the encoder to spend bits on a frame
     // that needs them, small enough that it cannot run far ahead of the link.
     config_.rcParams.vbvBufferSize = bitrate_bps_;
     config_.rcParams.vbvInitialDelay = bitrate_bps_;
-    config_.rcParams.maxBitRate = bitrate_bps_;
+    // A floor on quantisation, which is what actually makes a still screen
+    // cheap. Without it the rate controller has no reason to stop: it drives
+    // the quantiser down until the target bitrate is spent, so a picture that
+    // is not moving gets encoded closer and closer to lossless and the link
+    // pays for it. VBR alone still sent 1371 kbps at a screen doing nothing.
+    // The floor says the card may stop once the frame is good enough.
+    config_.rcParams.enableMinQP = 1;
+    config_.rcParams.minQP = {kMinQp, kMinQp, kMinQp};
     init_params_.frameRateNum = framerate_;
     init_params_.frameRateDen = 1;
     init_params_.encodeConfig = &config_;

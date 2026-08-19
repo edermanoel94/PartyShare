@@ -24,6 +24,11 @@ add_library(dv_client_core STATIC
   src/media/media_session.hpp
   src/network/signaling_client.cpp
   src/network/signaling_client.hpp
+  src/video/frame_queue.hpp
+  src/video/frame_size.hpp
+  src/video/screen_capturer.cpp
+  src/video/screen_capturer.hpp
+  src/video/video_frame.hpp
 )
 add_library(dv::client_core ALIAS dv_client_core)
 
@@ -42,7 +47,10 @@ if(DV_BUILD_CLIENT_MEDIA)
 
   # A target of its own because the strict warning set cannot be applied to a
   # translation unit that includes libwebrtc headers.
-  add_library(dv_client_media STATIC src/webrtc/libwebrtc_media_session.cpp)
+  add_library(dv_client_media STATIC
+    src/webrtc/libwebrtc_media_session.cpp
+    src/webrtc/libwebrtc_screen_capturer.cpp
+  )
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(dv_client_media PUBLIC dv::shared libwebrtc::libwebrtc)
@@ -58,13 +66,26 @@ else()
   message(STATUS "Client media: disabled, the client will not send or receive audio")
 endif()
 
+# The interface is optional separately from the rest of the client, because
+# dv_client_core has no Qt in it and is worth building where Qt is not wanted.
+# The sanitizer job of the CI is the case: Qt is not built with sanitizers, but
+# the client core is exactly where the threading that ASan and UBSan are for
+# lives, and the tests need it.
+option(DV_BUILD_CLIENT_UI "Build the Qt interface on top of the client core" ON)
+
+if(NOT DV_BUILD_CLIENT_UI)
+  message(STATUS "Client interface: disabled, building the client core only")
+  return()
+endif()
+
 find_package(Qt6 6.5 QUIET COMPONENTS Widgets)
 
 if(NOT Qt6_FOUND)
   message(FATAL_ERROR
-    "Qt 6.5 or newer is required to build the client.\n"
+    "Qt 6.5 or newer is required to build the client interface.\n"
     "Install it and point CMAKE_PREFIX_PATH at it, or configure with "
-    "-DDV_BUILD_CLIENT=OFF to build only the server and the tests.")
+    "-DDV_BUILD_CLIENT_UI=OFF to build the client core, the server and the "
+    "tests without it.")
 endif()
 
 qt_standard_project_setup()

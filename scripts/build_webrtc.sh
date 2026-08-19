@@ -323,6 +323,18 @@ find third_party/abseil-cpp/absl \( -name '*.h' -o -name '*.inc' \) -print0 |
     install -Dm644 "${header}" "${DIST}/include/third_party/abseil-cpp/${header#third_party/abseil-cpp/}"
   done
 
+# libyuv, for the same reason. Its objects are already in the archive, because
+# libwebrtc itself scales and converts with it, but the headers are not part of
+# libwebrtc's public surface and would otherwise be missing.
+#
+# The screen share needs them directly: a captured frame is BGRA at the size of
+# the monitor and has to become I420 at 1280x720, and hand rolling that scaler
+# would be slower and worse than the tuned one already sitting in the archive.
+find third_party/libyuv/include \( -name '*.h' \) -print0 |
+  while IFS= read -r -d '' header; do
+    install -Dm644 "${header}" "${DIST}/include/${header#third_party/libyuv/include/}"
+  done
+
 {
   echo "WEBRTC_BUILD_MILESTONE=${MILESTONE}"
   echo "WEBRTC_SRC_COMMIT=$(git rev-parse HEAD)"

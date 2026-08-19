@@ -113,8 +113,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-dev
 
-      # The client is skipped here: Qt is not built with sanitizers, and the
-      # useful surface for ASan and UBSan right now is the shared library.
+      # Only the Qt interface is skipped, because Qt is not built with
+      # sanitizers. The client core is built and covered: it has no Qt in it,
+      # and it is where the threading that ASan and UBSan are for lives.
       - name: Configure
         run: |
           cmake -S . -B build/asan -G Ninja \
@@ -122,13 +123,14 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DDV_ENABLE_SANITIZERS=ON \
             -DDV_WARNINGS_AS_ERRORS=ON \
-            -DDV_BUILD_CLIENT=OFF
+            -DDV_BUILD_CLIENT_UI=OFF
 
       - name: Build
         run: cmake --build build/asan
 
       # Covers the signaling server's threading too: the integration tests bind
-      # real sockets and run the heartbeat thread.
+      # real sockets and run the heartbeat thread, and the client core's, which
+      # is where the frame queue and the call session run.
       - name: Tests
         run: ctest --test-dir build/asan --output-on-failure
 

@@ -9,11 +9,13 @@ add_executable(dv_unit_tests
   unit/test_room_manager.cpp
   unit/test_authenticator.cpp
   unit/test_hub.cpp
+  unit/test_video_pipeline.cpp
 )
 
 target_link_libraries(dv_unit_tests PRIVATE
   dv::shared
   dv::server_core
+  dv::client_core
   GTest::gtest
   GTest::gtest_main
 )
@@ -56,7 +58,10 @@ gtest_discover_tests(dv_integration_tests
 # when the client media layer is. They are slower than the rest, because ICE and
 # DTLS take real time, and they are labelled separately for that reason.
 if(DV_BUILD_CLIENT_MEDIA)
-  add_executable(dv_media_tests integration/test_media_end_to_end.cpp)
+  add_executable(dv_media_tests
+    integration/test_media_end_to_end.cpp
+    integration/test_screen_capture.cpp
+  )
 
   target_link_libraries(dv_media_tests PRIVATE
     dv::client_core

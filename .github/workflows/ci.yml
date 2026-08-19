@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The branch this repository actually has. It was `main` here and `master`
+    # in the repository, so no push ever matched and the CI had never run once:
+    # zero executions across the whole history. Both are listed because the one
+    # thing worse than the wrong name is the wrong name again after a rename.
+    branches: [master, main]
   pull_request:
   workflow_dispatch:
 

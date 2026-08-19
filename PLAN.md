@@ -603,6 +603,20 @@ Critérios de aceitação:
   O do Linux sim, e é testado assim a cada release: o job constrói no Ubuntu 22.04 e inicia o resultado em um container de Ubuntu 24.04 com só as treze bibliotecas de sistema que o AppImage deliberadamente não embute.
   Os outros três não, e não podem ser por quem só tem Linux.
 
+### O que o lint dos workflows encontrou
+
+Os workflows são a parte deste repositório que não pode ser executada antes de entrar, e os de release não podem ser executados fora de uma tag.
+`actionlint` roda no CI por isso, e nas duas primeiras execuções encontrou três defeitos que teriam custado uma tag cada:
+
+- A guarda de assinatura lia o contexto `secrets`, que um `if:` de step não enxerga. A condição seria sempre falsa e nada seria assinado, em silêncio. Os segredos passaram para o nível do job, onde `env` é visível.
+- A condição do `publish` estava em um bloco dobrado `>`, que deixa um `\n` sobrando e transforma a expressão em uma string não vazia, que é verdadeira. Ele publicaria em todo push, com tag ou sem.
+- `macos-13` não existe mais como label de runner. O job de x86_64 falharia ao ser agendado.
+
+Nenhum dos três aparece em revisão de YAML, e os três só apareceriam na primeira tag.
+
+Junto veio um job de `packaging`, que constrói, instala e empacota a cada mudança, sem a camada de mídia para não depender da libwebrtc.
+Ele confere os treze arquivos da árvore de instalação um a um, e não pela contagem: um tamanho de ícone que some é invisível até um desktop pedir aquele tamanho, e "havia nove arquivos" é uma verificação que passa quando os nove errados estão lá.
+
 ### A glibc decide onde o artefato roda, e isso não é teórico
 
 O AppImage carrega Qt e a runtime de C++, e não carrega a glibc, que não é embutível.

@@ -26,8 +26,99 @@ jobs:
 
       - name: Check formatting
         run: |
-          files=$(find shared client server tests tools -name '*.cpp' -o -name '*.hpp')
-          clang-format --dry-run --Werror $files
+          find shared client server tests tools \
+            \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-format --dry-run --Werror
+
+      # The workflows are the part of this repository that cannot be run before
+      # it is merged, and the release ones cannot be run at all outside a tag.
+      # actionlint is the only thing standing between a typo and a burnt tag: it
+      # is what caught a signing guard reading a context a step cannot see, a
+      # publish condition that was always true, and a runner label that no
+      # longer exists.
+      - name: Lint the workflows
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
+
+  # Packaging breaks quietly: an install rule that stops covering a file, or a
+  # script that stops finding one, produces a green build and an artefact
+  # missing something. This is the cheap half of the release pipeline, run on
+  # every change, without the media layer so it does not need libwebrtc.
+  packaging:
+    name: Packaging
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libx11-dev libxext-dev libxfixes-dev libxdamage-dev \
+            libxrandr-dev libxcomposite-dev libxtst-dev desktop-file-utils
+
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-ubuntu-24.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-ubuntu-24.04-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build/packaging -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_BUILD_TYPE=Release
+          -DDV_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build/packaging
+
+      - name: Install
+        run: cmake --install build/packaging --prefix "$PWD/stage"
+
+      # Named one by one rather than counted. A missing icon size is invisible
+      # until a desktop picks that size, and "there were nine files" is a check
+      # that passes when the wrong nine are there.
+      - name: The install tree has what an artefact needs
+        run: |
+          set -euo pipefail
+          expected="
+            bin/partyshare
+            bin/partyshare-server
+            share/applications/partyshare.desktop
+            share/icons/hicolor/scalable/apps/partyshare.svg
+          "
+          for size in 16 24 32 48 64 128 256 512; do
+            expected="$expected share/icons/hicolor/${size}x${size}/apps/partyshare.png"
+          done
+          missing=0
+          for file in $expected; do
+            if [ ! -f "stage/$file" ]; then
+              echo "::error::the install tree is missing $file"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+          desktop-file-validate stage/share/applications/partyshare.desktop
+
+      - name: CPack produces an archive
+        run: |
+          set -euo pipefail
+          cd build/packaging
+          cpack -G TGZ -B package
+          tar tzf package/partyshare-*-linux-x64.tar.gz | grep -q 'bin/partyshare$'
 
   build:
     name: ${{ matrix.name }}
@@ -83,7 +174,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
-          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
         shell: bash
 
       - name: Build
@@ -119,7 +210,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build/asan -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DDV_ENABLE_SANITIZERS=ON \
             -DDV_WARNINGS_AS_ERRORS=ON \
@@ -148,7 +239,7 @@ jobs:
       - name: Generate the compilation database
         run: |
           cmake -S . -B build/analysis -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DDV_BUILD_CLIENT_UI=OFF
@@ -216,10 +307,10 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build/media -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DCMAKE_BUILD_TYPE=Release \
             -DDV_BUILD_CLIENT_MEDIA=ON \
-            -DDV_WEBRTC_ROOT=$HOME/.cache/partyshare/webrtc/dist
+            -DDV_WEBRTC_ROOT="$HOME/.cache/partyshare/webrtc/dist"
 
       - name: Build
         run: cmake --build build/media --target dv_media_tests

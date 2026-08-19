@@ -128,6 +128,12 @@ jobs:
   windows:
     name: Windows x64 installer
     runs-on: windows-2022
+    # Lifted to the job because a step's if: cannot read the secrets context,
+    # and can read env. A guard that never fires would sign nothing and say
+    # nothing, which is the failure mode worth designing against here.
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -161,7 +167,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset windows-release
-          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DDV_BUILD_TESTS=OFF
         shell: bash
 
@@ -180,10 +186,7 @@ jobs:
         run: windeployqt --release --no-translations stage/bin/partyshare.exe
 
       - name: Sign the executables
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        if: env.WINDOWS_CERTIFICATE != ''
         shell: pwsh
         run: |
           $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
@@ -215,6 +218,13 @@ jobs:
   macos:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -223,7 +233,10 @@ jobs:
             runner: macos-14
             preset: macos-arm64-release
           - arch: x64
-            runner: macos-13
+            # The Intel runner, which is a named variant rather than an old
+            # version: macos-13 was the last plain-numbered x86_64 image and it
+            # is gone. Apple Silicon runners cannot build an x64 artefact.
+            runner: macos-15-intel
             preset: macos-x64-release
     steps:
       - uses: actions/checkout@v4
@@ -240,7 +253,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
-          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DDV_BUILD_TESTS=OFF
 
       - name: Build
@@ -257,14 +270,7 @@ jobs:
       # the three is one Gatekeeper refuses to open on a machine that did not
       # build it.
       - name: Sign and notarise
-        if: ${{ secrets.MACOS_CERTIFICATE != '' }}
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        if: env.MACOS_CERTIFICATE != ''
         run: |
           set -euo pipefail
           echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
@@ -314,9 +320,7 @@ jobs:
       # Gatekeeper judges the disk image as well as the bundle inside it, so an
       # unsigned image carrying a signed application still warns on first open.
       - name: Sign the disk image
-        if: ${{ secrets.MACOS_CERTIFICATE != '' }}
-        env:
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        if: env.MACOS_CERTIFICATE != ''
         run: codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" partyshare-*.dmg
 
       - uses: actions/upload-artifact@v4
@@ -335,10 +339,10 @@ jobs:
     # fails, which is the opposite of what the paragraph above asks for. The
     # Linux result is still required: it is the only artefact this repository
     # can verify, and a release with none of those in it is not a release.
-    if: >
-      ${{ always()
-      && startsWith(github.ref, 'refs/tags/v')
-      && needs.linux.result == 'success' }}
+    # On one line and without ${{ }}: an if: is already an expression, and a
+    # folded block leaves a trailing newline that makes the whole thing a
+    # non-empty string, which is true. That version published on every push.
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.linux.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

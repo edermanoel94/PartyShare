@@ -79,6 +79,10 @@ jobs:
           key: vcpkg-ubuntu-24.04-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-ubuntu-24.04-
 
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
+
       - name: Configure
         run: >
           cmake -S . -B build/packaging -G Ninja
@@ -175,6 +179,10 @@ jobs:
           key: vcpkg-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-${{ matrix.os }}-
 
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
+
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
@@ -207,6 +215,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
 
       # Only the Qt interface is skipped, because Qt is not built with
       # sanitizers. The client core is built and covered: it has no Qt in it,
@@ -307,6 +319,10 @@ jobs:
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
         run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
 
       - name: Configure
         run: |

@@ -164,6 +164,10 @@ jobs:
           key: vcpkg-windows-2022-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-windows-2022-
 
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
+
       - name: Configure
         run: >
           cmake --preset windows-release
@@ -249,6 +253,10 @@ jobs:
         with:
           version: '6.7.*'
           cache: true
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
 
       - name: Configure
         run: >

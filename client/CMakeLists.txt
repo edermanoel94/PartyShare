@@ -150,3 +150,28 @@ set_target_properties(dv_client PROPERTIES
 
 dv_set_target_warnings(dv_client)
 dv_enable_sanitizers(dv_client)
+
+install(TARGETS dv_client
+  BUNDLE DESTINATION .
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# Desktop integration, which is only a Linux idea: on Windows the installer
+# writes the start menu entry and on macOS the bundle carries its own metadata.
+# linuxdeploy reads both of these out of the installed tree to build the
+# AppImage, so they are installed rather than passed to it on the command line.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/partyshare.desktop
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+
+  foreach(size 16 24 32 48 64 128 256 512)
+    install(FILES ${CMAKE_SOURCE_DIR}/assets/partyshare-${size}.png
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps
+      RENAME partyshare.png)
+  endforeach()
+
+  # The scalable icon is what a desktop at a fractional scale factor picks, and
+  # leaving it out is how an icon ends up resampled and soft on a HiDPI screen.
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/partyshare.svg
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps)
+endif()

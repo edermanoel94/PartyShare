@@ -5,7 +5,13 @@ install/
 CMakeUserPresets.json
 
 # Dependencies
-third_party/
+# The contents rather than the directory itself, because git cannot re-include
+# anything under a directory it was told to exclude.
+third_party/*
+# Vendored source, not a downloaded dependency: nvEncodeAPI.h is a 300 KB MIT
+# header with its provenance recorded next to it, and a checkout without it
+# cannot build the NVENC encoder at all.
+!third_party/nvcodec/
 vcpkg_installed/
 .cache/
 

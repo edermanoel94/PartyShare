@@ -26,6 +26,10 @@ option(DV_ENABLE_WEBRTC_SPIKE "Build the M3 libwebrtc toolchain spike" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
+# Every artefact the M9 builds is a different way of laying out the same
+# installed tree, so the tree has to exist before any of them can be built.
+include(GNUInstallDirs)
+
 include(CompilerWarnings)
 include(Sanitizers)
 include(Dependencies)
@@ -48,6 +52,8 @@ if(DV_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+include(Packaging)
 
 message(STATUS "")
 message(STATUS "partyshare ${PROJECT_VERSION}")

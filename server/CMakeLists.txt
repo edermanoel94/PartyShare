@@ -33,3 +33,5 @@ set_target_properties(dv_server PROPERTIES OUTPUT_NAME "partyshare-server")
 
 dv_set_target_warnings(dv_server)
 dv_enable_sanitizers(dv_server)
+
+install(TARGETS dv_server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

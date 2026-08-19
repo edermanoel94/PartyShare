@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Two screens, one in front of the other: what the application does is put
+       somebody else's screen next to yours. The mark is drawn as two shapes and
+       nothing else because it has to survive 16 pixels, where a stroke thinner
+       than the one below stops being a stroke and becomes a grey smudge. The
+       front screen is outlined in the background colour rather than separated
+       by a gap, so the two stay distinct at every size. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b5bd6"/>
+      <stop offset="1" stop-color="#3f3fa8"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#g)"/>
+  <rect x="42" y="50" width="142" height="96" rx="15" fill="#ffffff"/>
+  <rect x="80" y="102" width="142" height="96" rx="15" fill="#ffffff" stroke="url(#g)" stroke-width="15"/>
+</svg>

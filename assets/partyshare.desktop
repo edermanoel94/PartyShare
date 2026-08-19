@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PartyShare
+GenericName=Screen Sharing and Voice
+Comment=Share a screen and talk with a small group
+Exec=partyshare
+Icon=partyshare
+Terminal=false
+Categories=AudioVideo;VideoConference;
+Keywords=screen;share;voice;call;meeting;
+StartupWMClass=partyshare

@@ -588,17 +588,33 @@ Objetivo: a seção 25 da SPEC.
 
 Tarefas:
 
-1. Instalador Windows, com as DLLs do Qt e do runtime da Microsoft.
-2. AppImage no Linux.
-3. Bundle `.app` e imagem `.dmg` no macOS, com notarização.
-4. Assinatura de código no Windows e no macOS.
-5. Publicação automática de artefatos por tag de release.
-6. `docs/build.md` e `docs/release.md`.
+1. Parcial. Instalador Windows: hoje é um ZIP do CPack com a runtime do Qt ao lado, escrito e nunca executado. Falta um instalador de verdade, com entrada no menu iniciar e desinstalação.
+2. [x] AppImage no Linux.
+3. Parcial. Bundle `.app` e `.dmg` no macOS: escritos e nunca executados, sem plano de fundo nem posicionamento de ícones, sem notarização.
+4. Assinatura de código no Windows e no macOS. Os passos existem no workflow, condicionais aos segredos, e nenhum segredo está configurado.
+5. [x] Publicação automática de artefatos por tag de release.
+6. Parcial. `docs/release.md` existe. `docs/build.md` ainda não fala dos artefatos.
 
 Critérios de aceitação:
 
 - Uma tag gera os quatro artefatos automaticamente.
+  Gera um, verificado. Os outros três estão escritos e nunca rodaram, porque este repositório é desenvolvido em Linux.
 - Cada artefato instala e roda em uma máquina limpa da respectiva plataforma.
+  Nenhum. O AppImage roda na máquina que o construiu, o que não é a mesma afirmação.
+
+### O que a árvore de instalação era antes do M9
+
+Não existia. Nenhuma regra de `install()`, nenhum ícone, nenhuma entrada de desktop.
+Os quatro artefatos são quatro jeitos de embrulhar a mesma árvore instalada, então ela veio antes de qualquer um deles, junto com `cmake/Packaging.cmake`, que decide o nome e a plataforma de cada arquivo.
+
+Duas coisas só apareceram ao construir um artefato de verdade, e nenhuma das duas teria aparecido em revisão de código:
+
+- O primeiro AppImage subia **sem camada de mídia**, porque o script não passava `DV_BUILD_CLIENT_MEDIA`.
+  Um cliente que abre a janela, mostra a tela de login e não faz chamada é pior do que artefato nenhum, porque parece o produto.
+  O smoke test do release recusa isso agora, procurando a frase no log.
+- `third_party/nvcodec` **não estava versionado**, porque `third_party/` inteiro estava no `.gitignore`.
+  Um clone limpo não compilava o NVENC, o que quer dizer que a tarefa 4 do M8 funcionava nesta máquina e em nenhuma outra.
+  O header é fonte vendorizada com procedência e licença registradas ao lado, não dependência baixada.
 
 ---
 

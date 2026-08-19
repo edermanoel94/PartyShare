@@ -1,0 +1,297 @@
+name: Release
+
+# Tasks 5 of the M9: a tag produces the artefacts, and nobody uploads a file by
+# hand. A release built from a laptop is a release whose contents nobody can
+# reconstruct, and the first time that matters is when a user reports a crash in
+# a build that no longer exists anywhere.
+#
+# workflow_dispatch is here so the pipeline can be exercised without cutting a
+# tag. It builds everything and uploads nothing, because a release without a tag
+# has no version to be.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux x64 AppImage
+    # The oldest runner available, deliberately. glibc is the one thing an
+    # AppImage cannot carry, so the build machine's glibc is the floor for every
+    # machine that can run the result.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libx11-dev libxext-dev libxfixes-dev libxdamage-dev \
+            libxrandr-dev libxcomposite-dev libxtst-dev \
+            desktop-file-utils zsync
+
+      - name: Restore the libwebrtc cache
+        id: webrtc-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/partyshare/webrtc/dist
+          key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
+
+      - name: Build libwebrtc
+        if: steps.webrtc-cache.outputs.cache-hit != 'true'
+        run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
+
+      - name: Build the AppImage
+        run: scripts/appimage.sh
+
+      # An artefact that has never been started is an artefact nobody knows is
+      # broken. This is the same check that found the first AppImage shipping
+      # without a media layer, which started fine and could not make a call.
+      - name: Smoke test
+        run: |
+          sudo apt-get install -y xvfb
+          APPIMAGE=$(ls build/appimage/partyshare-*.AppImage)
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          output=$(timeout 60 xvfb-run -a "$APPIMAGE" 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "PartyShare client ready" \
+            || { echo "::error::the client never reported itself ready"; exit 1; }
+          if echo "$output" | grep -q "no media layer"; then
+            echo "::error::built without the media layer, so it cannot make calls"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            build/appimage/partyshare-*.AppImage
+            build/appimage/partyshare-*.AppImage.zsync
+          retention-days: 7
+
+  # The Windows and macOS artefacts, tasks 1, 3 and 4. Both jobs are written and
+  # neither has ever run: this repository is developed on Linux, and the two
+  # were derived from the platform tooling's documentation rather than from a
+  # build that produced a file somebody installed. Treat the first run as the
+  # thing that finds out what is wrong with them, not as a regression.
+  #
+  # Signing is conditional on the secrets existing rather than assumed, so that
+  # a fork and a first tag both produce unsigned artefacts instead of a failed
+  # pipeline. An unsigned build is a build the operating system warns about, and
+  # that is a better failure than no build.
+  windows:
+    name: Windows x64 installer
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-windows-2022-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-windows-2022-
+
+      - name: Configure
+        run: >
+          cmake --preset windows-release
+          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DDV_BUILD_TESTS=OFF
+        shell: bash
+
+      - name: Build
+        run: cmake --build --preset windows-release
+
+      - name: Stage the install tree
+        shell: bash
+        run: cmake --install build/windows-release --prefix "$PWD/stage"
+
+      # windeployqt is the Windows half of what linuxdeploy's Qt plugin does on
+      # Linux: it copies the Qt libraries and the platform plugin next to the
+      # executable, which is where a Windows program looks for them.
+      - name: Bundle the Qt runtime
+        shell: bash
+        run: windeployqt --release --no-translations stage/bin/partyshare.exe
+
+      - name: Sign the executables
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $bytes)
+          Get-ChildItem stage\bin\*.exe | ForEach-Object {
+            signtool sign /f "$env:RUNNER_TEMP\cert.pfx" `
+              /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+              /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
+          }
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
+
+      - name: Build the installer
+        shell: bash
+        run: cpack --config build/windows-release/CPackConfig.cmake -B build/windows-release/package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: build/windows-release/package/partyshare-*
+          retention-days: 7
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            preset: macos-arm64-release
+          - arch: x64
+            runner: macos-13
+            preset: macos-x64-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DDV_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Stage the bundle
+        run: cmake --install build/${{ matrix.preset }} --prefix "$PWD/stage"
+
+      - name: Bundle the Qt runtime
+        run: macdeployqt stage/partyshare.app -always-overwrite
+
+      # Notarisation is not signing: Apple wants the bundle signed with a
+      # Developer ID, then uploaded and stapled, and a bundle that skips any of
+      # the three is one Gatekeeper refuses to open on a machine that did not
+      # build it.
+      - name: Sign and notarise
+        if: ${{ secrets.MACOS_CERTIFICATE != '' }}
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p actions "$RUNNER_TEMP/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p actions "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/build.keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions \
+            "$RUNNER_TEMP/build.keychain"
+          rm "$RUNNER_TEMP/cert.p12"
+
+          codesign --deep --force --options runtime --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" stage/partyshare.app
+
+          ditto -c -k --keepParent stage/partyshare.app "$RUNNER_TEMP/notarise.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarise.zip" \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple stage/partyshare.app
+
+      - name: Build the disk image
+        run: |
+          mkdir -p dmg && cp -R stage/partyshare.app dmg/
+          ln -s /Applications dmg/Applications
+          VERSION=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          hdiutil create -volname PartyShare -srcfolder dmg -ov -format UDZO \
+            "partyshare-${VERSION}-macos-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: partyshare-*.dmg
+          retention-days: 7
+
+  publish:
+    name: Publish
+    # Only the platforms that produced something. A macOS job that fails must
+    # not hold back a Linux artefact that is already built and smoke tested:
+    # partial is a worse release than complete and a much better one than none.
+    needs: [linux, windows, macos]
+    # always(), because a plain needs: skips this job when any of the three
+    # fails, which is the opposite of what the paragraph above asks for. The
+    # Linux result is still required: it is the only artefact this repository
+    # can verify, and a release with none of those in it is not a release.
+    if: >
+      ${{ always()
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.linux.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Checksums
+        run: |
+          find artifacts -type f ! -name '*.zsync' -exec sha256sum {} + \
+            | sed 's| artifacts/[^/]*/| |' > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*/*
+            SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: false

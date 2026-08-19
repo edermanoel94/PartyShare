@@ -25,6 +25,28 @@
 
 set -euo pipefail
 
+# Retried, because the steps below reach the network and the network is the one
+# part of a build machine that fails for no reason:
+#
+#   curl: (35) Recv failure: Connection reset by peer
+#
+# took out a static analysis job that had nothing wrong with it. A step that
+# fails a whole pipeline on one reset packet is a step that has to try again.
+retry() {
+  local description="$1"
+  shift
+  local attempt
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    echo "${description} failed on attempt ${attempt}"
+    sleep $((attempt * 5))
+  done
+  echo "${description} failed three times, giving up" >&2
+  return 1
+}
+
 VCPKG_DIR="${VCPKG_DIR:-$PWD/.vcpkg}"
 
 # Read without a JSON parser: this runs on the Windows runner too, and the only
@@ -46,7 +68,7 @@ current="$(git -C "$VCPKG_DIR" rev-parse HEAD 2>/dev/null || echo none)"
 if [[ "$current" != "$baseline" ]]; then
   # One commit, without the history behind it: the ports and the version
   # database are both in the tree, and nothing here ever looks further back.
-  git -C "$VCPKG_DIR" fetch --depth 1 origin "$baseline"
+  retry "fetching vcpkg" git -C "$VCPKG_DIR" fetch --depth 1 origin "$baseline"
   git -C "$VCPKG_DIR" checkout --quiet FETCH_HEAD
 fi
 
@@ -65,7 +87,7 @@ if [[ ! -x "$executable" ]]; then
   echo "bootstrapping vcpkg"
   # -disableMetrics because a build machine phoning home is a dependency on a
   # service being up, in a step whose only job is to produce a compiler.
-  "$bootstrap" -disableMetrics
+  retry "bootstrapping vcpkg" "$bootstrap" -disableMetrics
 fi
 
 toolchain="$VCPKG_DIR/scripts/buildsystems/vcpkg.cmake"

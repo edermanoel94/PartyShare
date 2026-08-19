@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -45,8 +46,14 @@ class CrashReporterTest : public ::testing::Test {
   }
 
   [[nodiscard]] std::string read(const std::filesystem::path& path) const {
+    // Through the stream buffer rather than a pair of istreambuf_iterators.
+    // The iterator form makes GCC 13 emit -Wnull-dereference from inside
+    // libstdc++ at -O2, four times, about pointers this code never touches.
+    // Reproduced in isolation, so it is the idiom and not something here.
     std::ifstream input(path);
-    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    return contents.str();
   }
 
   std::filesystem::path directory_;

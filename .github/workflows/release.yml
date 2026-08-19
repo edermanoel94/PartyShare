@@ -73,9 +73,9 @@ jobs:
           export APPIMAGE_EXTRACT_AND_RUN=1
           output=$(timeout 60 xvfb-run -a "$APPIMAGE" 2>&1 || true)
           echo "$output"
-          echo "$output" | grep -q "PartyShare client ready" \
+          grep -q "PartyShare client ready" <<<"$output" \
             || { echo "::error::the client never reported itself ready"; exit 1; }
-          if echo "$output" | grep -q "no media layer"; then
+          if grep -q "no media layer" <<<"$output"; then
             echo "::error::built without the media layer, so it cannot make calls"
             exit 1
           fi
@@ -101,7 +101,7 @@ jobs:
             export APPIMAGE_EXTRACT_AND_RUN=1
             output=$(timeout 60 xvfb-run -a /tmp/app 2>&1 || true)
             echo "$output"
-            echo "$output" | grep -q "PartyShare client ready" || {
+            grep -q "PartyShare client ready" <<<"$output" || {
               echo "the AppImage does not start on a clean Ubuntu 24.04"
               exit 1
             }

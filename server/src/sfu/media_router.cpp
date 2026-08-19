@@ -149,7 +149,9 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
                                             .sdp_mline_index = 0});
   });
 
-  session.connection->onStateChange([user_id](rtc::PeerConnection::State state) {
+  // maybe_unused because the only use of `state` is the debug log below, and
+  // SPDLOG_DEBUG compiles to nothing in a release build.
+  session.connection->onStateChange([user_id]([[maybe_unused]] rtc::PeerConnection::State state) {
     DV_LOG_DEBUG("SFU: connection of {} is now {}", user_id, static_cast<int>(state));
   });
 

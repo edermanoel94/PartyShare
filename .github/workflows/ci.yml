@@ -126,7 +126,13 @@ jobs:
           set -euo pipefail
           cd build/packaging
           cpack -G TGZ -B package
-          tar tzf package/partyshare-*-linux-x64.tar.gz | grep -q 'bin/partyshare$'
+          # Listed to a file rather than piped into grep: `grep -q` stops at the
+          # first match and closes the pipe, tar dies of EPIPE, and pipefail
+          # turns a passing check into a failing job.
+          tar tzf package/partyshare-*-linux-x64.tar.gz > contents.txt
+          grep -q 'bin/partyshare$' contents.txt
+          grep -q 'bin/partyshare-server$' contents.txt
+          grep -q 'share/applications/partyshare.desktop$' contents.txt
 
   build:
     name: ${{ matrix.name }}

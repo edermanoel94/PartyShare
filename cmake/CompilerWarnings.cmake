@@ -36,6 +36,13 @@ function(dv_set_target_warnings target)
       -Wdouble-promotion
       -Wformat=2
       -Wimplicit-fallthrough
+      # Off, and it comes from -Wextra. This codebase initialises aggregates
+      # with designated initialisers and names only the members it means to
+      # set; the standard value-initialises the rest, which is the point of
+      # the syntax. Leaving the warning on would mean writing `.member = {}`
+      # at every call site for every field anyone ever adds, which is churn
+      # that makes the initialisers say less rather than more.
+      -Wno-missing-field-initializers
     )
     if(DV_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)

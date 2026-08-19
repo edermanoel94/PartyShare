@@ -27,6 +27,17 @@ namespace proto = dv::protocol;
 /// failure does not stall the suite.
 constexpr auto kTimeout = 3000ms;
 
+/// Opening the socket gets its own, longer allowance, because it is the one
+/// step whose cost does not belong to us: every message wait after it is a
+/// loopback round trip measured in microseconds, while the handshake happens
+/// while the fixture is still hashing its eight accounts with scrypt.
+///
+/// Three seconds was not enough. Running the suite alongside a clang-tidy pass
+/// produced three failures in one run, all of them here and all of them at the
+/// timeout rather than on an assertion. A message wait that needs more than
+/// three seconds is a bug; a handshake that does is a busy machine.
+constexpr auto kConnectTimeout = 10000ms;
+
 class SignalingServerTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -60,7 +71,7 @@ class SignalingServerTest : public ::testing::Test {
   /// Connects a client and logs it in, returning the client and its identity.
   std::pair<WebSocketTestClient*, dv::models::User> login(const std::string& username) {
     auto client = std::make_unique<WebSocketTestClient>(server_->port());
-    EXPECT_TRUE(client->wait_until_open(kTimeout)) << "could not connect " << username;
+    EXPECT_TRUE(client->wait_until_open(kConnectTimeout)) << "could not connect " << username;
 
     client->send(proto::Authenticate{username, "senha"});
     const auto authenticated = client->wait_for<proto::Authenticated>(kTimeout);
@@ -104,7 +115,7 @@ TEST_F(SignalingServerTest, AClientCanConnectAndAuthenticate) {
 
 TEST_F(SignalingServerTest, TheWrongPasswordIsRejectedOverTheWire) {
   WebSocketTestClient client(server_->port());
-  ASSERT_TRUE(client.wait_until_open(kTimeout));
+  ASSERT_TRUE(client.wait_until_open(kConnectTimeout));
 
   client.send(proto::Authenticate{"user0", "errada"});
   const auto error = client.wait_for<proto::ErrorMessage>(kTimeout);
@@ -114,7 +125,7 @@ TEST_F(SignalingServerTest, TheWrongPasswordIsRejectedOverTheWire) {
 
 TEST_F(SignalingServerTest, MessagesBeforeAuthenticationAreRejected) {
   WebSocketTestClient client(server_->port());
-  ASSERT_TRUE(client.wait_until_open(kTimeout));
+  ASSERT_TRUE(client.wait_until_open(kConnectTimeout));
 
   client.send(proto::CreateRoom{"whoever", "sala"});
   const auto error = client.wait_for<proto::ErrorMessage>(kTimeout);

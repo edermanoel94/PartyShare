@@ -17,6 +17,7 @@
 
 #include <dv/protocol/message.hpp>
 
+#include "sfu/atomic_shared_ptr.hpp"
 #include "sfu/video_feedback.hpp"
 #include "signaling/hub.hpp"
 
@@ -266,7 +267,9 @@ class MediaRouter : public MediaSignals {
   std::uint32_t next_ssrc_ = 1;
 
   /// Replaced wholesale under `mutex_`, read without it. See RoutingTable.
-  std::atomic<std::shared_ptr<const RoutingTable>> routes_{std::make_shared<const RoutingTable>()};
+  /// Not `std::atomic<std::shared_ptr<...>>` directly: the libc++ that ships
+  /// with Xcode has no such specialisation. See sfu/atomic_shared_ptr.hpp.
+  AtomicSharedPtr<const RoutingTable> routes_{std::make_shared<const RoutingTable>()};
 
   /// Guards the queue and the handler. Never held while a task runs.
   std::mutex worker_mutex_;

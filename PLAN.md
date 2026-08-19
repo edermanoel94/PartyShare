@@ -438,7 +438,7 @@ Tarefas:
 1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
 2. [x] Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
 3. [x] Ativar a adaptação de bitrate com base no feedback de congestion control.
-4. Parcial. Encoders por hardware: a fábrica, a seleção, o fallback automático e o backend NVENC estão escritos; falta executar o NVENC, que depende de a máquina ser reiniciada.
+4. [x] Encoders por hardware atrás de interface, com fallback automático para software. O NVENC foi executado depois do reboot, e a execução mudou o código: ver abaixo.
 5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
 6. [x] Revisão de segurança conforme a seção 17: sem mídia sem criptografia, sem credenciais em texto puro, tokens protegidos, TURN com credenciais efêmeras.
 7. [x] Crash reporting.
@@ -521,7 +521,7 @@ A extensão fica de fora até que isso seja resolvido no upstream.
 O que ficou é a defesa: o SFU descarta pacotes com padding em vez de encaminhá-los.
 Qualquer participante pode enviar um, e o resultado era o servidor abortando - o que é um jeito de derrubar a chamada de todo mundo com um pacote.
 
-### Encoder por hardware: escrito, ainda não executado
+### Encoder por hardware, e o que executá-lo mostrou
 
 A tarefa 4 pede encoders por hardware atrás de uma interface, com fallback automático para software.
 A interface é a `webrtc::VideoEncoderFactory`, como já estava registrado no M6, e o que foi escrito é ela:
@@ -537,12 +537,20 @@ O NVENC é a mesma API no Linux e no Windows, o que quer dizer que a tarefa 4 no
 Nada é linkado: `libnvidia-encode.so.1` e `libcuda.so.1` são abertas em tempo de execução, então um binário compilado com NVENC roda igual em uma máquina sem placa NVIDIA nenhuma - a consulta responde que não há hardware e o codificador de software é usado.
 O cabeçalho da API está em `third_party/nvcodec`, com a procedência registrada ao lado, porque ele não é distribuído como pacote em toda plataforma e o ffmpeg resolve isso do mesmo jeito.
 
-**O que falta é executá-lo.**
-A `libcuda` do sistema está na versão 610.57.04 e o módulo do kernel carregado está na 610.43.03, então `cuInit` devolve `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH`.
-É a mesma condição que impede o `tc netem`: o sistema foi atualizado e não foi reiniciado.
+Antes do reboot só o caminho de recusa tinha sido verificado, que é metade do que a tarefa pede: a `libcuda` estava na 610.57.04 e o módulo do kernel na 610.43.03, `cuInit` devolvia `CUDA_ERROR_SYSTEM_DRIVER_MISMATCH`, e a consulta respondia exatamente por que - "the NVIDIA driver does not match its own kernel module" - com a chamada seguindo em software sem diferença visível.
 
-O que já se verificou é o caminho de recusa, que é metade do que a tarefa pede: a consulta responde exatamente por que não há hardware - "the NVIDIA driver does not match its own kernel module" - e a chamada segue em software sem nenhuma diferença visível.
-Depois do reboot faltam três coisas: um compartilhamento de tela real codificado pela placa e decodificado do outro lado, o número de CPU com e sem, e o `netem`.
+Depois do reboot a placa foi usada de verdade, e é aí que a tarefa deixou de ser sobre escrever código.
+O compartilhamento real foi codificado pela RTX 4050 e decodificado do outro lado, e a primeira medição de CPU disse que **não havia economia nenhuma**: 77,1% de um núcleo contra 78,9% do OpenH264.
+
+O motivo era o bitrate, não a codificação.
+Contra uma tela parada o OpenH264 gasta 9 kbps, e o NVENC gastava 1795: o que a placa economizava codificando era gasto de novo empacotando e enviando oito vezes mais RTP.
+CBR preenche o alvo independente do que a imagem está fazendo, e isso contradizia o desenho registrado acima, onde o número que o SFU manda por REMB é teto e não cota.
+
+Trocar para VBR não bastou, e essa foi a parte que só a execução podia mostrar: sozinho ele foi a 3137 kbps e caiu devagar até 1371, porque sem piso de quantização o controlador não tem por que parar e continua baixando o quantizador até gastar o alvo, codificando cada vez mais perto de lossless uma imagem que não se move.
+Com VBR e piso de QP 24 a tela parada passou a custar 2 kbps e a CPU caiu para 69,5%, que é a economia que a tarefa existe para produzir.
+
+Os números estão em [docs/benchmarks.md](docs/benchmarks.md), com as duas ressalvas que valem para eles: a medida é de tela parada, e a CPU tem espalhamento de alguns pontos entre corridas.
+Tela em movimento continua sem medição, e o piso de QP limita a qualidade máxima, então o ganho em movimento real é previsão e não número.
 
 ### Crash reporting
 
@@ -567,6 +575,10 @@ Isso não existe aqui, e a função que o implementaria está marcada: este proj
 
 Os achados que valiam correção estão no commit que os corrigiu.
 Os que foram recusados estão no `.clang-tidy`, cada um com o motivo escrito ao lado, porque uma verificação desligada sem justificativa é indistinguível de uma verificação esquecida.
+
+O "sem um aviso sequer" precisa de um qualificador, encontrado ao mexer no NVENC: `client/src/webrtc` está fora da lista de diretórios que o job analisa, e é onde vivem a sessão de mídia e os backends de encoder.
+Rodado à mão, `hardware_encoder_nvenc.cpp` tem cinco achados, dois deles `error`: um `NV_ENC_PIC_PARAMS picture = {}` sobre um enum sem enumerador zero, e um `static_cast<uint32_t>(fps + 0.5)` que o check manda trocar por `lround`.
+Nenhum é grave e nenhum foi corrigido aqui, mas a lista do CI precisa incluir o diretório antes que a tarefa 5 possa ser lida como está escrita.
 
 ---
 

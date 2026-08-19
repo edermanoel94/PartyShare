@@ -11,7 +11,8 @@ Nada foi estimado, e o que ainda não foi medido está marcado como tal em vez d
 | --- | --- |
 | CPU | AMD Ryzen 7 7435HS, 16 threads |
 | Memória | 15 GiB |
-| Sistema | Arch Linux, kernel 7.1.3 |
+| Sistema | Arch Linux, kernel 7.1.8 |
+| GPU | NVIDIA GeForce RTX 4050 Laptop, driver 610.57.04 |
 | Qt | 6.11.1 |
 | libwebrtc | m152.7977.0.0, construída do fonte contra a libstdc++ do sistema |
 | Rede | loopback |
@@ -82,6 +83,36 @@ Duas ressalvas honestas sobre este número:
 - **30,0 FPS é a média da janela inteira.** Ela não prova que não houve uma queda de meio segundo no meio. Uma medição por segundo, com desvio padrão, é o que responderia isso, e ainda não existe.
 - **A memória subiu de 175 para 190 MiB entre a corrida de 30 s e a de 600 s.** São 15 MiB em dez minutos, com cinco clientes no mesmo processo. Pode ser regime permanente de buffers, e pode ser vazamento lento. Não foi investigado, e fica registrado aqui para ser.
 
+### Encoder por hardware
+
+A mesma sala, trocando só quem codifica.
+`DV_DISABLE_HARDWARE_ENCODER=1` força o software, e sem ela a placa é usada.
+
+A tela medida está parada, que é o caso que separa os dois: um compartilhamento é imagem estática a maior parte do tempo, e o que decide o custo não é a velocidade de codificar e sim quantos bits o codificador decide gastar em um quadro que não mudou.
+
+```text
+                       bitrate    CPU, cinco clientes    pacotes de vídeo no SFU
+NVENC, CBR             1795 kbps        77,1%                     32.340
+NVENC, VBR             1371 kbps          -                          -
+NVENC, VBR + minQP 24     2 kbps        69,5%                      4.100
+OpenH264                  9 kbps        78,9%                      3.936
+```
+
+As duas primeiras linhas são o que a validação encontrou, não o que está no código hoje.
+Em CBR a placa preenchia o alvo independente do conteúdo, e o que ela economizava codificando era gasto de novo empacotando e enviando oito vezes mais RTP, o que anulava a economia inteira.
+Trocar para VBR não bastou: sem piso de quantização o controlador continua baixando o quantizador até gastar o alvo, codificando cada vez mais perto de lossless uma imagem que não se move.
+
+A terceira linha é o estado atual, e é a única das quatro em que a tarefa 4 do M8 entrega o que existe para entregar.
+
+Duas ressalvas, das mesmas que valem para o resto desta página:
+
+- **A medida é de tela parada.**
+  É o pior caso para o CBR e o melhor para o piso de QP.
+  Tela em movimento não foi medida, e o piso de QP 24 limita a qualidade máxima, então o ganho em movimento real é uma previsão e não um número.
+- **A CPU tem espalhamento.**
+  Três corridas de NVENC deram 67,4%, 70,4% e 76,2%; três de software deram 78,9%, 82,6% e 83,7%.
+  As faixas não se sobrepõem, então a diferença de cerca de dez pontos é real, mas citar um único par de números como se fossem exatos não seria.
+
 ### O que estes números não dizem
 
 Os cinco clientes rodam **no mesmo processo e na mesma máquina**, sobre loopback.
@@ -105,15 +136,35 @@ Isso é medido de dois jeitos, porque nenhum dos dois sozinho é honesto.
 
 O primeiro é `scripts/netem.sh`, que aplica `tc netem` a uma interface.
 É o mais fiel: degrada as filas do próprio sistema operacional, para todos os processos e nos dois sentidos.
-Também precisa de root, só existe no Linux, e nesta máquina não roda: o kernel foi atualizado sem reiniciar, e os módulos do kernel em execução não existem mais, então `sch_netem` não carrega.
-O script diagnostica exatamente esse caso em vez de deixar o `tc` responder "Specified qdisc kind is unknown".
+Precisa de root e só existe no Linux.
+Por um tempo não rodou nesta máquina, porque o kernel havia sido atualizado sem reiniciar e `sch_netem` não carregava; o script diagnostica exatamente esse caso em vez de deixar o `tc` responder "Specified qdisc kind is unknown".
+Depois do reboot ele roda, e a medição está abaixo.
 
 O segundo é o injetor descrito em `client/src/media/network_impairment.hpp`, que danifica os pacotes nos próprios sockets UDP do cliente, abaixo do DTLS e acima do sistema operacional.
 Não precisa de privilégio nenhum, roda nas três plataformas, e degrada exatamente o enlace de um participante com o SFU.
 Tudo abaixo dele é real: Opus real, SRTP real, jitter buffer real, RTCP real.
 O que é simulado é só o fio.
 
-### Cinco participantes com 5% de perda
+### Cinco participantes com 5% de perda no `tc netem`
+
+A metade em nível de fio, que faltava até o reboot.
+`sudo scripts/netem.sh apply lossy` põe 5% de perda no loopback, o que atinge todos os processos e também a WebSocket de signaling.
+
+Três corridas de cada codificador, com a sala em regime:
+
+```text
+                  CPU, cinco clientes         fps nos espectadores   perdidos por participante
+NVENC             67,4%  70,4%  76,2%         27,0  30,0  30,0              ~600
+OpenH264          78,9%  82,6%  83,7%         29,6  29,8  29,8              ~590
+```
+
+Ninguém cai, e a estimativa de banda cai de 3000 kbps em enlace limpo para 1840 a 2039 kbps sob perda.
+Isso é o estimador do SFU descrito na seção do bitrate reagindo à perda real do sistema operacional, e não só à injetada no cliente, que é a razão de esta medição existir separada da outra.
+
+O 27,0 da primeira corrida do NVENC não se repetiu nas outras duas e não foi investigado além disso.
+Uma corrida isolada abaixo das vizinhas, com as outras duas em 30,0, é ruído até que apareça de novo.
+
+### Cinco participantes com 5% de perda injetada no cliente
 
 A mesma sala do benchmark acima, com 5% de perda injetada em cada sentido depois que a chamada já estava em regime.
 
@@ -238,9 +289,9 @@ Meta da seção 22: menos de 3 segundos. Folgado.
 | FPS | 30 | 29,7 em 30 s, 30,0 em 10 min |
 | Participantes | 5 | 5 |
 | Áudio | 48 kHz Opus | 48 kHz Opus |
-| Vídeo | H.264 | H.264, OpenH264 em software |
+| Vídeo | H.264 | H.264, NVENC na placa com OpenH264 como fallback |
 | Latência | < 150 ms | 1 ms em loopback; sobrevive a 492 ms injetados; sem medição em rede real |
-| Perda de pacotes | sobreviver a 5% | 29,7 FPS e chamada de pé com 5% injetados nos dois sentidos |
-| CPU | baixo consumo | 15,6% a 17,2% de um núcleo por cliente, com a ressalva acima |
+| Perda de pacotes | sobreviver a 5% | 29,7 FPS com 5% injetados nos dois sentidos, 30,0 com 5% no `tc netem` |
+| CPU | baixo consumo | 13,9% a 17,2% de um núcleo por cliente, com a ressalva acima |
 | Memória | < 500 MB por cliente | 35 a 38 MiB por cliente, com as ressalvas acima |
 | Startup | < 3 s | 18 a 26 ms |

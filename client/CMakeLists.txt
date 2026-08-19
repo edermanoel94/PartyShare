@@ -23,6 +23,8 @@ add_library(dv_client_core STATIC
   src/app/network_quality.hpp
   src/media/media_session.cpp
   src/media/media_session.hpp
+  src/media/network_impairment.cpp
+  src/media/network_impairment.hpp
   src/network/signaling_client.cpp
   src/network/signaling_client.hpp
   src/video/frame_queue.hpp
@@ -49,12 +51,20 @@ if(DV_BUILD_CLIENT_MEDIA)
   # A target of its own because the strict warning set cannot be applied to a
   # translation unit that includes libwebrtc headers.
   add_library(dv_client_media STATIC
+    src/webrtc/impaired_socket_factory.cpp
+    src/webrtc/impaired_socket_factory.hpp
     src/webrtc/libwebrtc_media_session.cpp
     src/webrtc/libwebrtc_screen_capturer.cpp
   )
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  # The two libraries depend on each other: the core calls into the media layer
+  # to create a session, and the media layer calls back into the core for the
+  # network impairment counters. Declaring both directions is what makes CMake
+  # repeat them on the link line; leaving the second one out builds and then
+  # fails to link, in whichever order the linker happened to be given.
   target_link_libraries(dv_client_media PUBLIC dv::shared libwebrtc::libwebrtc)
+  target_link_libraries(dv_client_media PRIVATE dv_client_core)
   dv_enable_sanitizers(dv_client_media)
 
   # DV_WITH_LIBWEBRTC compiles out the stub in media/media_session.cpp, so that

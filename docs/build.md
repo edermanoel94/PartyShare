@@ -62,6 +62,7 @@ Duas variáveis de ambiente ajudam a depurar mídia:
 | `DV_AUDIO_NULL_DEVICE` | Usa um dispositivo de áudio nulo em vez do sistema. Serve para máquina sem placa de som e para CI. Nada é capturado nem reproduzido. |
 | `DV_VIRTUAL_INPUT_DEVICE` | Nome do dispositivo de captura que os testes de mídia devem usar. Exportado pelo `scripts/virtual_audio.sh`, descrito abaixo. |
 | `DV_VIRTUAL_OUTPUT_DEVICE` | O mesmo para a reprodução. |
+| `DV_DUMP_SDP` | Faz o SFU registrar cada oferta que envia. É a forma de responder "isto foi negociado?" sobre codecs, extensões e feedback. |
 
 ### Dispositivo de áudio virtual
 
@@ -82,6 +83,24 @@ Em uma máquina que já tem servidor de som o script se conecta ao que existe e 
 Sem servidor de som algum, que é o caso de um runner de CI, ele sobe um servidor privado e aí sim torna os dispositivos virtuais os padrão.
 
 O microfone virtual é um `module-remap-source` sobre o monitor de um sink nulo, e não o monitor direto: o backend PulseAudio da libwebrtc ignora toda fonte que monitora um sink quando enumera dispositivos de captura, e um dispositivo que ela não lista é um dispositivo que ela não abre.
+
+### Rede degradada
+
+Os testes de mídia degradam a rede por dentro, pelos sockets do próprio cliente, e por isso rodam sem privilégio e sem preparo nenhum.
+Para degradar a rede de verdade, nas filas do sistema operacional, existe `scripts/netem.sh`:
+
+```sh
+sudo scripts/netem.sh apply lossy      # 5% de perda, o número da seção 22
+sudo scripts/netem.sh apply distant    # 150 ms de latência com jitter
+sudo scripts/netem.sh apply awful      # os dois, mais reordenação
+sudo scripts/netem.sh clear
+```
+
+Precisa de root e do módulo `sch_netem`, que não carrega em uma máquina cujo kernel foi atualizado sem reiniciar.
+O script diz isso em vez de deixar o `tc` responder que a qdisc é desconhecida.
+`DV_NETEM_DRY_RUN=1` mostra o comando que seria executado, sem executá-lo e sem root.
+
+A diferença entre os dois caminhos, e os números medidos com cada um, estão em [benchmarks.md](benchmarks.md).
 
 ## Compilar
 

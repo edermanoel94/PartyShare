@@ -126,6 +126,11 @@ Sem ele a mídia é descartada silenciosamente na chegada.
 
 Pedidos de keyframe atravessam o SFU. Um espectador que precisa de um quadro intra manda PLI na track em que recebe, e o servidor repassa o pedido para as tracks de vídeo que sobem naquela sala, porque nada no meio decodifica o vídeo para produzir um.
 
+Retransmissão vale nos dois sentidos, e as duas linhas de vídeo negociam `a=rtcp-fb:96 nack`.
+Um espectador que perdeu um pacote pede aquele pacote ao SFU, que o reenvia de um cache dos últimos.
+O SFU faz o mesmo pedido para cima quando um pacote se perde a caminho dele, em vez de deixar o buraco seguir para todos os espectadores.
+Sem essa segunda metade, um enlace com perda transforma o compartilhamento de tela em uma sequência de pedidos de keyframe que nunca chegam inteiros; a medição está em [benchmarks.md](benchmarks.md).
+
 Um servidor sem roteamento de mídia responde `media_unavailable` a qualquer mensagem endereçada a `sfu`.
 
 ### 4.3.1 Reconexão

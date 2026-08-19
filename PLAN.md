@@ -436,7 +436,7 @@ Objetivo: transformar as metas da seção 22 em números medidos.
 Tarefas:
 
 1. [x] Testes de performance com 5 participantes em 720p a 30 FPS, medindo CPU, memória e latência.
-2. Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
+2. [x] Simulação de rede com perda de pacotes, latência alta e jitter, usando `tc netem` no Linux.
 3. Ativar a adaptação de bitrate com base no feedback de congestion control.
 4. Encoders por hardware: Media Foundation ou NVENC no Windows, VideoToolbox no macOS, VAAPI no Linux, todos atrás da interface `VideoEncoder`, com fallback automático para software.
 5. [x] Rodar a suíte completa sob AddressSanitizer e UndefinedBehaviorSanitizer, e passar clang-tidy e cppcheck sem avisos.
@@ -445,12 +445,45 @@ Tarefas:
 
 Critérios de aceitação:
 
-- [x] Todas as métricas da seção 22 medidas e registradas em `docs/benchmarks.md`.
-  Menos a latência, que em loopback mede o laço local e não a rede. Depende da tarefa 2.
-- A chamada sobrevive a 5% de perda de pacotes com degradação suave e sem queda.
-  Depende da tarefa 2.
+- [x] Todas as métricas da seção 22 medidas e registradas em [docs/benchmarks.md](docs/benchmarks.md).
+  A latência continua sendo a exceção parcial: a chamada foi medida sobrevivendo a 492 ms de ida e volta injetados, o que responde "aguenta", mas o "abaixo de 150 ms em rede real" continua sem uma rede real para ser medido.
+- [x] A chamada sobrevive a 5% de perda de pacotes com degradação suave e sem queda.
+  Cinco participantes, um compartilhando a tela, com 5% de perda injetada nos dois sentidos: os quatro espectadores seguem a 29,8 FPS, o mesmo número da corrida sem perda, e ninguém cai.
+  Só passou a ser verdade depois da correção descrita abaixo. Antes dela, a tela congelava.
 - [x] Nenhum achado aberto de alta severidade na revisão de segurança.
   Havia um, o hash de senha, corrigido nesta rodada. Restam três de severidade média, descritos em [docs/security-review.md](docs/security-review.md).
+
+### Como a rede é degradada, e por que de dois jeitos
+
+A tarefa pede `tc netem`, e `scripts/netem.sh` é isso: perfis nomeados (`lossy`, `distant`, `awful`) aplicados a uma interface.
+É a medição mais fiel que existe, porque degrada as filas do próprio sistema operacional, para todos os processos.
+Também precisa de root, só existe no Linux, e não roda em uma máquina cujo kernel foi atualizado sem reiniciar, que é o caso desta.
+
+Por isso existe a outra metade, em `client/src/media/network_impairment.hpp`: o cliente danifica os pacotes nos seus próprios sockets UDP, abaixo do DTLS e acima do sistema operacional.
+A libwebrtc permite injetar a fábrica de sockets que a PeerConnection usa, e essa é a única costura da pilha onde um pacote pode ser descartado ou atrasado depois do codificador e antes do sistema operacional, sem privilégio e sem ferramenta de plataforma.
+
+Isso custou trocar `CreatePeerConnectionFactory` pela forma modular, que é a única que aceita uma `PacketSocketFactory`.
+O injetor fica inerte por padrão, e nada na interface, na configuração ou na linha de comando o liga: só uma chamada dentro do processo.
+
+As duas metades medem a mesma coisa e nenhuma substitui a outra.
+A do `netem` é a honesta; a do cliente é a que roda sem privilégio, nas três plataformas e no CI.
+
+### O congelamento do compartilhamento de tela, encontrado aqui
+
+A primeira execução do teste de perda entregou **4 quadros em 15 segundos** de tela compartilhada. Não era degradação, era congelamento.
+
+A aritmética explica: um quadro intra de uma tela em 1280x720 tem mais de cem pacotes, e a 5% de perda a chance de os cem chegarem inteiros é menor que 1%.
+O único reparo que o espectador tinha era pedir outro quadro intra, que chegava quebrado, e o pedido recomeçava.
+O SFU carregou oito pedidos de keyframe em quinze segundos e nenhum produziu imagem.
+
+Faltavam as duas pontas da retransmissão, e o SFU agora tem as duas:
+
+- `rtc::RtcpNackResponder` na track de saída, que reenvia ao espectador o pacote que ele perdeu, de um cache dos últimos.
+- `dv::server::sfu::NackRequester` na track de entrada, escrito aqui porque a libdatachannel responde NACK e nunca pede um.
+  Um buraco na sequência vira um NACK genérico da RFC 4585, o compartilhador reenvia, e o SFU encaminha um fluxo já remendado em vez de espalhar a perda para todos os espectadores.
+
+Depois disso, o mesmo caso entrega **443 quadros em 15 segundos**, com zero pedidos de keyframe.
+Os números completos, com a ressalva de que a tela medida estava parada, estão em [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Sobre a tarefa 5, e o que a análise estática encontrou
 
@@ -535,8 +568,9 @@ O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
 
-O M8 está em andamento: as tarefas 1, 5 e 6 estão feitas, e faltam a simulação de rede, a adaptação de bitrate, os encoders por hardware e o crash reporting.
+O M8 está em andamento: as tarefas 1, 2, 5 e 6 estão feitas, e faltam a adaptação de bitrate, os encoders por hardware e o crash reporting.
 Os números da seção 22 estão em [docs/benchmarks.md](docs/benchmarks.md) e a revisão de segurança em [docs/security-review.md](docs/security-review.md).
+A simulação de rede encontrou e corrigiu um congelamento do compartilhamento de tela sob perda, que era a diferença entre "degrada" e "para".
 
 O M7 está entregue nas sete tarefas: três telas, diálogo de configurações, indicador de rede, erros em português e reconexão automática.
 Faltam as duas medições dos critérios, o perfil da thread de UI e o tempo de startup.

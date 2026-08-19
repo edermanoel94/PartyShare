@@ -1,0 +1,209 @@
+// What a bad network does to a call, measured rather than assumed.
+//
+// Section 22 of SPEC.md asks the call to survive 5% packet loss with a smooth
+// degradation and no drop, and task 2 of M8 asks for that to be produced with
+// `tc netem`. scripts/netem.sh is that, and needs root. This is the other half,
+// described in client/src/media/network_impairment.hpp: the client damages its
+// own UDP sockets, which needs no privilege, runs on every platform, and
+// impairs exactly the link between one participant and the SFU.
+//
+// Everything below the injector is real: real Opus, real SRTP, real jitter
+// buffer, real RTCP feedback. What is simulated is only the wire.
+
+#include <cstdio>
+
+#include "media/network_impairment.hpp"
+#include "media_test_client.hpp"
+
+namespace {
+
+using dv::client::media::network_impairment_counters;
+using dv::client::media::NetworkImpairment;
+
+/// Long enough for the loss to be more than a coincidence: at 50 audio packets
+/// a second in each direction, fifteen seconds is some fifteen hundred packets
+/// per link and around seventy five losses.
+constexpr auto kUnderImpairment = 15000ms;
+
+class ImpairedNetworkTest : public MediaEndToEndTest {
+ protected:
+  void TearDown() override {
+    // The impairment is process wide, and leaving it on would quietly damage
+    // whatever runs next in this binary.
+    dv::client::media::set_network_impairment({});
+    MediaEndToEndTest::TearDown();
+  }
+
+  /// Two clients in a room, both connected, with audio moving between them.
+  void start_a_call() {
+    Client& ana = add("ana");
+    ASSERT_TRUE(ana.login());
+    room_ = ana.create_room();
+    ASSERT_FALSE(room_.empty());
+    ASSERT_TRUE(ana.join(room_));
+    ASSERT_TRUE(ana.wait_until_in_call());
+
+    Client& bruno = add("bruno");
+    ASSERT_TRUE(bruno.login());
+    ASSERT_TRUE(bruno.join(room_));
+    ASSERT_TRUE(bruno.wait_until_in_call());
+
+    ASSERT_TRUE(wait_until([&] { return server_->media_router()->audio_packets_forwarded() > 0; }))
+        << "no audio was flowing before the network was touched, so nothing below would mean "
+           "anything";
+  }
+
+  [[nodiscard]] Client& ana() { return *clients_.at(0); }
+  [[nodiscard]] Client& bruno() { return *clients_.at(1); }
+
+  std::string room_;
+};
+
+TEST_F(ImpairedNetworkTest, ACallSurvivesFivePercentPacketLoss) {
+  start_a_call();
+
+  const std::uint64_t received_before = bruno().last_stats().packets_received;
+  const std::uint64_t forwarded_before = server_->media_router()->audio_packets_forwarded();
+
+  dv::client::media::reset_network_impairment_counters();
+  dv::client::media::set_network_impairment({.loss = 0.05});
+  std::this_thread::sleep_for(kUnderImpairment);
+
+  const auto counters = network_impairment_counters();
+  const auto stats = bruno().last_stats();
+
+  std::printf("\n--- audio on a link losing 5%% of packets, for %llu s ---\n",
+              static_cast<unsigned long long>(kUnderImpairment.count() / 1000));
+  std::printf("injected         %llu of %llu out, %llu of %llu in\n",
+              static_cast<unsigned long long>(counters.packets_dropped_outbound),
+              static_cast<unsigned long long>(counters.packets_sent),
+              static_cast<unsigned long long>(counters.packets_dropped_inbound),
+              static_cast<unsigned long long>(counters.packets_received));
+  std::printf("receiver         %llu packets arrived, %llu counted lost\n",
+              static_cast<unsigned long long>(stats.packets_received - received_before),
+              static_cast<unsigned long long>(stats.packets_lost));
+  std::printf("quality          rtt %.0f ms, jitter %.1f ms\n", stats.round_trip_time_ms,
+              stats.jitter_ms);
+  std::fflush(stdout);
+
+  // First, that the damage was really done. Without this the rest of the case
+  // would pass just as well on a perfect network.
+  ASSERT_GT(counters.packets_sent, 500U) << "barely any packets went through the injector";
+  ASSERT_GT(counters.packets_received, 500U);
+  const double outbound_rate = static_cast<double>(counters.packets_dropped_outbound) /
+                               static_cast<double>(counters.packets_sent);
+  const double inbound_rate = static_cast<double>(counters.packets_dropped_inbound) /
+                              static_cast<double>(counters.packets_received);
+  EXPECT_NEAR(outbound_rate, 0.05, 0.02) << "the outgoing loss was not what was asked for";
+  EXPECT_NEAR(inbound_rate, 0.05, 0.02) << "the incoming loss was not what was asked for";
+
+  // Then, that the call is still a call.
+  EXPECT_EQ(ana().session().state(), CallSession::State::InCall) << "the call dropped";
+  EXPECT_EQ(bruno().session().state(), CallSession::State::InCall) << "the call dropped";
+  EXPECT_EQ(ana().errors(), 0U);
+  EXPECT_EQ(bruno().errors(), 0U);
+
+  // And that audio kept moving throughout, rather than stopping and being
+  // counted as survived because nobody hung up. Fifteen seconds at 50 packets
+  // a second is 750; asking for 300 leaves room for a slow machine without
+  // letting a stalled stream through.
+  EXPECT_GT(stats.packets_received - received_before, 300U)
+      << "the connection stayed up but the audio stopped";
+  EXPECT_GT(server_->media_router()->audio_packets_forwarded() - forwarded_before, 300U);
+
+  // The loss is visible where it should be, in the receiver's own accounting.
+  EXPECT_GT(stats.packets_lost, 0U) << "libwebrtc never noticed the loss the injector caused";
+
+  // Degradation, not collapse: the loss the receiver sees is of the order of
+  // what was injected, not a multiple of it. Opus carries one frame per packet,
+  // so 5% of packets lost is 5% of the audio, which is what "smooth" means
+  // here.
+  const double observed = static_cast<double>(stats.packets_lost) /
+                          static_cast<double>(stats.packets_received + stats.packets_lost);
+  EXPECT_LT(observed, 0.15) << "the receiver lost far more than was injected, which means "
+                               "something downstream amplified the loss";
+}
+
+TEST_F(ImpairedNetworkTest, ACallSurvivesHalfASecondOfLatencyAndJitter) {
+  start_a_call();
+
+  const std::uint64_t received_before = bruno().last_stats().packets_received;
+
+  // 250 ms each way is half a second round trip, which is past the 150 ms
+  // section 22 asks for and into the range where a conversation is awkward but
+  // still a conversation. The jitter is what the jitter buffer has to absorb.
+  dv::client::media::reset_network_impairment_counters();
+  dv::client::media::set_network_impairment({.delay = 250ms, .jitter = 30ms});
+  std::this_thread::sleep_for(kUnderImpairment);
+
+  const auto stats = bruno().last_stats();
+
+  std::printf("\n--- audio on a link with 250 ms of latency and 30 ms of jitter ---\n");
+  std::printf("packets held     %llu\n",
+              static_cast<unsigned long long>(network_impairment_counters().packets_delayed));
+  std::printf("receiver         %llu packets arrived, rtt %.0f ms, jitter %.1f ms\n",
+              static_cast<unsigned long long>(stats.packets_received - received_before),
+              stats.round_trip_time_ms, stats.jitter_ms);
+  std::fflush(stdout);
+
+  EXPECT_GT(network_impairment_counters().packets_delayed, 500U)
+      << "no packet was held back, so the latency was never applied";
+  EXPECT_EQ(ana().session().state(), CallSession::State::InCall);
+  EXPECT_EQ(bruno().session().state(), CallSession::State::InCall);
+  EXPECT_GT(stats.packets_received - received_before, 300U);
+
+  // The injected delay shows up in libwebrtc's own measurement, which is the
+  // cross check that the injector does what it says: two 250 ms hops make a
+  // round trip of about half a second, and the loopback contributes nothing.
+  EXPECT_GT(stats.round_trip_time_ms, 300.0)
+      << "the round trip time did not move, so the delay was not on the path being measured";
+}
+
+TEST_F(ImpairedNetworkTest, AScreenShareKeepsArrivingUnderPacketLoss) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  start_a_call();
+
+  ASSERT_TRUE(ana().session().start_screen_share("").ok());
+  ASSERT_TRUE(wait_until([&] { return bruno().remote_frames() > 0; }, 30000ms))
+      << "no frame arrived before the network was touched";
+
+  const std::uint64_t frames_before = bruno().remote_frames();
+
+  dv::client::media::reset_network_impairment_counters();
+  dv::client::media::set_network_impairment({.loss = 0.05});
+  std::this_thread::sleep_for(kUnderImpairment);
+
+  const std::uint64_t frames_after = bruno().remote_frames();
+
+  // Video is where loss hurts most: a lost packet costs a whole frame, and a
+  // lost keyframe costs every frame until the next one. What has to hold is
+  // that the picture keeps coming, not that it comes at full rate.
+  auto* router = server_->media_router();
+  const auto repair = router->video_repair_stats();
+
+  std::printf("\n--- a 1280x720 screen share on a link losing 5%% of packets ---\n");
+  std::printf("frames           %llu in %llu s\n",
+              static_cast<unsigned long long>(frames_after - frames_before),
+              static_cast<unsigned long long>(kUnderImpairment.count() / 1000));
+  std::printf("SFU              %llu video packets forwarded, %llu keyframe requests carried\n",
+              static_cast<unsigned long long>(router->video_packets_forwarded()),
+              static_cast<unsigned long long>(router->keyframe_requests_forwarded()));
+  std::printf("repair           %llu requests, %llu packets missing, %llu recovered\n",
+              static_cast<unsigned long long>(repair.requests_sent),
+              static_cast<unsigned long long>(repair.packets_missing),
+              static_cast<unsigned long long>(repair.packets_repaired));
+  std::fflush(stdout);
+
+  EXPECT_GT(frames_after - frames_before, 30U)
+      << "the shared screen froze under loss: " << (frames_after - frames_before)
+      << " frames in fifteen seconds, with " << router->video_packets_forwarded()
+      << " video packets forwarded and " << router->keyframe_requests_forwarded()
+      << " keyframe requests carried to the sharer";
+  EXPECT_TRUE(ana().session().sharing_screen());
+  EXPECT_EQ(bruno().session().state(), CallSession::State::InCall);
+}
+
+}  // namespace

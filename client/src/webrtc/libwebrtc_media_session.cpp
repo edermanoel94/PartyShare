@@ -29,7 +29,8 @@
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
 #include <api/audio_codecs/builtin_audio_encoder_factory.h>
 #include <api/audio_options.h>
-#include <api/create_peerconnection_factory.h>
+#include <api/create_modular_peer_connection_factory.h>
+#include <api/enable_media.h>
 #include <api/environment/environment.h>
 #include <api/environment/environment_factory.h>
 #include <api/jsep.h>
@@ -52,6 +53,7 @@
 #include <api/video_codecs/builtin_video_encoder_factory.h>
 #include <libyuv/convert.h>
 #include <libyuv/convert_argb.h>
+#include <p2p/base/basic_packet_socket_factory.h>
 #include <rtc_base/logging.h>
 #include <rtc_base/ssl_adapter.h>
 #include <rtc_base/thread.h>
@@ -59,8 +61,10 @@
 #include <dv/logging/logger.hpp>
 
 #include "media/media_session.hpp"
+#include "media/network_impairment.hpp"
 #include "video/frame_queue.hpp"
 #include "video/screen_capturer.hpp"
+#include "webrtc/impaired_socket_factory.hpp"
 
 namespace dv::client::media {
 namespace {
@@ -283,18 +287,29 @@ class Engine {
     processing.pipeline.multi_channel_render = false;
     processing.pipeline.maximum_internal_processing_rate = 48000;
 
-    webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing =
-        webrtc::BuiltinAudioProcessingBuilder(processing).Build(environment);
-    if (audio_processing == nullptr) {
-      failure_ = "could not create the audio processing module";
-      return;
-    }
+    // The modular factory rather than the one line CreatePeerConnectionFactory,
+    // for one reason: it is the only form that takes a PacketSocketFactory,
+    // and that is the seam the network impairment of M8 hangs on. See
+    // client/src/media/network_impairment.hpp. With no impairment set the
+    // wrapper forwards every call untouched.
+    webrtc::PeerConnectionFactoryDependencies dependencies;
+    dependencies.network_thread = network_thread_.get();
+    dependencies.worker_thread = worker_thread_.get();
+    dependencies.signaling_thread = signaling_thread_.get();
+    dependencies.env = environment;
+    dependencies.adm = audio_device_;
+    dependencies.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
+    dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
+    dependencies.audio_processing_builder =
+        std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
+    dependencies.video_encoder_factory = webrtc::CreateBuiltinVideoEncoderFactory();
+    dependencies.video_decoder_factory = webrtc::CreateBuiltinVideoDecoderFactory();
+    dependencies.packet_socket_factory = make_impaired_socket_factory(
+        std::make_unique<webrtc::BasicPacketSocketFactory>(network_thread_->socketserver()),
+        network_thread_.get());
 
-    factory_ = webrtc::CreatePeerConnectionFactory(
-        network_thread_.get(), worker_thread_.get(), signaling_thread_.get(), audio_device_,
-        webrtc::CreateBuiltinAudioEncoderFactory(), webrtc::CreateBuiltinAudioDecoderFactory(),
-        webrtc::CreateBuiltinVideoEncoderFactory(), webrtc::CreateBuiltinVideoDecoderFactory(),
-        /*audio_mixer=*/nullptr, std::move(audio_processing));
+    webrtc::EnableMedia(dependencies);
+    factory_ = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
 
     if (factory_ == nullptr) {
       failure_ = "could not create the peer connection factory";

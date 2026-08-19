@@ -12,12 +12,15 @@ add_executable(dv_unit_tests
   unit/test_video_pipeline.cpp
   unit/test_reconnect_delay.cpp
   unit/test_network_quality.cpp
+  unit/test_network_impairment.cpp
+  unit/test_nack_requester.cpp
 )
 
 target_link_libraries(dv_unit_tests PRIVATE
   dv::shared
   dv::server_core
   dv::client_core
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
@@ -62,6 +65,7 @@ gtest_discover_tests(dv_integration_tests
 if(DV_BUILD_CLIENT_MEDIA)
   add_executable(dv_media_tests
     integration/test_media_end_to_end.cpp
+    integration/test_network_impairment.cpp
     integration/test_screen_capture.cpp
   )
 

@@ -17,6 +17,7 @@
 
 #include <dv/protocol/message.hpp>
 
+#include "sfu/nack_requester.hpp"
 #include "signaling/hub.hpp"
 
 namespace dv::server::sfu {
@@ -114,6 +115,15 @@ class MediaRouter : public MediaSignals {
     return keyframe_requests_forwarded_.load();
   }
 
+  /// What the repair of the incoming screen share is doing, summed over the
+  /// participants sending one. See sfu/nack_requester.hpp.
+  struct VideoRepairStats {
+    std::uint64_t requests_sent = 0;
+    std::uint64_t packets_missing = 0;
+    std::uint64_t packets_repaired = 0;
+  };
+  [[nodiscard]] VideoRepairStats video_repair_stats() const;
+
  private:
   struct Outbound {
     std::shared_ptr<rtc::Track> track;
@@ -167,6 +177,9 @@ class MediaRouter : public MediaSignals {
     /// funciona sem reiniciar a chamada" true by construction rather than by
     /// getting a mid-call offer right.
     std::optional<Outbound> video_outbound;
+    /// Asks the sharer for the packets that went missing on the way in, so the
+    /// hole is filled once here rather than once per viewer.
+    std::shared_ptr<NackRequester> video_nacks;
     /// Mids are assigned by us because we write the offer. 0 is the inbound
     /// track, everything after it is an outbound one.
     unsigned next_mid = 0;

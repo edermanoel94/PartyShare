@@ -1,5 +1,6 @@
 #include "sfu/media_router.hpp"
 
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -108,6 +109,13 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
           DV_LOG_WARN("SFU: ignoring a local {} for {}", description.typeString(), user_id);
           return;
         }
+        // The offer is the contract with the client: which codecs, which
+        // extensions, and which feedback the SFU is willing to act on. One
+        // environment variable away rather than a rebuild, because the
+        // question "was nack negotiated" comes up every time video misbehaves.
+        if (std::getenv("DV_DUMP_SDP") != nullptr) {
+          DV_LOG_INFO("SFU: offer to {}\n{}", user_id, std::string(description));
+        }
         enqueue(user_id, protocol::Offer{.room_id = room_id,
                                          .from_user_id = std::string(protocol::kSfuUserId),
                                          .to_user_id = user_id,
@@ -172,7 +180,12 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
                                         rtc::Description::Direction::RecvOnly);
   video_inbound.addH264Codec(options_.h264_payload_type);
   session.video_inbound = session.connection->addTrack(video_inbound);
-  session.video_inbound->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
+  auto video_receiving = std::make_shared<rtc::RtcpReceivingSession>();
+  // Repairs the incoming screen share instead of letting the loss travel on to
+  // every viewer. See sfu/nack_requester.hpp.
+  session.video_nacks = std::make_shared<NackRequester>();
+  video_receiving->addToChain(session.video_nacks);
+  session.video_inbound->setMediaHandler(video_receiving);
   session.video_inbound->onMessage(
       [this, user_id, room_id](const rtc::binary& packet) {
         forward_video(user_id, room_id, packet);
@@ -294,6 +307,20 @@ bool MediaRouter::has_video_tracks(const std::string& user_id) const {
          session->video_outbound.has_value();
 }
 
+MediaRouter::VideoRepairStats MediaRouter::video_repair_stats() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  VideoRepairStats total;
+  for (const auto& [user_id, session] : sessions_) {
+    if (session.video_nacks == nullptr) {
+      continue;
+    }
+    total.requests_sent += session.video_nacks->requests_sent();
+    total.packets_missing += session.video_nacks->packets_missing();
+    total.packets_repaired += session.video_nacks->packets_repaired();
+  }
+  return total;
+}
+
 MediaRouter::Session* MediaRouter::find_session(const std::string& user_id) {
   const auto it = sessions_.find(user_id);
   return it == sessions_.end() ? nullptr : &it->second;
@@ -388,6 +415,18 @@ void MediaRouter::add_video_outbound_track(Session& session) {
   const std::string room_id = session.room_id;
   reporter->addToChain(std::make_shared<rtc::PliHandler>(
       [this, room_id] { request_keyframe_from_sharer(room_id); }));
+
+  // Answers a viewer that says it missed packet number n by sending that
+  // packet again, out of a cache of the last few hundred.
+  //
+  // Without it the only repair a viewer has is to ask for a new intra frame,
+  // and on a lossy link that does not converge: an intra frame of a 720p
+  // screen is upwards of a hundred packets, so at 5% loss it almost never
+  // arrives whole, and the viewer asks again. Measured on this project, a
+  // screen share on a 5% loss link delivered four frames in fifteen seconds
+  // while the SFU carried eight keyframe requests. Retransmission is what
+  // turns that into a picture that degrades instead of freezing.
+  reporter->addToChain(std::make_shared<rtc::RtcpNackResponder>());
   outbound.track->setMediaHandler(reporter);
 
   session.video_outbound = std::move(outbound);

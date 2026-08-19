@@ -40,6 +40,27 @@ Com vcpkg:
 cmake --preset linux-release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 ```
 
+## Camada de mídia do cliente
+
+O cliente compila sem a libwebrtc por padrão.
+Nesse modo tudo funciona menos o áudio: `create_audio_session` falha com `media_unavailable`, e a interface e o signaling continuam inteiros.
+
+Para compilar com mídia é preciso a árvore que o `scripts/build_webrtc.sh` produz, pelos motivos da seção 5 de [webrtc-toolchain.md](webrtc-toolchain.md):
+
+```sh
+cmake -S . -B build/media \
+  -DDV_BUILD_CLIENT_MEDIA=ON \
+  -DDV_WEBRTC_ROOT=$HOME/.cache/desktop-voice/webrtc/dist
+cmake --build build/media
+```
+
+Duas variáveis de ambiente ajudam a depurar mídia:
+
+| Variável | Efeito |
+| --- | --- |
+| `DV_WEBRTC_LOG` | `warning`, `info` ou `verbose`. Liga o log interno da libwebrtc, que é a única forma de ver por que um dispositivo não abriu ou um codec foi recusado. |
+| `DV_AUDIO_NULL_DEVICE` | Usa um dispositivo de áudio nulo em vez do sistema. Serve para máquina sem placa de som e para CI. Nada é capturado nem reproduzido. |
+
 ## Compilar
 
 ```sh

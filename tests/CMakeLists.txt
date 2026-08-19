@@ -32,6 +32,7 @@ add_executable(dv_integration_tests
   integration/test_signaling_server.cpp
   integration/test_signaling_client.cpp
   integration/test_sfu.cpp
+  integration/test_call_session.cpp
 )
 
 target_include_directories(dv_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/integration)
@@ -50,3 +51,24 @@ gtest_discover_tests(dv_integration_tests
   PROPERTIES LABELS integration TIMEOUT 60
   DISCOVERY_TIMEOUT 30
 )
+
+# The media tests need libwebrtc, so they are a target of their own, built only
+# when the client media layer is. They are slower than the rest, because ICE and
+# DTLS take real time, and they are labelled separately for that reason.
+if(DV_BUILD_CLIENT_MEDIA)
+  add_executable(dv_media_tests integration/test_media_end_to_end.cpp)
+
+  target_link_libraries(dv_media_tests PRIVATE
+    dv::client_core
+    dv::server_core
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  dv_enable_sanitizers(dv_media_tests)
+
+  gtest_discover_tests(dv_media_tests
+    PROPERTIES LABELS media TIMEOUT 180
+    DISCOVERY_TIMEOUT 60
+  )
+endif()

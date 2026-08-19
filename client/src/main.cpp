@@ -5,6 +5,8 @@
 
 #include <QApplication>
 
+#include "app/call_session.hpp"
+#include "audio/audio_session.hpp"
 #include "ui/main_window.hpp"
 
 int main(int argc, char* argv[]) {
@@ -35,7 +37,34 @@ int main(int argc, char* argv[]) {
   QApplication::setApplicationName(QStringLiteral("Voice Desktop"));
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
 
-  dv::ui::MainWindow window;
+  dv::client::app::CallSession::Options session_options;
+  session_options.signaling_url = config.network.signaling_url;
+  session_options.audio.ice_servers = config.network.stun_servers;
+  if (!config.network.turn_url.empty()) {
+    session_options.audio.ice_servers.push_back(config.network.turn_url);
+    session_options.audio.turn_username = config.network.turn_username;
+    session_options.audio.turn_password = config.network.turn_password;
+  }
+  session_options.audio.sample_rate_hz = config.audio.sample_rate_hz;
+  session_options.audio.channels = config.audio.channels;
+  session_options.audio.frame_duration_ms = config.audio.frame_duration_ms;
+  session_options.audio.echo_cancellation = config.audio.echo_cancellation;
+  session_options.audio.noise_suppression = config.audio.noise_suppression;
+  session_options.audio.automatic_gain_control = config.audio.automatic_gain_control;
+  session_options.audio.input_device = config.audio.input_device;
+  session_options.audio.output_device = config.audio.output_device;
+
+  if (!dv::client::audio::media_is_available()) {
+    DV_LOG_WARN(
+        "This build has no media layer, so calls will have no audio. "
+        "Rebuild with -DDV_BUILD_CLIENT_MEDIA=ON, see docs/build.md.");
+  }
+
+  // Declared before the window and destroyed after it: the window installs
+  // callbacks into the session, and removes them in its destructor.
+  dv::client::app::CallSession session(session_options);
+
+  dv::ui::MainWindow window(session);
   window.show();
 
   const int exit_code = QApplication::exec();

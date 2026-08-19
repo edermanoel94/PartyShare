@@ -204,7 +204,7 @@ Ele também captura um frame de 1920x1080 de verdade em X11, o que é a garantia
 
 ---
 
-### M4 — Fatia vertical: áudio entre dois clientes (em andamento)
+### M4 — Fatia vertical: áudio entre dois clientes
 
 Objetivo: a menor coisa que exercita UI, core, mídia, signaling e SFU juntos.
 É aqui que a arquitetura é validada de verdade.
@@ -212,16 +212,20 @@ Objetivo: a menor coisa que exercita UI, core, mídia, signaling e SFU juntos.
 Tarefas:
 
 1. [x] Cliente de signaling em `client/src/network`, rodando fora da thread de UI.
-2. [ ] Camada `client/src/webrtc`: criação de `PeerConnection`, negociação, coleta de candidatos ICE, track de áudio Opus a 48 kHz mono, 20 ms.
+2. [x] Camada `client/src/webrtc`: criação de `PeerConnection`, negociação, coleta de candidatos ICE, track de áudio Opus a 48 kHz mono, 20 ms.
 3. [x] SFU mínimo em `server/src/sfu`: uma sessão libdatachannel por participante, encaminhamento de RTP de áudio para todos os outros, reescrita de SSRC, encaminhamento de relatórios RTCP.
 4. [x] Servidor STUN configurável, com TURN previsto na configuração mas ainda não obrigatório.
-5. [ ] UI provisória: campo de ID de sala, botão de entrar, botão de mute.
-6. [ ] Métricas básicas no log: RTT, jitter, packet loss e bitrate, a cada 5 segundos.
+5. [x] UI provisória: campo de ID de sala, botão de entrar, botão de mute.
+6. [x] Métricas básicas no log: RTT, jitter, packet loss e bitrate, a cada 5 segundos.
 
 Decisão de topologia, tomada aqui e registrada na seção 4.3 de [docs/protocol.md](docs/protocol.md): **quem oferece é sempre o servidor**.
 O participante só responde.
 Isso deixa mids, SSRCs e payload types sob controle do SFU, e reduz o encaminhamento a reescrever um cabeçalho em vez de traduzir entre duas negociações independentes.
 O identificador reservado `sfu` é o endereço desse ponto de mídia, e uma mensagem endereçada a ele é consumida pelo servidor em vez de retransmitida.
+
+A camada de mídia do cliente fica atrás da interface `audio::AudioSession`, e a implementação sobre a libwebrtc é uma biblioteca à parte, ligada por `-DDV_BUILD_CLIENT_MEDIA=ON`.
+Sem ela o cliente ainda compila e roda, e é isso que mantém o servidor, os testes e o CI livres de uma biblioteca de 66 MB que precisa ser construída do fonte.
+Também é o que permite testar toda a ordem de operações de uma chamada com uma mídia de mentira, sem placa de som.
 
 O que já está verificado por teste de integração, com ICE, DTLS e RTP de verdade sobre a loopback:
 
@@ -229,6 +233,24 @@ O que já está verificado por teste de integração, com ICE, DTLS e RTP de ver
 - Cada participante recebe uma track por outro participante, com `a=msid` identificando de quem é a voz.
 - O áudio de um participante chega ao outro, e não volta para quem enviou.
 - Sair da sala remove a sessão e a track correspondente nos demais.
+- **Um cliente libwebrtc negocia com o SFU libdatachannel, conecta e entrega áudio.**
+  Esse era o risco alto listado na seção 5, e está retirado.
+
+### Problema conhecido: reabrir a captura no Linux
+
+A partir da quarta sessão de mídia criada no mesmo processo, o dispositivo PulseAudio da libwebrtc falha ao iniciar a captura:
+
+```text
+(audio_device_pulse_linux.cc:1084): failed to activate recording
+(thread.cc:551): Message to dv-worker took 10001ms to dispatch.
+```
+
+São dez segundos de thread de worker travada, duas vezes, e nesse intervalo nenhuma sessão nova consegue negociar.
+Para o produto isso significa que sair de uma chamada e entrar em outra repetidamente pode congelar o áudio por vinte segundos.
+
+Não é causado pelo nosso código: acontece com o `AudioDeviceModule` compartilhado, que é o desenho normal, e some com um dispositivo nulo.
+Fica para o M5, que é onde os dispositivos de áudio são o assunto, e onde trocar de microfone sem derrubar a chamada já é um critério de aceitação.
+Os testes de mídia rodam um caso por processo, que é o que o ctest já faz, e por isso não esbarram nele.
 
 Critérios de aceitação:
 
@@ -237,8 +259,16 @@ Critérios de aceitação:
 - A latência de áudio boca a ouvido fica abaixo de 150 ms em rede local.
 - A UI não trava durante a chamada.
 
-Nenhum deles pode ser avaliado antes da tarefa 2, porque exigem o cliente de mídia real.
-O que existe hoje prova o outro lado: o SFU encaminha áudio entre dois participantes libdatachannel de ponta a ponta.
+O caminho completo foi exercitado na aplicação real, com dois clientes na mesma máquina e servidor local:
+
+```text
+ana:    em chamada    rtt 1 ms · jitter 2.0 ms · perdidos 0 · 97 kbps ↑ · 95 kbps ↓
+bruno:  em chamada    rtt 1 ms · jitter 2.0 ms · perdidos 0 · 81 kbps ↑ · 82 kbps ↓
+```
+
+Cada um vê o outro na lista de participantes marcado como falando, e mutar um deles derruba o próprio envio para 1 kbps e a recepção do outro junto, com a lista dos dois mostrando o estado.
+
+Falta o que exige duas máquinas e instrumentação: medir a latência boca a ouvido em rede local, que é o terceiro critério.
 
 ---
 
@@ -378,7 +408,8 @@ Mapeamento dos 15 critérios da seção 29 da SPEC para os marcos que os cobrem.
 | Conflito entre a libc++ do Chromium e o libstdc++ do Qt | Baixo no Linux | Resolvido: o build do fonte com `use_custom_libcxx=false` foi concluído e verificado. Windows e macOS ainda não confirmados. |
 | Manter um build próprio da libwebrtc para 3 plataformas | Médio | Consequência da decisão acima. `scripts/build_webrtc.sh` automatiza, mas alguém precisa hospedar os binários e refazer a cada atualização de milestone. O build depende de uma libstdc++ 14 fixada, porque a faixa de versões que o clang do Chromium aceita é estreita. |
 | A libwebrtc não compila ou não linka no Windows ou no macOS | Alto | Linux já validado. Os outros dois rodam pelo job `webrtc-spike` do CI. |
-| Interoperação entre libwebrtc no cliente e libdatachannel no SFU | Alto | O M4 valida a interoperação com dois clientes antes de qualquer feature. |
+| Interoperação entre libwebrtc no cliente e libdatachannel no SFU | Retirado | Validado no M4 por teste de integração: negociação, ICE, DTLS e áudio entre dois clientes libwebrtc através do SFU. |
+| Ciclo de vida do dispositivo de áudio no Linux | Médio | A partir da quarta sessão no mesmo processo, a captura falha com dez segundos de espera. Detalhado no M4, endereçado no M5. |
 | Captura em Wayland exige portal e consentimento do usuário | Médio | A interface `ScreenCapturer` prevê o fluxo de permissão desde o M6. |
 | Encoding H.264 em software estourando o orçamento de CPU | Médio | 720p a 30 FPS é viável em software; encoders por hardware ficam no M8, atrás de interface. |
 | Licenciamento e patentes de H.264 | Médio | Levantar antes do M6, e manter VP9 como plano B já previsto na arquitetura. |
@@ -398,5 +429,6 @@ Estado atual: M0, M1 e M2 concluídos e verificados.
 O M3 está validado no Linux sobre a biblioteca construída do fonte, incluindo captura de tela real em X11.
 Falta a captura em Wayland, e rodar o spike no Windows e no macOS.
 
-O M4 está pela metade: o cliente de signaling e o SFU existem e são testados de ponta a ponta.
-O que falta é o cliente de mídia sobre a libwebrtc, e a UI provisória em cima dele.
+O M4 está entregue, menos a medição de latência boca a ouvido, que exige duas máquinas.
+Signaling, SFU, mídia do cliente, métricas e UI provisória existem, são testados de ponta a ponta com libwebrtc de um lado e libdatachannel do outro, e funcionam na aplicação real.
+O próximo marco é o M5, áudio completo, que começa pelo ciclo de vida do dispositivo de áudio registrado acima.

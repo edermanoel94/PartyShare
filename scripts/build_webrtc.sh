@@ -267,6 +267,15 @@ cp "${OUT}/obj/libwebrtc.a" "${DIST}/lib/libwebrtc.a"
       # obj/api/video_codecs/libbuiltin_video_encoder_factory.a
       path="${dep#//}"
       archive="obj/${path%:*}/lib${dep##*:}.a"
+
+      # Only WebRTC's own tree. The dependency closure reaches into
+      # third_party, and taking it wholesale drags in things like protobuf's
+      # runtime and even protoc itself, in pieces that do not link. Whatever
+      # WebRTC actually uses from third_party is already in obj/libwebrtc.a.
+      case "${archive}" in
+        obj/third_party/*) continue ;;
+      esac
+
       # Header-only and group targets produce no archive at all.
       if [[ -f "${archive}" ]]; then
         archives+=("${archive}")

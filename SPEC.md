@@ -405,7 +405,7 @@ Server
 # 15. Estrutura do projeto
 
 ```text
-desktop-voice/
+partyshare/
 │
 ├── client/
 │   ├── src/
@@ -537,7 +537,7 @@ A aplicação deverá possuir pelo menos:
 
 ```text
 ┌─────────────────────────────────┐
-│         Voice Desktop           │
+│            PartyShare           │
 │                                 │
 │        [ Criar Sala ]           │
 │                                 │

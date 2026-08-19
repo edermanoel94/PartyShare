@@ -145,7 +145,7 @@ No macOS o mesmo script serve:
 
 ```sh
 scripts/build_webrtc.sh
-scripts/validate_webrtc.sh --root ~/.cache/desktop-voice/webrtc/dist
+scripts/validate_webrtc.sh --root ~/.cache/partyshare/webrtc/dist
 ```
 
 No Windows o build exige Visual Studio com o Windows SDK e as ferramentas do depot_tools, e o procedimento é o descrito na documentação oficial da WebRTC.

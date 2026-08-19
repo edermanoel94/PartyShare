@@ -41,7 +41,7 @@ class CrashReporterTest : public ::testing::Test {
 
   [[nodiscard]] CrashReporterOptions options() const {
     return CrashReporterOptions{.directory = directory_,
-                                .application = "desktop-voice-test",
+                                .application = "partyshare-test",
                                 .version = "0.1.0",
                                 .keep = 3};
   }
@@ -75,9 +75,9 @@ TEST_F(CrashReporterTest, ADirectoryThatCannotBeCreatedIsAnError) {
 }
 
 TEST_F(CrashReporterTest, TheDefaultDirectoryFollowsTheStateDirectory) {
-  const std::filesystem::path state = default_crash_directory("desktop-voice");
+  const std::filesystem::path state = default_crash_directory("partyshare");
   EXPECT_FALSE(state.empty());
-  EXPECT_NE(state.string().find("desktop-voice"), std::string::npos);
+  EXPECT_NE(state.string().find("partyshare"), std::string::npos);
 }
 
 TEST_F(CrashReporterTest, ReportsComeBackNewestFirst) {
@@ -169,7 +169,7 @@ TEST_F(CrashReporterTest, ASegmentationFaultLeavesAReportBehind) {
 
   const std::string report = read(found.front());
   EXPECT_NE(report.find("SIGSEGV"), std::string::npos);
-  EXPECT_NE(report.find("desktop-voice-test"), std::string::npos) << report;
+  EXPECT_NE(report.find("partyshare-test"), std::string::npos) << report;
   EXPECT_NE(report.find("version: 0.1.0"), std::string::npos) << report;
   EXPECT_NE(report.find("backtrace:"), std::string::npos) << report;
   // A backtrace of no frames is a report that says nothing.

@@ -29,7 +29,7 @@ target_link_libraries(dv_server PRIVATE
   nlohmann_json::nlohmann_json
 )
 
-set_target_properties(dv_server PROPERTIES OUTPUT_NAME "desktop-voice-server")
+set_target_properties(dv_server PROPERTIES OUTPUT_NAME "partyshare-server")
 
 dv_set_target_warnings(dv_server)
 dv_enable_sanitizers(dv_server)

@@ -223,9 +223,9 @@ Medido do início de `main` até a janela estar exibida, que é o mais perto que
 O cliente registra isso em toda execução:
 
 ```text
-Voice Desktop client ready in 18 ms
-Voice Desktop client ready in 25 ms
-Voice Desktop client ready in 26 ms
+PartyShare client ready in 18 ms
+PartyShare client ready in 25 ms
+PartyShare client ready in 26 ms
 ```
 
 Meta da seção 22: menos de 3 segundos. Folgado.

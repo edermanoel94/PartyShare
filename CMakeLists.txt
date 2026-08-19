@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(desktop-voice
+project(partyshare
   VERSION 0.1.0
   DESCRIPTION "Desktop screen sharing and voice application"
   LANGUAGES CXX
@@ -50,7 +50,7 @@ if(DV_BUILD_TESTS)
 endif()
 
 message(STATUS "")
-message(STATUS "desktop-voice ${PROJECT_VERSION}")
+message(STATUS "partyshare ${PROJECT_VERSION}")
 message(STATUS "  build type      : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  compiler        : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  client          : ${DV_BUILD_CLIENT}")

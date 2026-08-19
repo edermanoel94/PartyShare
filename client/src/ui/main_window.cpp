@@ -118,7 +118,7 @@ constexpr int kNameRole = Qt::UserRole + 1;
 
 MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
     : QMainWindow(parent), session_(session) {
-  setWindowTitle(QStringLiteral("Voice Desktop"));
+  setWindowTitle(QStringLiteral("PartyShare"));
   setMinimumSize(720, 560);
   resize(960, 760);
 
@@ -572,7 +572,7 @@ void MainWindow::apply_state(int state, const QString& detail) {
   }
 
   welcome_->setText(user.display_name.empty()
-                        ? QStringLiteral("Voice Desktop")
+                        ? QStringLiteral("PartyShare")
                         : QStringLiteral("Olá, %1").arg(QString::fromStdString(user.display_name)));
 
   refresh_controls();
@@ -639,7 +639,7 @@ void MainWindow::apply_error(const QString& code, const QString& message) {
     login_error_->setText(text);
     return;
   }
-  QMessageBox::warning(this, QStringLiteral("Voice Desktop"), text);
+  QMessageBox::warning(this, QStringLiteral("PartyShare"), text);
 }
 
 void MainWindow::apply_room_created(const QString& room_id) {

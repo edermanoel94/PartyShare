@@ -45,7 +45,7 @@ struct CrashReporterOptions {
 /// Where reports go when the configuration does not say: the platform's own
 /// place for state that is neither cache nor configuration.
 ///
-/// `$XDG_STATE_HOME/desktop-voice/crashes` on Linux, `~/Library/Logs` on
+/// `$XDG_STATE_HOME/partyshare/crashes` on Linux, `~/Library/Logs` on
 /// macOS, `%LOCALAPPDATA%` on Windows.
 [[nodiscard]] std::filesystem::path default_crash_directory(const std::string& application);
 

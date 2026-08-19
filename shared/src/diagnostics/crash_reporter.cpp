@@ -239,7 +239,7 @@ void prepare_header(const CrashReporterOptions& options, const std::filesystem::
   report.directory_length = std::min(path.size(), PreparedReport::kPathCapacity - 1);
   std::memcpy(report.directory.data(), path.data(), report.directory_length);
 
-  std::string header = "desktop-voice crash report\n";
+  std::string header = "partyshare crash report\n";
   header += "application: " + options.application + "\n";
   header += "version: " + options.version + "\n";
   header += "built: " __DATE__ " " __TIME__ "\n";
@@ -294,7 +294,7 @@ Result<std::filesystem::path> install_crash_reporter(const CrashReporterOptions&
   std::call_once(once, [] {
     previous = std::set_terminate([] {
       static constexpr std::string_view kMessage =
-          "\ndesktop-voice: terminating on an uncaught exception\n";
+          "\npartyshare: terminating on an uncaught exception\n";
       write_all(STDERR_FILENO, kMessage.data(), kMessage.size());
       if (previous != nullptr) {
         previous();

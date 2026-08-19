@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # branch-heads/7977 is milestone m152, the same one the prebuilt binaries used,
 # so the M3 spike keeps compiling without API changes.
 MILESTONE="branch-heads/7977"
-BUILD_DIR="${WEBRTC_BUILD_DIR:-$HOME/.cache/desktop-voice/webrtc}"
+BUILD_DIR="${WEBRTC_BUILD_DIR:-$HOME/.cache/partyshare/webrtc}"
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 SKIP_SYNC=0
 OUT_NAME="dv-release"

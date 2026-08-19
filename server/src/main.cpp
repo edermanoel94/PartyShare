@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
     if (config.logging.crash_reports) {
       const auto installed = dv::diagnostics::install_crash_reporter({
           .directory = config.logging.crash_directory,
-          .application = "desktop-voice-server",
+          .application = "partyshare-server",
           .version = DV_VERSION,
       });
       if (installed.ok()) {
@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    DV_LOG_INFO("Voice Desktop signaling server starting");
+    DV_LOG_INFO("PartyShare signaling server starting");
 
     dv::server::SignalingServer::Options options;
     options.bind_address = config.server.bind_address;

@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
   if (config.logging.crash_reports) {
     const auto installed = dv::diagnostics::install_crash_reporter({
         .directory = config.logging.crash_directory,
-        .application = "desktop-voice",
+        .application = "partyshare",
         .version = DV_VERSION,
     });
     if (installed.ok()) {
@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  DV_LOG_INFO("Voice Desktop client starting");
+  DV_LOG_INFO("PartyShare client starting");
   DV_LOG_INFO("Signaling server: {}", config.network.signaling_url);
   DV_LOG_INFO("Video: {}x{} @ {} FPS, codec {}", config.video.width, config.video.height,
               config.video.fps, config.video.codec);
@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
               config.audio.channels, config.audio.frame_duration_ms);
 
   QApplication application(argc, argv);
-  QApplication::setApplicationName(QStringLiteral("Voice Desktop"));
+  QApplication::setApplicationName(QStringLiteral("PartyShare"));
   QApplication::setApplicationVersion(QStringLiteral(DV_VERSION));
 
   dv::client::app::CallSession::Options session_options;
@@ -99,11 +99,11 @@ int main(int argc, char* argv[]) {
 
   const auto startup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_at);
-  DV_LOG_INFO("Voice Desktop client ready in {} ms", startup_ms.count());
+  DV_LOG_INFO("PartyShare client ready in {} ms", startup_ms.count());
 
   const int exit_code = QApplication::exec();
 
-  DV_LOG_INFO("Voice Desktop client stopped with code {}", exit_code);
+  DV_LOG_INFO("PartyShare client stopped with code {}", exit_code);
   dv::log::shutdown();
   return exit_code;
 }

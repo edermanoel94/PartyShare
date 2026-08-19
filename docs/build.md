@@ -50,7 +50,7 @@ Para compilar com mídia é preciso a árvore que o `scripts/build_webrtc.sh` pr
 ```sh
 cmake -S . -B build/media \
   -DDV_BUILD_CLIENT_MEDIA=ON \
-  -DDV_WEBRTC_ROOT=$HOME/.cache/desktop-voice/webrtc/dist
+  -DDV_WEBRTC_ROOT=$HOME/.cache/partyshare/webrtc/dist
 cmake --build build/media
 ```
 
@@ -134,8 +134,8 @@ Um crash que não deixa nada para trás vira um relato que diz "fechou sozinho".
 Cliente e servidor instalam um handler para os sinais em que um crash chega, e escrevem um arquivo com o build, o sinal e o backtrace:
 
 ```text
-desktop-voice crash report
-application: desktop-voice
+partyshare crash report
+application: partyshare
 version: 0.1.0
 built: Aug 19 2026 16:36:58
 
@@ -143,11 +143,11 @@ when: 1787168270 seconds since the epoch, readable with: date -d @1787168270
 signal: SIGSEGV, a read or write through a bad pointer
 
 backtrace:
-./build/media/bin/desktop-voice(+0x145437) [0x5572fb6c8437]
+./build/media/bin/partyshare(+0x145437) [0x5572fb6c8437]
 /usr/lib/libQt6Core.so.6(_ZN10QEventLoop4execE...+0x193) [0x7f6888391983]
 ```
 
-O padrão é `$XDG_STATE_HOME/desktop-voice/crashes` no Linux, `~/Library/Logs` no macOS e `%LOCALAPPDATA%` no Windows, e os dez mais recentes são mantidos.
+O padrão é `$XDG_STATE_HOME/partyshare/crashes` no Linux, `~/Library/Logs` no macOS e `%LOCALAPPDATA%` no Windows, e os dez mais recentes são mantidos.
 Cada linha é `binário(+deslocamento) [endereço]`; o deslocamento é o que `addr2line -Cfe <binário> <deslocamento>` transforma em arquivo e linha.
 Nomes vindos de bibliotecas saem mangled, porque desfazer isso aloca memória e um handler de sinal não pode: `c++filt` resolve.
 
@@ -194,7 +194,7 @@ Sem Qt instalado, use `-DDV_BUILD_CLIENT=OFF` para compilar apenas o servidor e 
 A precedência é: padrões embutidos, depois arquivo, depois variáveis de ambiente, depois linha de comando.
 
 ```sh
-./build/linux-release/bin/desktop-voice-server \
+./build/linux-release/bin/partyshare-server \
   --config=config.json --port=8080 --log-level=debug \
   --users-file=dev-users.json
 ```

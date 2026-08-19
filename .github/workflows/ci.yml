@@ -206,12 +206,12 @@ jobs:
         id: webrtc-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/desktop-voice/webrtc/dist
+          path: ~/.cache/partyshare/webrtc/dist
           key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
 
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
-        run: scripts/build_webrtc.sh --out ~/.cache/desktop-voice/webrtc
+        run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
 
       - name: Configure
         run: |
@@ -219,7 +219,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
             -DCMAKE_BUILD_TYPE=Release \
             -DDV_BUILD_CLIENT_MEDIA=ON \
-            -DDV_WEBRTC_ROOT=$HOME/.cache/desktop-voice/webrtc/dist
+            -DDV_WEBRTC_ROOT=$HOME/.cache/partyshare/webrtc/dist
 
       - name: Build
         run: cmake --build build/media --target dv_media_tests

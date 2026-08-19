@@ -140,11 +140,11 @@ target_link_libraries(dv_client PRIVATE
 )
 
 set_target_properties(dv_client PROPERTIES
-  OUTPUT_NAME "desktop-voice"
+  OUTPUT_NAME "partyshare"
   WIN32_EXECUTABLE ON
   MACOSX_BUNDLE ON
-  MACOSX_BUNDLE_BUNDLE_NAME "Desktop Voice"
-  MACOSX_BUNDLE_GUI_IDENTIFIER "dev.desktopvoice.client"
+  MACOSX_BUNDLE_BUNDLE_NAME "PartyShare"
+  MACOSX_BUNDLE_GUI_IDENTIFIER "dev.partyshare.client"
   MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
 )
 

@@ -1,0 +1,24 @@
+# Build
+build/
+out/
+install/
+CMakeUserPresets.json
+
+# Dependencies
+third_party/
+vcpkg_installed/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config and secrets
+config.local.json
+*.pem
+*.key

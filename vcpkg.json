@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "desktop-voice",
+  "version": "0.1.0",
+  "description": "Desktop screen sharing and voice application",
+  "builtin-baseline": "d1f2fece60ad5c8271ace08e9836bcc743ebd05b",
+  "dependencies": [
+    "spdlog",
+    "nlohmann-json",
+    "gtest",
+    "libdatachannel",
+    "openssl"
+  ],
+  "comment": "Qt 6 is installed through the platform SDK, not through vcpkg. libdatachannel provides both the signaling WebSocket (M2) and the SFU (M4)."
+}

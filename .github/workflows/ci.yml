@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+          sudo update-alternatives --install /usr/bin/clang-format clang-format \
+            /usr/bin/clang-format-18 100
+
+      - name: Check formatting
+        run: |
+          files=$(find shared client server tests tools -name '*.cpp' -o -name '*.hpp')
+          clang-format --dry-run --Werror $files
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-24.04
+            preset: linux-release
+          - name: Windows x64
+            os: windows-2022
+            preset: windows-release
+          - name: macOS ARM64
+            os: macos-14
+            preset: macos-arm64-release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libx11-dev libxext-dev libxfixes-dev libxdamage-dev \
+            libxrandr-dev libxcomposite-dev libxtst-dev
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.os }}-
+
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+        shell: bash
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Tests
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: build/${{ matrix.preset }}/bin/
+          retention-days: 7
+
+  sanitizers:
+    name: Sanitizers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev
+
+      # The client is skipped here: Qt is not built with sanitizers, and the
+      # useful surface for ASan and UBSan right now is the shared library.
+      - name: Configure
+        run: |
+          cmake -S . -B build/asan -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DDV_ENABLE_SANITIZERS=ON \
+            -DDV_WARNINGS_AS_ERRORS=ON \
+            -DDV_BUILD_CLIENT=OFF
+
+      - name: Build
+        run: cmake --build build/asan
+
+      # Covers the signaling server's threading too: the integration tests bind
+      # real sockets and run the heartbeat thread.
+      - name: Tests
+        run: ctest --test-dir build/asan --output-on-failure
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy-18 cppcheck ninja-build libx11-dev
+
+      - name: Generate the compilation database
+        run: |
+          cmake -S . -B build/analysis -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DDV_BUILD_CLIENT=OFF
+
+      - name: clang-tidy
+        run: |
+          files=$(find shared server -name '*.cpp')
+          clang-tidy-18 -p build/analysis $files
+
+      - name: cppcheck
+        run: |
+          cppcheck --enable=warning,performance,portability \
+            --std=c++20 --error-exitcode=1 --inline-suppr \
+            --suppress=missingIncludeSystem \
+            -I shared/include -I server/src shared/src server/src
+
+  # The M3 spike is not part of the product build. It runs on demand so the
+  # libwebrtc toolchain can be validated on every platform without adding a
+  # multi hundred megabyte download to every push.
+  webrtc-spike:
+    name: libwebrtc spike (${{ matrix.name }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-24.04
+          - name: Windows x64
+            os: windows-2022
+          - name: macOS ARM64
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libx11-dev libxext-dev libxfixes-dev \
+            libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/spike -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDV_ENABLE_WEBRTC_SPIKE=ON \
+            -DDV_BUILD_CLIENT=OFF \
+            -DDV_BUILD_TESTS=OFF
+        env:
+          CXX: ${{ runner.os == 'Linux' && 'clang++' || '' }}
+
+      - name: Build
+        run: cmake --build build/spike
+
+      - name: Run
+        run: ./build/spike/bin/webrtc-spike

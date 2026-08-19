@@ -1,0 +1,183 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "DV_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "macos",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux x64 Debug",
+      "inherits": ["debug", "linux"]
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux x64 Release",
+      "inherits": ["release", "linux"]
+    },
+    {
+      "name": "linux-asan",
+      "displayName": "Linux x64 Debug with ASan and UBSan",
+      "inherits": ["debug", "linux"],
+      "cacheVariables": {
+        "DV_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "linux-make",
+      "displayName": "Linux x64 Debug using Unix Makefiles (no Ninja required)",
+      "inherits": ["debug", "linux"],
+      "generator": "Unix Makefiles"
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug",
+      "inherits": ["debug", "windows"]
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release",
+      "inherits": ["release", "windows"]
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows x64 Debug with ASan",
+      "inherits": ["debug", "windows"],
+      "cacheVariables": {
+        "DV_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "macos-arm64-debug",
+      "displayName": "macOS ARM64 Debug",
+      "inherits": ["debug", "macos"],
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      }
+    },
+    {
+      "name": "macos-arm64-release",
+      "displayName": "macOS ARM64 Release",
+      "inherits": ["release", "macos"],
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      }
+    },
+    {
+      "name": "macos-arm64-asan",
+      "displayName": "macOS ARM64 Debug with ASan and UBSan",
+      "inherits": ["debug", "macos"],
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "DV_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "macos-x64-release",
+      "displayName": "macOS x64 Release",
+      "inherits": ["release", "macos"],
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "x86_64"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "linux-make", "configurePreset": "linux-make" },
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-asan", "configurePreset": "windows-asan" },
+    { "name": "macos-arm64-debug", "configurePreset": "macos-arm64-debug" },
+    { "name": "macos-arm64-release", "configurePreset": "macos-arm64-release" },
+    { "name": "macos-arm64-asan", "configurePreset": "macos-arm64-asan" },
+    { "name": "macos-x64-release", "configurePreset": "macos-x64-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    { "name": "linux-debug", "inherits": "base", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "inherits": "base", "configurePreset": "linux-release" },
+    { "name": "linux-asan", "inherits": "base", "configurePreset": "linux-asan" },
+    { "name": "linux-make", "inherits": "base", "configurePreset": "linux-make" },
+    { "name": "windows-debug", "inherits": "base", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "inherits": "base", "configurePreset": "windows-release" },
+    { "name": "macos-arm64-debug", "inherits": "base", "configurePreset": "macos-arm64-debug" },
+    { "name": "macos-arm64-release", "inherits": "base", "configurePreset": "macos-arm64-release" }
+  ]
+}

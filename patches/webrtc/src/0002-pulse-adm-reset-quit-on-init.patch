@@ -1,0 +1,23 @@
+diff --git a/modules/audio_device/linux/audio_device_pulse_linux.cc b/modules/audio_device/linux/audio_device_pulse_linux.cc
+index f1121c1a9a..42902f0616 100644
+--- a/modules/audio_device/linux/audio_device_pulse_linux.cc
++++ b/modules/audio_device/linux/audio_device_pulse_linux.cc
+@@ -156,6 +156,18 @@ AudioDeviceGeneric::InitStatus AudioDeviceLinuxPulse::Init() {
+     return InitStatus::OK;
+   }
+ 
++  {
++    // Terminate() sets this and nothing ever cleared it, so the recording
++    // thread spawned below would see it on its first pass and exit at once.
++    // StartRecording() then waits ten seconds for an event that thread was
++    // supposed to signal, gives up, and the session has no microphone.
++    //
++    // It only shows up on the second and later initialisations in a process,
++    // which is exactly what happens when a call ends and another begins.
++    MutexLock lock(&mutex_);
++    quit_ = false;
++  }
++
+   // Initialize PulseAudio
+   if (InitPulseAudio() < 0) {
+     RTC_LOG(LS_ERROR) << "failed to initialize PulseAudio";

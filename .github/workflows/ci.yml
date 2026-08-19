@@ -166,6 +166,65 @@ jobs:
   # The M3 spike is not part of the product build. It runs on demand so the
   # libwebrtc toolchain can be validated on every platform without adding a
   # multi hundred megabyte download to every push.
+  media:
+    name: Audio pipeline (Linux x64)
+    # Needs the libwebrtc tree that scripts/build_webrtc.sh produces, which is a
+    # 30 GB checkout and tens of minutes of compiling, so this does not run on
+    # every push. The cache below makes the second run cheap.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libx11-dev libxext-dev libxfixes-dev \
+            libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev \
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libglib2.0-dev libgbm-dev libdrm-dev \
+            pulseaudio pulseaudio-utils
+
+      - name: Restore the libwebrtc build
+        id: webrtc-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/desktop-voice/webrtc/dist
+          key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
+
+      - name: Build libwebrtc
+        if: steps.webrtc-cache.outputs.cache-hit != 'true'
+        run: scripts/build_webrtc.sh --out ~/.cache/desktop-voice/webrtc
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/media -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDV_BUILD_CLIENT_MEDIA=ON \
+            -DDV_WEBRTC_ROOT=$HOME/.cache/desktop-voice/webrtc/dist
+
+      - name: Build
+        run: cmake --build build/media --target dv_media_tests
+
+      # No sound card on a runner, so one is made. The tests then run on real
+      # captured samples instead of on silence, which is the only way the level
+      # and speaking assertions mean anything.
+      - name: Tests
+        run: |
+          eval "$(scripts/virtual_audio.sh start)"
+          ctest --test-dir build/media -L media --output-on-failure
+          scripts/virtual_audio.sh stop
+
   webrtc-spike:
     name: libwebrtc spike (${{ matrix.name }})
     if: github.event_name == 'workflow_dispatch'

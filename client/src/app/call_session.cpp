@@ -180,6 +180,48 @@ bool CallSession::muted() const {
   return muted_;
 }
 
+Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
+                                                           double volume) {
+  std::shared_ptr<audio::AudioSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    volumes_[user_id] = volume;
+    session = audio_;
+  }
+  if (!session) {
+    // Kept for when the call starts, which is what makes the setting usable
+    // before anyone has spoken.
+    return std::monostate{};
+  }
+  return session->set_participant_volume(user_id, volume);
+}
+
+Result<std::monostate> CallSession::set_input_device(const std::string& device_id) {
+  std::shared_ptr<audio::AudioSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.audio.input_device = device_id;
+    session = audio_;
+  }
+  if (!session) {
+    return std::monostate{};
+  }
+  return session->set_input_device(device_id);
+}
+
+Result<std::monostate> CallSession::set_output_device(const std::string& device_id) {
+  std::shared_ptr<audio::AudioSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.audio.output_device = device_id;
+    session = audio_;
+  }
+  if (!session) {
+    return std::monostate{};
+  }
+  return session->set_output_device(device_id);
+}
+
 void CallSession::disconnect() {
   if (running_.exchange(false) && metrics_thread_.joinable()) {
     metrics_thread_.join();
@@ -470,6 +512,32 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     publish_participants();
   };
 
+  callbacks.on_levels = [this](std::vector<audio::AudioLevel> levels) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      for (const audio::AudioLevel& level : levels) {
+        // An empty user id is the local microphone. It is reported on its own
+        // below, for the level meter, and also lands on the local participant:
+        // a room where everyone is marked as speaking except you reads as a
+        // bug even though the meter is right there.
+        const std::string& user_id = level.user_id.empty() ? local_user_.id : level.user_id;
+        if (const auto it = participants_.find(user_id); it != participants_.end()) {
+          it->second.level = level.level;
+          it->second.speaking = level.speaking;
+        }
+      }
+      handlers = callbacks_;
+    }
+
+    for (const audio::AudioLevel& level : levels) {
+      if (level.user_id.empty() && handlers.on_local_level) {
+        handlers.on_local_level(level.level, level.speaking);
+      }
+    }
+    publish_participants();
+  };
+
   callbacks.on_state = [this](audio::MediaState state) {
     switch (state) {
       case audio::MediaState::Connected:
@@ -500,8 +568,36 @@ Result<std::monostate> CallSession::ensure_audio_session() {
     muted = muted_;
   }
 
-  // A participant who muted before joining stays muted.
+  // A participant who muted before joining stays muted, and so do the volumes
+  // and devices chosen before the call.
   session->set_microphone_muted(muted);
+
+  std::unordered_map<std::string, double> volumes;
+  std::string input_device;
+  std::string output_device;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    volumes = volumes_;
+    input_device = options_.audio.input_device;
+    output_device = options_.audio.output_device;
+  }
+
+  for (const auto& [user_id, volume] : volumes) {
+    // Failing here only means that participant has no track yet; the media
+    // layer keeps the value and applies it when one arrives.
+    (void)session->set_participant_volume(user_id, volume);
+  }
+  if (!input_device.empty()) {
+    if (const auto applied = session->set_input_device(input_device); !applied) {
+      report(applied.error());
+    }
+  }
+  if (!output_device.empty()) {
+    if (const auto applied = session->set_output_device(output_device); !applied) {
+      report(applied.error());
+    }
+  }
+
   return std::monostate{};
 }
 

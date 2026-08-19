@@ -22,6 +22,15 @@ bool media_is_available() noexcept {
   return false;
 }
 
+Result<std::vector<AudioDevice>> input_devices() {
+  return Result<std::vector<AudioDevice>>::failure(
+      "media_unavailable", "this client was built without libwebrtc, so it has no audio devices");
+}
+
+Result<std::vector<AudioDevice>> output_devices() {
+  return input_devices();
+}
+
 #endif  // DV_WITH_LIBWEBRTC
 
 }  // namespace dv::client::audio

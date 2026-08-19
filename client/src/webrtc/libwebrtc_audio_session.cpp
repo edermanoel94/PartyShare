@@ -11,15 +11,20 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <api/audio/audio_device.h>
+#include <api/audio/audio_processing.h>
+#include <api/audio/builtin_audio_processing_builder.h>
 #include <api/audio/create_audio_device_module.h>
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
 #include <api/audio_codecs/builtin_audio_encoder_factory.h>
@@ -38,6 +43,7 @@
 #include <api/stats/rtc_stats_collector_callback.h>
 #include <api/stats/rtc_stats_report.h>
 #include <api/stats/rtcstats_objects.h>
+#include <api/transport/rtp/rtp_source.h>
 #include <api/video_codecs/builtin_video_decoder_factory.h>
 #include <api/video_codecs/builtin_video_encoder_factory.h>
 #include <rtc_base/logging.h>
@@ -66,6 +72,128 @@ class Engine {
 
   [[nodiscard]] webrtc::PeerConnectionFactoryInterface* factory() const { return factory_.get(); }
   [[nodiscard]] const std::string& failure() const { return failure_; }
+
+  /// One microphone source for the whole process, created on first use.
+  ///
+  /// Shared because the capture device is shared: two sessions in one process
+  /// would otherwise fight over it.
+  [[nodiscard]] webrtc::scoped_refptr<webrtc::AudioSourceInterface> microphone(
+      const webrtc::AudioOptions& options) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (microphone_ == nullptr) {
+      microphone_ = factory_->CreateAudioSource(options);
+    }
+    return microphone_;
+  }
+
+  /// Devices as the platform reports them.
+  ///
+  /// Every call into the audio device module happens on the worker thread,
+  /// which is the thread libwebrtc drives it from. Touching it from anywhere
+  /// else trips its own thread checker.
+  [[nodiscard]] Result<std::vector<AudioDevice>> devices(bool input) {
+    if (audio_device_ == nullptr) {
+      return Result<std::vector<AudioDevice>>::failure("media_unavailable",
+                                                       "there is no audio device module");
+    }
+
+    std::vector<AudioDevice> found;
+    std::string error;
+
+    worker_thread_->BlockingCall([&] {
+      if (audio_device_->Init() != 0) {
+        error = "the audio device module could not be initialised";
+        return;
+      }
+
+      const int16_t count =
+          input ? audio_device_->RecordingDevices() : audio_device_->PlayoutDevices();
+      if (count < 0) {
+        error = "the platform could not enumerate the devices";
+        return;
+      }
+
+      // Oversized on purpose: some platform backends have been seen writing
+      // past the documented limit.
+      char name[webrtc::kAdmMaxDeviceNameSize * 4] = {};
+      char guid[webrtc::kAdmMaxGuidSize * 4] = {};
+
+      for (int16_t index = 0; index < count; ++index) {
+        const int32_t result = input ? audio_device_->RecordingDeviceName(index, name, guid)
+                                     : audio_device_->PlayoutDeviceName(index, name, guid);
+        if (result != 0) {
+          continue;
+        }
+        // Index 0 is the platform default on every backend libwebrtc has.
+        found.push_back(AudioDevice{name, name, index == 0});
+      }
+    });
+
+    if (!error.empty()) {
+      return Result<std::vector<AudioDevice>>::failure("media_unavailable", error);
+    }
+    return found;
+  }
+
+  /// Switches device without ending the call: capture is stopped, the device
+  /// is changed, and capture is started again, all on the worker thread.
+  [[nodiscard]] Result<std::monostate> select_device(bool input, const std::string& device_id) {
+    auto listed = devices(input);
+    if (!listed) {
+      return Result<std::monostate>::failure(listed.error());
+    }
+
+    const std::vector<AudioDevice> available = std::move(listed).take();
+    std::optional<int16_t> index;
+    for (std::size_t i = 0; i < available.size(); ++i) {
+      if (available[i].id == device_id) {
+        index = static_cast<int16_t>(i);
+        break;
+      }
+    }
+    if (!index.has_value()) {
+      return Result<std::monostate>::failure("device_not_found",
+                                             "no audio device named " + device_id);
+    }
+
+    std::string error;
+    worker_thread_->BlockingCall([&] {
+      if (input) {
+        const bool was_recording = audio_device_->Recording();
+        if (was_recording) {
+          audio_device_->StopRecording();
+        }
+        if (audio_device_->SetRecordingDevice(static_cast<uint16_t>(*index)) != 0) {
+          error = "the platform refused the capture device";
+          return;
+        }
+        if (was_recording) {
+          if (audio_device_->InitRecording() != 0 || audio_device_->StartRecording() != 0) {
+            error = "the capture device was selected but could not be started";
+          }
+        }
+      } else {
+        const bool was_playing = audio_device_->Playing();
+        if (was_playing) {
+          audio_device_->StopPlayout();
+        }
+        if (audio_device_->SetPlayoutDevice(static_cast<uint16_t>(*index)) != 0) {
+          error = "the platform refused the playback device";
+          return;
+        }
+        if (was_playing) {
+          if (audio_device_->InitPlayout() != 0 || audio_device_->StartPlayout() != 0) {
+            error = "the playback device was selected but could not be started";
+          }
+        }
+      }
+    });
+
+    if (!error.empty()) {
+      return Result<std::monostate>::failure("device_error", error);
+    }
+    return std::monostate{};
+  }
 
  private:
   Engine() {
@@ -109,12 +237,56 @@ class Engine {
       audio_device_ = webrtc::CreateAudioDeviceModule(environment, layer);
     });
 
+    // Section 9 of SPEC.md asks for echo cancellation, noise suppression and
+    // automatic gain control.
+    //
+    // Handing the factory no processing module would still give us one, built
+    // from its defaults, and the AudioOptions each session sets would still
+    // switch AEC3, noise suppression and AGC1 on. What the defaults do not
+    // cover is everything AudioOptions has no field for, which is where the
+    // tuning below lives: the high pass filter, the width of the pipeline and
+    // the rate it runs at.
+    //
+    // Whether each block is on stays with AudioOptions, which the media engine
+    // folds into this config for every session, so a user turning noise
+    // suppression off still turns it off. Note that the module belongs to the
+    // factory rather than to a peer connection: sessions in the same process
+    // share it, and the last options applied win. A client process has one
+    // local user, so that is a distinction without a difference here.
+    webrtc::AudioProcessing::Config processing;
+    // AEC3, which is what the built-in echo canceller is when no custom
+    // EchoControlFactory is injected.
+    processing.echo_canceller.enabled = true;
+    processing.noise_suppression.enabled = true;
+    processing.noise_suppression.level =
+        webrtc::AudioProcessing::Config::NoiseSuppression::Level::kHigh;
+    // Rumble, desk bumps and DC offset, none of which Opus should be paying
+    // bits for.
+    processing.high_pass_filter.enabled = true;
+    // Adaptive analog is the desktop mode: it drives the operating system's
+    // own input volume and only compresses in software what is left.
+    processing.gain_controller1.enabled = true;
+    processing.gain_controller1.mode =
+        webrtc::AudioProcessing::Config::GainController1::kAdaptiveAnalog;
+    processing.gain_controller1.analog_gain_controller.enabled = true;
+    // The call is mono at 48 kHz, so multi-channel processing would only cost
+    // CPU for channels that are not there.
+    processing.pipeline.multi_channel_capture = false;
+    processing.pipeline.multi_channel_render = false;
+    processing.pipeline.maximum_internal_processing_rate = 48000;
+
+    webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing =
+        webrtc::BuiltinAudioProcessingBuilder(processing).Build(environment);
+    if (audio_processing == nullptr) {
+      failure_ = "could not create the audio processing module";
+      return;
+    }
+
     factory_ = webrtc::CreatePeerConnectionFactory(
         network_thread_.get(), worker_thread_.get(), signaling_thread_.get(), audio_device_,
         webrtc::CreateBuiltinAudioEncoderFactory(), webrtc::CreateBuiltinAudioDecoderFactory(),
         webrtc::CreateBuiltinVideoEncoderFactory(), webrtc::CreateBuiltinVideoDecoderFactory(),
-        /*audio_mixer=*/nullptr,
-        /*audio_processing=*/nullptr);
+        /*audio_mixer=*/nullptr, std::move(audio_processing));
 
     if (factory_ == nullptr) {
       failure_ = "could not create the peer connection factory";
@@ -124,10 +296,25 @@ class Engine {
   std::unique_ptr<webrtc::Thread> network_thread_;
   std::unique_ptr<webrtc::Thread> worker_thread_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
+  std::mutex mutex_;
+  webrtc::scoped_refptr<webrtc::AudioSourceInterface> microphone_;
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
   std::string failure_;
 };
+
+/// WebRTC accepts playback volume up to 10, where 1 is what the sender sent.
+constexpr double kMaxVolume = 10.0;
+
+/// Levels are sampled often enough for the indicator to look alive without
+/// costing anything: five times a second.
+constexpr auto kLevelInterval = std::chrono::milliseconds(200);
+
+/// Roughly -34 dBov. Below this is room noise, not speech.
+constexpr double kSpeakingThreshold = 0.02;
+
+/// How long someone keeps counting as speaking after their last loud packet.
+constexpr auto kSpeakingHold = std::chrono::milliseconds(600);
 
 [[nodiscard]] MediaState to_media_state(
     webrtc::PeerConnectionInterface::PeerConnectionState state) {
@@ -193,6 +380,9 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
     if (stats_thread_.joinable()) {
       stats_thread_.join();
     }
+    if (levels_thread_.joinable()) {
+      levels_thread_.join();
+    }
   }
 
   [[nodiscard]] Result<std::monostate> start(const AudioSessionOptions& options) {
@@ -233,7 +423,7 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
     audio_options.noise_suppression = options.noise_suppression;
     audio_options.auto_gain_control = options.automatic_gain_control;
 
-    auto source = engine.factory()->CreateAudioSource(audio_options);
+    auto source = engine.microphone(audio_options);
     if (source == nullptr) {
       return Result<std::monostate>::failure("media_unavailable", "could not open an audio source");
     }
@@ -251,6 +441,7 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
 
     running_ = true;
     stats_thread_ = std::thread([this] { stats_loop(); });
+    levels_thread_ = std::thread([this] { levels_loop(); });
     return std::monostate{};
   }
 
@@ -296,6 +487,37 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
   }
 
   [[nodiscard]] bool microphone_muted() const override { return muted_.load(); }
+
+  Result<std::monostate> set_participant_volume(const std::string& user_id,
+                                                double volume) override {
+    if (volume < 0.0 || volume > kMaxVolume) {
+      return Result<std::monostate>::failure(
+          "invalid_value", "volume has to be between 0 and " + std::to_string(kMaxVolume));
+    }
+
+    const std::lock_guard<std::mutex> lock(remote_mutex_);
+    volumes_[user_id] = volume;
+
+    const auto it = remote_.find(user_id);
+    if (it == remote_.end()) {
+      // Remembered for when the track shows up. Setting the volume of someone
+      // who has not spoken yet is a normal thing for an interface to do.
+      return Result<std::monostate>::failure("unknown_participant",
+                                             "no audio track carries " + user_id + " yet");
+    }
+
+    it->second.volume = volume;
+    apply_volume(it->second);
+    return std::monostate{};
+  }
+
+  Result<std::monostate> set_input_device(const std::string& device_id) override {
+    return Engine::instance().select_device(/*input=*/true, device_id);
+  }
+
+  Result<std::monostate> set_output_device(const std::string& device_id) override {
+    return Engine::instance().select_device(/*input=*/false, device_id);
+  }
 
   [[nodiscard]] AudioStats stats() const override {
     const std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -356,9 +578,16 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
   }
 
  private:
+  /// One remote participant's audio, as it arrives.
+  struct Remote {
+    webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver;
+    webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> track;
+    double volume = 1.0;
+  };
+
   void report_remote_track(const webrtc::scoped_refptr<webrtc::RtpReceiverInterface>& receiver,
                            bool active) {
-    if (receiver == nullptr || !callbacks_.on_remote_audio) {
+    if (receiver == nullptr) {
       return;
     }
 
@@ -370,7 +599,38 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
       DV_LOG_WARN("Media: a remote track arrived with no msid, cannot tell whose voice it is");
       return;
     }
-    callbacks_.on_remote_audio(stream_ids.front(), active);
+    const std::string user_id = stream_ids.front();
+
+    {
+      const std::lock_guard<std::mutex> lock(remote_mutex_);
+      if (active) {
+        remote_[user_id] = Remote{receiver, receiver->track(), volume_of(user_id)};
+        // A volume set before the track existed is applied now.
+        apply_volume(remote_[user_id]);
+      } else {
+        remote_.erase(user_id);
+      }
+    }
+
+    if (callbacks_.on_remote_audio) {
+      callbacks_.on_remote_audio(user_id, active);
+    }
+  }
+
+  /// Must be called with `remote_mutex_` held.
+  [[nodiscard]] double volume_of(const std::string& user_id) const {
+    const auto it = volumes_.find(user_id);
+    return it == volumes_.end() ? 1.0 : it->second;
+  }
+
+  static void apply_volume(const Remote& remote) {
+    if (remote.track == nullptr) {
+      return;
+    }
+    auto* audio_track = static_cast<webrtc::AudioTrackInterface*>(remote.track.get());
+    if (audio_track->GetSource() != nullptr) {
+      audio_track->GetSource()->SetVolume(remote.volume);
+    }
   }
 
   void on_remote_description_set(webrtc::RTCError error) {
@@ -430,6 +690,24 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
       collected.bytes_sent += outbound->bytes_sent.value_or(0);
     }
 
+    // The audio source is where the processing module surfaces: echo return
+    // loss only has a value while the echo controller is actually running, so
+    // this is what tells the difference between AEC3 configured and AEC3 on.
+    //
+    // It is also the only place libwebrtc reports the level of the microphone.
+    // AudioTrackInterface::GetSignalLevel looks like the obvious way to ask,
+    // but a local track's source never implements it, so it answers false for
+    // every call and an indicator built on it stays at zero forever.
+    for (const auto* source : report->GetStatsOfType<webrtc::RTCAudioSourceStats>()) {
+      if (source->echo_return_loss.has_value()) {
+        collected.echo_cancellation_active = true;
+        collected.echo_return_loss_db = *source->echo_return_loss;
+      }
+      if (source->audio_level.has_value()) {
+        local_level_.store(*source->audio_level);
+      }
+    }
+
     // Round trip time is only known from the other end's receiver reports.
     for (const auto* remote : report->GetStatsOfType<webrtc::RTCRemoteInboundRtpStreamStats>()) {
       collected.round_trip_time_ms =
@@ -456,10 +734,77 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
     stats_ = collected;
   }
 
+  /// Converts what RFC 6464 puts in the RTP header into a level from 0 to 1.
+  ///
+  /// The header carries -dBov: 0 is as loud as the format allows and 127 is
+  /// silence. What an interface wants is a bar, so it becomes linear.
+  [[nodiscard]] static double level_from_dbov(std::uint8_t dbov) {
+    constexpr std::uint8_t kSilence = 127;
+    if (dbov >= kSilence) {
+      return 0.0;
+    }
+    return std::pow(10.0, -static_cast<double>(dbov) / 20.0);
+  }
+
+  void collect_levels() {
+    if (!callbacks_.on_levels) {
+      return;
+    }
+
+    std::vector<AudioLevel> levels;
+    const auto now = std::chrono::steady_clock::now();
+
+    // The local microphone, as the last stats report saw it. An empty user id
+    // is what marks the local level apart from the remote ones.
+    if (local_track_ != nullptr && !muted_.load()) {
+      const double level = local_level_.load();
+      levels.push_back(AudioLevel{{}, level, level > kSpeakingThreshold});
+    }
+
+    const std::lock_guard<std::mutex> lock(remote_mutex_);
+    for (const auto& [user_id, remote] : remote_) {
+      if (remote.receiver == nullptr) {
+        continue;
+      }
+
+      double level = 0;
+      for (const webrtc::RtpSource& source : remote.receiver->GetSources()) {
+        if (const std::optional<std::uint8_t> dbov = source.audio_level()) {
+          level = std::max(level, level_from_dbov(*dbov));
+        }
+      }
+
+      // Held for a moment after the last loud packet: without it the
+      // indicator blinks between syllables.
+      if (level > kSpeakingThreshold) {
+        speaking_until_[user_id] = now + kSpeakingHold;
+      }
+      const auto until = speaking_until_.find(user_id);
+      const bool speaking = until != speaking_until_.end() && now < until->second;
+
+      levels.push_back(AudioLevel{user_id, level, speaking});
+    }
+
+    callbacks_.on_levels(std::move(levels));
+  }
+
+  void levels_loop() {
+    while (running_) {
+      std::this_thread::sleep_for(kLevelInterval);
+      if (running_ && connection_ != nullptr) {
+        collect_levels();
+      }
+    }
+  }
+
   void stats_loop() {
     // Collected more often than the metrics are reported, so that a bitrate is
     // averaged over a short window rather than over the whole call.
-    constexpr auto kInterval = std::chrono::milliseconds(1000);
+    //
+    // This is also what feeds the microphone level indicator, so it runs at
+    // the level interval rather than at a metrics interval: a level meter that
+    // moves once a second reads as broken.
+    constexpr auto kInterval = kLevelInterval;
 
     while (running_) {
       std::this_thread::sleep_for(kInterval);
@@ -479,7 +824,18 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
   webrtc::scoped_refptr<webrtc::PeerConnectionInterface> connection_;
   webrtc::scoped_refptr<webrtc::AudioTrackInterface> local_track_;
 
+  mutable std::mutex remote_mutex_;
+  std::unordered_map<std::string, Remote> remote_;
+  /// Kept apart from `remote_` so that a volume chosen before someone's track
+  /// arrives is not lost.
+  std::unordered_map<std::string, double> volumes_;
+  /// How long a participant keeps counting as speaking after their last loud
+  /// packet, so the indicator does not flicker between syllables.
+  std::unordered_map<std::string, std::chrono::steady_clock::time_point> speaking_until_;
+
   std::atomic<bool> muted_{false};
+  /// The microphone level from the last stats report, on a scale of 0 to 1.
+  std::atomic<double> local_level_{0.0};
   std::atomic<MediaState> state_{MediaState::New};
 
   mutable std::mutex stats_mutex_;
@@ -488,9 +844,18 @@ class LibwebrtcAudioSession final : public AudioSession, public webrtc::PeerConn
 
   std::atomic<bool> running_{false};
   std::thread stats_thread_;
+  std::thread levels_thread_;
 };
 
 }  // namespace
+
+Result<std::vector<AudioDevice>> input_devices() {
+  return Engine::instance().devices(/*input=*/true);
+}
+
+Result<std::vector<AudioDevice>> output_devices() {
+  return Engine::instance().devices(/*input=*/false);
+}
 
 Result<std::unique_ptr<AudioSession>> create_audio_session(const AudioSessionOptions& options,
                                                            AudioSession::Callbacks callbacks) {

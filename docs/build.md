@@ -60,6 +60,28 @@ Duas variáveis de ambiente ajudam a depurar mídia:
 | --- | --- |
 | `DV_WEBRTC_LOG` | `warning`, `info` ou `verbose`. Liga o log interno da libwebrtc, que é a única forma de ver por que um dispositivo não abriu ou um codec foi recusado. |
 | `DV_AUDIO_NULL_DEVICE` | Usa um dispositivo de áudio nulo em vez do sistema. Serve para máquina sem placa de som e para CI. Nada é capturado nem reproduzido. |
+| `DV_VIRTUAL_INPUT_DEVICE` | Nome do dispositivo de captura que os testes de mídia devem usar. Exportado pelo `scripts/virtual_audio.sh`, descrito abaixo. |
+| `DV_VIRTUAL_OUTPUT_DEVICE` | O mesmo para a reprodução. |
+
+### Dispositivo de áudio virtual
+
+`DV_AUDIO_NULL_DEVICE` faz os testes de negociação passarem em uma máquina sem placa de som, mas um dispositivo nulo não captura nada.
+Tudo que dependa de áudio real, que é a maior parte do M5, continua sem poder ser verificado.
+
+O `scripts/virtual_audio.sh` resolve isso criando uma placa de som virtual em cima do PulseAudio, com um tom tocando no microfone:
+
+```sh
+eval "$(scripts/virtual_audio.sh start)"
+ctest --test-dir build/media -L media --output-on-failure
+scripts/virtual_audio.sh stop
+```
+
+O `eval` exporta `DV_VIRTUAL_INPUT_DEVICE` e `DV_VIRTUAL_OUTPUT_DEVICE`, e os testes de mídia passam a escolher esses dispositivos explicitamente.
+
+Em uma máquina que já tem servidor de som o script se conecta ao que existe e não mexe nos dispositivos padrão, então rodar os testes não toma a caixa de som de quem está no teclado.
+Sem servidor de som algum, que é o caso de um runner de CI, ele sobe um servidor privado e aí sim torna os dispositivos virtuais os padrão.
+
+O microfone virtual é um `module-remap-source` sobre o monitor de um sink nulo, e não o monitor direto: o backend PulseAudio da libwebrtc ignora toda fonte que monitora um sink quando enumera dispositivos de captura, e um dispositivo que ela não lista é um dispositivo que ela não abre.
 
 ## Compilar
 

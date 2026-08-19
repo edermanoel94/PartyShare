@@ -236,21 +236,15 @@ O que já está verificado por teste de integração, com ICE, DTLS e RTP de ver
 - **Um cliente libwebrtc negocia com o SFU libdatachannel, conecta e entrega áudio.**
   Esse era o risco alto listado na seção 5, e está retirado.
 
-### Problema conhecido: reabrir a captura no Linux
+### Bug de captura do PulseAudio, encontrado aqui e corrigido
 
-A partir da quarta sessão de mídia criada no mesmo processo, o dispositivo PulseAudio da libwebrtc falha ao iniciar a captura:
+A primeira chamada de um processo funcionava e toda chamada seguinte demorava exatos dez segundos para negociar, sem microfone.
 
-```text
-(audio_device_pulse_linux.cc:1084): failed to activate recording
-(thread.cc:551): Message to dv-worker took 10001ms to dispatch.
-```
+Causa: `AudioDeviceLinuxPulse::Terminate()` marca `quit_ = true` e o `Init()` nunca limpa essa flag, então a thread de captura da segunda sessão morre na primeira passagem e o `StartRecording()` espera dez segundos por um evento que ninguém vai sinalizar.
+É um bug da libwebrtc, não do projeto.
 
-São dez segundos de thread de worker travada, duas vezes, e nesse intervalo nenhuma sessão nova consegue negociar.
-Para o produto isso significa que sair de uma chamada e entrar em outra repetidamente pode congelar o áudio por vinte segundos.
-
-Não é causado pelo nosso código: acontece com o `AudioDeviceModule` compartilhado, que é o desenho normal, e some com um dispositivo nulo.
-Fica para o M5, que é onde os dispositivos de áudio são o assunto, e onde trocar de microfone sem derrubar a chamada já é um critério de aceitação.
-Os testes de mídia rodam um caso por processo, que é o que o ctest já faz, e por isso não esbarram nele.
+Corrigido por `patches/webrtc/src/0002-pulse-adm-reset-quit-on-init.patch`, detalhado na seção 5.2 de [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md).
+Sessões sucessivas no mesmo processo passaram de 10,2 s para 1,2 s.
 
 Critérios de aceitação:
 
@@ -278,19 +272,61 @@ Objetivo: atender integralmente as seções 8 e 9 da SPEC.
 
 Tarefas:
 
-1. Escalar para 5 participantes, com uma track de recepção por participante remoto.
-2. Enumeração e troca de dispositivos de entrada e de saída em tempo de execução, sem derrubar a chamada.
-3. Controle de volume individual por participante.
-4. Habilitar e ajustar AEC3, noise suppression e AGC.
-5. Indicador de nível de áudio e detecção de quem está falando.
-6. Propagação do estado de mute pelo signaling, para que a UI de todos fique consistente.
-7. Testes de integração do pipeline de áudio com um dispositivo virtual, para rodar no CI sem hardware.
+1. [x] Escalar para 5 participantes, com uma track de recepção por participante remoto.
+2. [x] Enumeração e troca de dispositivos de entrada e de saída em tempo de execução, sem derrubar a chamada.
+3. [x] Controle de volume individual por participante.
+4. [x] Habilitar e ajustar AEC3, noise suppression e AGC.
+5. [x] Indicador de nível de áudio e detecção de quem está falando.
+6. [x] Propagação do estado de mute pelo signaling, para que a UI de todos fique consistente.
+7. [x] Testes de integração do pipeline de áudio com um dispositivo virtual, para rodar no CI sem hardware.
 
 Critérios de aceitação:
 
 - Cinco participantes conversam simultaneamente sem eco perceptível.
-- Trocar de microfone durante a chamada não causa corte maior que 500 ms.
-- O uso de CPU do cliente fica em um dígito percentual em uma máquina de referência.
+  Cinco sessões e vinte tracks estão verificadas por teste; a ausência de eco depende do AEC3, que está ligado e é verificado abaixo, mas julgar "perceptível" pede cinco pessoas em cinco máquinas.
+- [x] Trocar de microfone durante a chamada não causa corte maior que 500 ms.
+  Medido pelo que o servidor recebe, não pelo que o cliente acha que fez.
+- [x] O uso de CPU do cliente fica em um dígito percentual em uma máquina de referência.
+  Medido em 9,2% de um núcleo em chamada, com AEC3, noise suppression e AGC ativos, em um Ryzen de 16 threads.
+
+### Processamento de áudio, e como saber que está ligado
+
+Pedir AEC3, noise suppression e AGC é uma linha de configuração.
+Saber que eles estão rodando é outra coisa, e um teste que só lê a configuração de volta não prova nada.
+
+A libwebrtc só publica `echo_return_loss` enquanto o controlador de eco está de fato processando captura.
+É essa a métrica que `AudioStats::echo_cancellation_active` carrega, e são dois testes que a usam: um exige que o cancelador esteja rodando, o outro desliga a opção e exige que ele pare.
+Sem o segundo, o primeiro passaria mesmo que a métrica não tivesse relação com o que o projeto pediu.
+
+O módulo de processamento pertence à fábrica, não à conexão, então as sessões de um mesmo processo o compartilham e valem as últimas opções aplicadas.
+Um processo de cliente tem um usuário local, então isso não muda nada no produto, mas muda os testes: o caso que desliga o cancelador roda sozinho.
+
+### Bug do indicador de nível, encontrado aqui e corrigido
+
+A barra de nível do microfone nunca saiu de zero, e o teste com dispositivo virtual foi o que mostrou isso.
+
+Causa: `AudioTrackInterface::GetSignalLevel` é o caminho óbvio para perguntar, mas a fonte de uma track local nunca o implementa, então ele responde `false` para toda chamada e quem constrói um indicador em cima recebe silêncio para sempre.
+O nível local agora vem de `RTCAudioSourceStats::audio_level`, que é onde a libwebrtc realmente o publica.
+
+A barra também passou a ser lida em decibéis.
+A fala normal fica perto de um vigésimo da escala cheia, e em escala linear mal levantaria a barra do chão.
+
+### Travamento visto uma vez, não reproduzido
+
+Em uma execução da suíte de mídia o caso `TheEchoCancellerRunsOnTheCapturedAudio` travou até o limite de 180 segundos do ctest, em vez de falhar nos 20 segundos que o próprio teste espera.
+Travar além do tempo do teste só é possível dentro de uma chamada bloqueante da libwebrtc, e o suspeito é o dispositivo PulseAudio: a execução veio logo depois de dois clientes gráficos que capturavam áudio terem sido mortos.
+
+Não reproduziu.
+Cinco execuções completas da suíte em seguida, mais o caso isolado, mais três tentativas matando um cliente durante a captura e rodando o teste na sequência, todas passaram.
+Fica registrado aqui em vez de esquecido: se voltar, o lugar de olhar é a abertura do dispositivo de captura, não o teste.
+
+### Dispositivo de áudio virtual
+
+`scripts/virtual_audio.sh` monta uma placa de som virtual sobre o PulseAudio, com um tom tocando no microfone, e é isso que permite rodar o pipeline inteiro em um runner sem hardware.
+O job `media` do CI usa exatamente esse script.
+
+Um dispositivo nulo não serviria: ele deixa a negociação passar, mas captura silêncio, e é justamente o áudio capturado que o M5 precisa verificar.
+O microfone virtual é um `module-remap-source` sobre o monitor de um sink nulo, porque o backend PulseAudio da libwebrtc ignora toda fonte que monitora um sink ao enumerar dispositivos de captura.
 
 ---
 
@@ -409,7 +445,7 @@ Mapeamento dos 15 critérios da seção 29 da SPEC para os marcos que os cobrem.
 | Manter um build próprio da libwebrtc para 3 plataformas | Médio | Consequência da decisão acima. `scripts/build_webrtc.sh` automatiza, mas alguém precisa hospedar os binários e refazer a cada atualização de milestone. O build depende de uma libstdc++ 14 fixada, porque a faixa de versões que o clang do Chromium aceita é estreita. |
 | A libwebrtc não compila ou não linka no Windows ou no macOS | Alto | Linux já validado. Os outros dois rodam pelo job `webrtc-spike` do CI. |
 | Interoperação entre libwebrtc no cliente e libdatachannel no SFU | Retirado | Validado no M4 por teste de integração: negociação, ICE, DTLS e áudio entre dois clientes libwebrtc através do SFU. |
-| Ciclo de vida do dispositivo de áudio no Linux | Médio | A partir da quarta sessão no mesmo processo, a captura falha com dez segundos de espera. Detalhado no M4, endereçado no M5. |
+| Ciclo de vida do dispositivo de áudio no Linux | Retirado | Era um bug da libwebrtc, corrigido por patch do projeto. Detalhado no M4. |
 | Captura em Wayland exige portal e consentimento do usuário | Médio | A interface `ScreenCapturer` prevê o fluxo de permissão desde o M6. |
 | Encoding H.264 em software estourando o orçamento de CPU | Médio | 720p a 30 FPS é viável em software; encoders por hardware ficam no M8, atrás de interface. |
 | Licenciamento e patentes de H.264 | Médio | Levantar antes do M6, e manter VP9 como plano B já previsto na arquitetura. |
@@ -431,4 +467,8 @@ Falta a captura em Wayland, e rodar o spike no Windows e no macOS.
 
 O M4 está entregue, menos a medição de latência boca a ouvido, que exige duas máquinas.
 Signaling, SFU, mídia do cliente, métricas e UI provisória existem, são testados de ponta a ponta com libwebrtc de um lado e libdatachannel do outro, e funcionam na aplicação real.
-O próximo marco é o M5, áudio completo, que começa pelo ciclo de vida do dispositivo de áudio registrado acima.
+
+O M5 está entregue.
+Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
+Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
+O próximo marco é o M6, compartilhamento de tela.

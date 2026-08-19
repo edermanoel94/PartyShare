@@ -12,6 +12,16 @@ namespace {
 /// Opus is always 48 kHz on the wire, section 9 of SPEC.md.
 constexpr int kOpusClockRate = 48000;
 
+/// RFC 6464. Senders put the loudness of each packet in the RTP header, and
+/// the SFU forwards those bytes untouched, so a participant can tell who is
+/// speaking without decoding anything or polling statistics.
+///
+/// The same id is declared in both directions on purpose: a forwarded packet
+/// keeps the id the sender wrote, so the receiver has to read it under that
+/// same id.
+constexpr int kAudioLevelExtensionId = 1;
+constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
+
 [[nodiscard]] rtc::Configuration make_configuration(const std::vector<std::string>& ice_servers) {
   rtc::Configuration configuration;
   for (const std::string& server : ice_servers) {
@@ -129,6 +139,8 @@ void AudioRouter::on_participant_joined(const std::string& room_id, const models
   rtc::Description::Audio inbound(std::to_string(session.next_mid++),
                                   rtc::Description::Direction::RecvOnly);
   inbound.addOpusCodec(options_.opus_payload_type);
+  inbound.addExtMap(
+      rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
   session.inbound = session.connection->addTrack(inbound);
 
   // Generates the receiver reports the sender needs to estimate loss and RTT.
@@ -264,6 +276,7 @@ void AudioRouter::add_outbound_track(Session& session, const std::string& source
   rtc::Description::Audio media(std::to_string(session.next_mid++),
                                 rtc::Description::Direction::SendOnly);
   media.addOpusCodec(options_.opus_payload_type);
+  media.addExtMap(rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
 
   // The msid is how the receiver learns whose voice this is. Without it a
   // client would get N indistinguishable audio tracks.

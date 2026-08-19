@@ -21,6 +21,27 @@ struct IceCandidate {
   friend bool operator==(const IceCandidate&, const IceCandidate&) = default;
 };
 
+/// A capture or playback device, as the system reports it.
+struct AudioDevice {
+  /// Stable enough to be stored in the configuration and matched again later.
+  /// On every platform libwebrtc supports, this is the device name.
+  std::string id;
+  std::string name;
+  bool is_default = false;
+
+  friend bool operator==(const AudioDevice&, const AudioDevice&) = default;
+};
+
+/// How loud someone is right now, from 0 to 1.
+struct AudioLevel {
+  /// Empty for the local microphone.
+  std::string user_id;
+  double level = 0;
+  bool speaking = false;
+
+  friend bool operator==(const AudioLevel&, const AudioLevel&) = default;
+};
+
 /// What section 22 of SPEC.md asks to be measured, read from the WebRTC stats.
 struct AudioStats {
   double round_trip_time_ms = 0;
@@ -33,6 +54,16 @@ struct AudioStats {
   /// Outgoing audio bitrate, averaged over the last collection interval.
   double send_bitrate_kbps = 0;
   double receive_bitrate_kbps = 0;
+
+  /// True while the echo canceller is running on the captured audio.
+  ///
+  /// libwebrtc only reports echo return loss when the echo controller exists,
+  /// so this is the one place where AEC3 being alive is observable from
+  /// outside the media layer, rather than merely requested.
+  bool echo_cancellation_active = false;
+  /// How much of the echo the canceller is removing, in dB. Zero when it is
+  /// not running, or when there is no echo to remove.
+  double echo_return_loss_db = 0;
 };
 
 enum class MediaState : std::uint8_t {
@@ -90,6 +121,10 @@ class AudioSession {
     /// comes from the msid the server put on the track.
     std::function<void(std::string user_id, bool active)> on_remote_audio;
     std::function<void(MediaState state)> on_state;
+    /// Levels for the local microphone and every remote participant, several
+    /// times a second. Section 8 of SPEC.md asks for the indicator; this is
+    /// what feeds it.
+    std::function<void(std::vector<AudioLevel> levels)> on_levels;
   };
 
   AudioSession() = default;
@@ -112,6 +147,18 @@ class AudioSession {
   /// simply carries nothing.
   virtual void set_microphone_muted(bool muted) = 0;
   [[nodiscard]] virtual bool microphone_muted() const = 0;
+
+  /// Playback volume for one participant, from 0 to 1. Anything above 1 is
+  /// amplification and is allowed up to 10, which is what WebRTC accepts.
+  ///
+  /// Fails with `unknown_participant` when no track carries that user yet.
+  [[nodiscard]] virtual Result<std::monostate> set_participant_volume(const std::string& user_id,
+                                                                      double volume) = 0;
+
+  /// Switches the capture device without interrupting the call. Fails with
+  /// `device_not_found`, and leaves the previous device in place.
+  [[nodiscard]] virtual Result<std::monostate> set_input_device(const std::string& device_id) = 0;
+  [[nodiscard]] virtual Result<std::monostate> set_output_device(const std::string& device_id) = 0;
 
   /// The last stats snapshot. Collection is asynchronous, so this returns what
   /// was gathered most recently rather than blocking for a fresh reading.
@@ -154,5 +201,13 @@ struct AudioSessionOptions {
 
 /// True when this build can actually create a session.
 [[nodiscard]] bool media_is_available() noexcept;
+
+/// The devices the system offers, in the order the platform reports them.
+///
+/// Enumeration does not need a call in progress, which is why these are free
+/// functions: the settings dialog has to work before anyone joins a room. They
+/// fail with `media_unavailable` in a build without libwebrtc.
+[[nodiscard]] Result<std::vector<AudioDevice>> input_devices();
+[[nodiscard]] Result<std::vector<AudioDevice>> output_devices();
 
 }  // namespace dv::client::audio

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -51,8 +52,21 @@ struct FakeAudioState {
   std::mutex mutex;
   std::vector<std::string> offers;
   std::vector<audio::IceCandidate> candidates;
+  std::unordered_map<std::string, double> volumes;
+  std::string input_device;
+  std::string output_device;
   std::atomic<bool> muted{false};
   std::atomic<bool> closed{false};
+
+  [[nodiscard]] double volume_of(const std::string& user_id) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    const auto it = volumes.find(user_id);
+    return it == volumes.end() ? -1.0 : it->second;
+  }
+  [[nodiscard]] std::string input() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return input_device;
+  }
 
   [[nodiscard]] std::size_t offer_count() {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -103,6 +117,32 @@ class FakeAudioSession : public audio::AudioSession {
   void set_microphone_muted(bool muted) override { state_->muted = muted; }
   [[nodiscard]] bool microphone_muted() const override { return state_->muted.load(); }
 
+  dv::Result<std::monostate> set_participant_volume(const std::string& user_id,
+                                                    double volume) override {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->volumes[user_id] = volume;
+    return std::monostate{};
+  }
+
+  dv::Result<std::monostate> set_input_device(const std::string& device_id) override {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->input_device = device_id;
+    return std::monostate{};
+  }
+
+  dv::Result<std::monostate> set_output_device(const std::string& device_id) override {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->output_device = device_id;
+    return std::monostate{};
+  }
+
+  /// Reports levels the way the real session does, from its own thread.
+  void report_levels(std::vector<audio::AudioLevel> levels) {
+    if (callbacks_.on_levels) {
+      callbacks_.on_levels(std::move(levels));
+    }
+  }
+
   [[nodiscard]] audio::AudioStats stats() const override {
     audio::AudioStats stats;
     stats.round_trip_time_ms = 12;
@@ -144,8 +184,14 @@ class Client {
                 const std::lock_guard<std::mutex> lock(mutex_);
                 remote_audio_ = callbacks.on_remote_audio;
               }
-              return std::unique_ptr<audio::AudioSession>(
-                  std::make_unique<FakeAudioSession>(std::move(callbacks), audio_state_));
+              auto fake = std::make_unique<FakeAudioSession>(std::move(callbacks), audio_state_);
+              {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                levels_ = [raw = fake.get()](std::vector<audio::AudioLevel> levels) {
+                  raw->report_levels(std::move(levels));
+                };
+              }
+              return std::unique_ptr<audio::AudioSession>(std::move(fake));
             })) {
     session_->on_events({
         .on_state = [this](CallSession::State state, std::string) { last_state_ = state; },
@@ -155,6 +201,11 @@ class Client {
               participants_ = std::move(list);
             },
         .on_metrics = [this](audio::AudioStats) { metrics_reports_.fetch_add(1); },
+        .on_local_level =
+            [this](double level, bool speaking) {
+              local_level_ = level;
+              local_speaking_ = speaking;
+            },
         .on_error =
             [this](dv::Error error) {
               const std::lock_guard<std::mutex> lock(mutex_);
@@ -209,6 +260,20 @@ class Client {
   /// Outlives the media session, so it can still be read after leave().
   [[nodiscard]] FakeAudioState& audio() { return *audio_state_; }
 
+  /// Reports audio levels, the way the media layer does during a call.
+  ///
+  /// Only valid while the media session exists: leave() destroys it.
+  void report_levels(std::vector<audio::AudioLevel> levels) {
+    std::function<void(std::vector<audio::AudioLevel>)> handler;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handler = levels_;
+    }
+    if (handler) {
+      handler(std::move(levels));
+    }
+  }
+
   /// Reports a remote participant's audio, the way an arriving track would.
   void report_remote_audio(const std::string& user_id, bool active) {
     std::function<void(std::string, bool)> handler;
@@ -234,6 +299,8 @@ class Client {
     return errors_;
   }
   [[nodiscard]] CallSession::State last_state() const { return last_state_.load(); }
+  [[nodiscard]] double local_level() const { return local_level_.load(); }
+  [[nodiscard]] bool local_speaking() const { return local_speaking_.load(); }
   [[nodiscard]] std::uint64_t metrics_reports() const { return metrics_reports_.load(); }
 
  private:
@@ -251,7 +318,10 @@ class Client {
   std::string created_room_;
   std::atomic<CallSession::State> last_state_{CallSession::State::Idle};
   std::atomic<std::uint64_t> metrics_reports_{0};
+  std::atomic<double> local_level_{0};
+  std::atomic<bool> local_speaking_{false};
   std::function<void(std::string, bool)> remote_audio_;
+  std::function<void(std::vector<audio::AudioLevel>)> levels_;
   /// Declared before the session so that it outlives it.
   std::shared_ptr<FakeAudioState> audio_state_;
   std::unique_ptr<CallSession> session_;
@@ -449,6 +519,82 @@ TEST_F(CallSessionTest, LeavingClosesTheMediaSession) {
   EXPECT_TRUE(ana.audio().closed.load());
   EXPECT_TRUE(ana.participants().empty());
   EXPECT_TRUE(ana.session().room_id().empty());
+}
+
+TEST_F(CallSessionTest, VolumeChosenBeforeTheCallIsAppliedWhenItStarts) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+
+  // Nobody has spoken yet, and the interface is allowed to set this anyway.
+  ASSERT_TRUE(ana.session().set_participant_volume("someone", 0.4).ok());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  EXPECT_TRUE(wait_until([&] { return ana.audio().volume_of("someone") == 0.4; }));
+}
+
+TEST_F(CallSessionTest, VolumeDuringACallReachesTheMediaLayer) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(wait_until([&] { return ana.participants().size() == 2; }));
+
+  const std::string bruno_id = bruno.session().local_user().id;
+  ASSERT_TRUE(ana.session().set_participant_volume(bruno_id, 1.5).ok());
+
+  EXPECT_EQ(ana.audio().volume_of(bruno_id), 1.5);
+}
+
+TEST_F(CallSessionTest, TheChosenInputDeviceSurvivesIntoTheCall) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.session().set_input_device("Microfone USB").ok());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  EXPECT_TRUE(wait_until([&] { return ana.audio().input() == "Microfone USB"; }));
+}
+
+TEST_F(CallSessionTest, LevelsMarkWhoIsSpeaking) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(wait_until([&] { return ana.participants().size() == 2; }));
+
+  const std::string bruno_id = bruno.session().local_user().id;
+  ana.report_levels({
+      audio::AudioLevel{{}, 0.7, true},
+      audio::AudioLevel{bruno_id, 0.3, true},
+  });
+
+  EXPECT_TRUE(wait_until([&] {
+    for (const Participant& participant : ana.participants()) {
+      if (participant.user.id == bruno_id) {
+        return participant.speaking && participant.level == 0.3;
+      }
+    }
+    return false;
+  }));
+
+  // The local microphone is reported apart from the participant list: it is
+  // not something the server knows about.
+  EXPECT_TRUE(wait_until([&] { return ana.local_speaking() && ana.local_level() == 0.7; }));
 }
 
 TEST_F(CallSessionTest, AServerErrorReachesTheApplication) {

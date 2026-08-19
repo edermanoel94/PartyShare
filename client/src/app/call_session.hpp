@@ -29,6 +29,10 @@ struct Participant {
   bool sharing_screen = false;
   /// Their audio is arriving on a track of ours.
   bool audio_active = false;
+  /// How loud they are right now, from 0 to 1, and whether that counts as
+  /// speaking. Both come from the media layer several times a second.
+  double level = 0;
+  bool speaking = false;
 };
 
 /// Drives one call, from logging in to hearing the other participants.
@@ -65,6 +69,9 @@ class CallSession {
     /// The room's participants, whenever the list changes.
     std::function<void(std::vector<Participant>)> on_participants;
     std::function<void(audio::AudioStats)> on_metrics;
+    /// The local microphone level, from 0 to 1, several times a second. The
+    /// levels of the other participants arrive through `on_participants`.
+    std::function<void(double level, bool speaking)> on_local_level;
     std::function<void(Error error)> on_error;
   };
 
@@ -102,6 +109,16 @@ class CallSession {
 
   [[nodiscard]] Result<std::monostate> set_muted(bool muted);
   [[nodiscard]] bool muted() const;
+
+  /// Playback volume for one participant, from 0 to 1, with up to 10 allowed
+  /// as amplification. Remembered and reapplied if their audio arrives later.
+  [[nodiscard]] Result<std::monostate> set_participant_volume(const std::string& user_id,
+                                                              double volume);
+
+  /// Switches capture or playback device without ending the call. Without a
+  /// media session yet, the choice is kept and applied when one is created.
+  [[nodiscard]] Result<std::monostate> set_input_device(const std::string& device_id);
+  [[nodiscard]] Result<std::monostate> set_output_device(const std::string& device_id);
 
   void disconnect();
 
@@ -141,6 +158,9 @@ class CallSession {
   std::string room_id_;
   bool muted_ = false;
   std::unordered_map<std::string, Participant> participants_;
+  /// Per participant playback volume, kept here so that a choice made before
+  /// the call survives into it.
+  std::unordered_map<std::string, double> volumes_;
 
   /// Held until the socket is open, because the server only accepts
   /// `authenticate` on a connection that exists.

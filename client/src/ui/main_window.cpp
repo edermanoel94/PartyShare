@@ -1,18 +1,28 @@
 #include "ui/main_window.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include <dv/logging/logger.hpp>
 
+#include <QComboBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QMetaObject>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QStringList>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include "audio/audio_session.hpp"
 
 namespace dv::ui {
 namespace {
@@ -33,15 +43,42 @@ namespace {
   return QStringLiteral("desconhecido");
 }
 
+/// Turns an audio level into how much of a meter to fill.
+///
+/// The level arrives as a linear amplitude from 0 to 1, which is the wrong
+/// scale for an eye: ordinary speech sits around a twentieth of full scale and
+/// would barely lift a linear bar off the floor. Meters are read in decibels,
+/// so the bottom of this one is -60 dBFS and the top is full scale.
+[[nodiscard]] int bar_percentage(double level) {
+  constexpr double kFloorDb = -60.0;
+  if (level <= 0.0) {
+    return 0;
+  }
+  const double decibels = 20.0 * std::log10(level);
+  if (decibels <= kFloorDb) {
+    return 0;
+  }
+  const double filled = (decibels - kFloorDb) / -kFloorDb;
+  return static_cast<int>(std::clamp(filled, 0.0, 1.0) * 100.0);
+}
+
+/// Where the participant's plain name is kept on a list item, next to the
+/// user id in Qt::UserRole. The visible text carries the state as well.
+constexpr int kNameRole = Qt::UserRole + 1;
+
 }  // namespace
 
 MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
     : QMainWindow(parent), session_(session) {
   setWindowTitle(QStringLiteral("Voice Desktop"));
   setMinimumSize(520, 520);
+  // A starting size, so a floating window manager opens something shaped like
+  // a call and not like whatever the layout's hint happened to add up to.
+  resize(760, 680);
 
   build_widgets();
   wire_session();
+  load_devices();
   refresh_controls();
 }
 
@@ -87,14 +124,41 @@ void MainWindow::build_widgets() {
   room_layout->addWidget(room_id_);
   room_layout->addLayout(room_buttons);
 
+  auto* devices = new QGroupBox(QStringLiteral("Dispositivos"), central);
+  auto* devices_form = new QFormLayout(devices);
+  input_device_ = new QComboBox(devices);
+  output_device_ = new QComboBox(devices);
+  devices_form->addRow(QStringLiteral("Microfone"), input_device_);
+  devices_form->addRow(QStringLiteral("Saída"), output_device_);
+
   auto* call = new QGroupBox(QStringLiteral("Chamada"), central);
   auto* call_layout = new QVBoxLayout(call);
   mute_button_ = new QPushButton(QStringLiteral("Mutar microfone"), call);
   mute_button_->setCheckable(true);
+
+  microphone_level_ = new QProgressBar(call);
+  microphone_level_->setRange(0, 100);
+  microphone_level_->setValue(0);
+  microphone_level_->setTextVisible(false);
+  microphone_level_->setFixedHeight(8);
+
   participants_ = new QListWidget(call);
   participants_->setMinimumHeight(140);
+
+  auto* volume_row = new QHBoxLayout();
+  volume_label_ = new QLabel(QStringLiteral("Volume: selecione um participante"), call);
+  volume_ = new QSlider(Qt::Horizontal, call);
+  // 0 to 200 percent: above 100 is amplification, which WebRTC allows.
+  volume_->setRange(0, 200);
+  volume_->setValue(100);
+  volume_->setEnabled(false);
+  volume_row->addWidget(volume_label_);
+  volume_row->addWidget(volume_, 1);
+
   call_layout->addWidget(mute_button_);
+  call_layout->addWidget(microphone_level_);
   call_layout->addWidget(participants_);
+  call_layout->addLayout(volume_row);
 
   status_ = new QLabel(QStringLiteral("desconectado"), central);
   metrics_ = new QLabel(QStringLiteral("sem métricas ainda"), central);
@@ -105,6 +169,7 @@ void MainWindow::build_widgets() {
 
   layout->addWidget(account);
   layout->addWidget(room);
+  layout->addWidget(devices);
   layout->addWidget(call);
   layout->addWidget(status_);
   layout->addWidget(metrics_);
@@ -123,6 +188,13 @@ void MainWindow::build_widgets() {
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
+  connect(input_device_, &QComboBox::currentIndexChanged, this,
+          &MainWindow::on_input_device_changed);
+  connect(output_device_, &QComboBox::currentIndexChanged, this,
+          &MainWindow::on_output_device_changed);
+  connect(participants_, &QListWidget::itemSelectionChanged, this,
+          &MainWindow::on_participant_selected);
+  connect(volume_, &QSlider::valueChanged, this, &MainWindow::on_volume_changed);
 }
 
 void MainWindow::wire_session() {
@@ -140,14 +212,23 @@ void MainWindow::wire_session() {
             QStringList names;
             names.reserve(static_cast<qsizetype>(list.size()));
             for (const client::app::Participant& participant : list) {
-              QString label = QString::fromStdString(participant.user.display_name.empty()
-                                                         ? participant.user.id
-                                                         : participant.user.display_name);
+              // The id and the bare name travel after tabs, so that the volume
+              // slider knows whose volume it is changing and can say the name
+              // without the state that got appended to it. The list only shows
+              // what comes before the first tab.
+              const QString name = QString::fromStdString(participant.user.display_name.empty()
+                                                              ? participant.user.id
+                                                              : participant.user.display_name);
+              QString label = name;
               if (participant.muted) {
                 label += QStringLiteral("  (mudo)");
-              } else if (participant.audio_active) {
+              } else if (participant.speaking) {
                 label += QStringLiteral("  (falando)");
+              } else if (participant.audio_active) {
+                label += QStringLiteral("  (conectado)");
               }
+              label += QStringLiteral("\t") + QString::fromStdString(participant.user.id);
+              label += QStringLiteral("\t") + name;
               names.push_back(label);
             }
             QMetaObject::invokeMethod(this, "apply_participants", Qt::QueuedConnection,
@@ -164,6 +245,11 @@ void MainWindow::wire_session() {
                     .arg(stats.receive_bitrate_kbps, 0, 'f', 0);
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary));
+          },
+      .on_local_level =
+          [this](double level, bool speaking) {
+            QMetaObject::invokeMethod(this, "apply_local_level", Qt::QueuedConnection,
+                                      Q_ARG(double, level), Q_ARG(bool, speaking));
           },
       .on_error =
           [this](Error error) {
@@ -203,8 +289,14 @@ void MainWindow::on_join_room() {
   }
   room_id_->setText(room);
 
-  if (const auto joined = session_.join(room.toStdString(), username_->text().toStdString());
-      !joined) {
+  // The name the room shows is the one the account carries, not the login
+  // typed into the form: a room full of lower case usernames is not what the
+  // server was asked for.
+  const std::string account_name = session_.local_user().display_name;
+  const std::string display_name =
+      account_name.empty() ? username_->text().toStdString() : account_name;
+
+  if (const auto joined = session_.join(room.toStdString(), display_name); !joined) {
     apply_error(QString::fromStdString(joined.error().code),
                 QString::fromStdString(joined.error().message));
   }
@@ -260,8 +352,139 @@ void MainWindow::apply_state(int state, const QString& detail) {
 }
 
 void MainWindow::apply_participants(const QStringList& names) {
+  const QString selected = selected_participant_;
+
+  // Rebuilt wholesale, so the selection has to be restored by identity rather
+  // than by row: the order changes as people join and leave.
+  const QSignalBlocker blocker(participants_);
   participants_->clear();
-  participants_->addItems(names);
+  for (const QString& entry : names) {
+    const QStringList parts = entry.split(QLatin1Char('\t'));
+    auto* item = new QListWidgetItem(parts.value(0), participants_);
+    item->setData(Qt::UserRole, parts.value(1));
+    item->setData(kNameRole, parts.value(2));
+    if (!selected.isEmpty() && parts.value(1) == selected) {
+      participants_->setCurrentItem(item);
+    }
+  }
+
+  // The signals were blocked through the rebuild, so the volume controls have
+  // not heard about any of it. This is also what clears them when whoever was
+  // selected has left the room.
+  on_participant_selected();
+}
+
+void MainWindow::apply_local_level(double level, bool speaking) {
+  microphone_level_->setValue(bar_percentage(level));
+  microphone_level_->setStyleSheet(
+      speaking ? QStringLiteral("QProgressBar::chunk { background-color: palette(highlight); }")
+               : QString());
+}
+
+void MainWindow::on_input_device_changed(int index) {
+  if (index < 0) {
+    return;
+  }
+  const QString id = input_device_->itemData(index).toString();
+  if (const auto applied = session_.set_input_device(id.toStdString()); !applied) {
+    apply_error(QString::fromStdString(applied.error().code),
+                QString::fromStdString(applied.error().message));
+  }
+}
+
+void MainWindow::on_output_device_changed(int index) {
+  if (index < 0) {
+    return;
+  }
+  const QString id = output_device_->itemData(index).toString();
+  if (const auto applied = session_.set_output_device(id.toStdString()); !applied) {
+    apply_error(QString::fromStdString(applied.error().code),
+                QString::fromStdString(applied.error().message));
+  }
+}
+
+void MainWindow::on_participant_selected() {
+  const QListWidgetItem* item = participants_->currentItem();
+  if (item == nullptr) {
+    selected_participant_.clear();
+    volume_->setEnabled(false);
+    volume_label_->setText(QStringLiteral("Volume: selecione um participante"));
+    return;
+  }
+
+  selected_participant_ = item->data(Qt::UserRole).toString();
+
+  // Nobody plays back their own voice, so there is no volume to set for
+  // yourself. Leaving the slider live would let it be dragged with nothing
+  // happening at the other end of it.
+  if (selected_participant_ == QString::fromStdString(session_.local_user().id)) {
+    volume_->setEnabled(false);
+    volume_label_->setText(QStringLiteral("Volume: você não se escuta"));
+    return;
+  }
+
+  volume_->setEnabled(true);
+
+  // The slider has to show the volume of whoever is selected now. Left where
+  // the last selection put it, it would claim a value that was never applied
+  // to this participant, and the first nudge would move their volume from
+  // somewhere they had never been.
+  const int volume = volumes_.value(selected_participant_, 100);
+  {
+    const QSignalBlocker blocker(volume_);
+    volume_->setValue(volume);
+  }
+  update_volume_label(item->data(kNameRole).toString(), volume);
+}
+
+void MainWindow::update_volume_label(const QString& participant, int volume) {
+  volume_label_->setText(QStringLiteral("Volume de %1: %2%").arg(participant).arg(volume));
+}
+
+void MainWindow::on_volume_changed(int value) {
+  if (selected_participant_.isEmpty()) {
+    return;
+  }
+  const double volume = static_cast<double>(value) / 100.0;
+  if (const auto applied =
+          session_.set_participant_volume(selected_participant_.toStdString(), volume);
+      !applied) {
+    apply_error(QString::fromStdString(applied.error().code),
+                QString::fromStdString(applied.error().message));
+    return;
+  }
+
+  volumes_[selected_participant_] = value;
+  if (const QListWidgetItem* item = participants_->currentItem(); item != nullptr) {
+    update_volume_label(item->data(kNameRole).toString(), value);
+  }
+}
+
+void MainWindow::load_devices() {
+  // Enumeration needs no call in progress: the choice has to be possible
+  // before anyone joins a room.
+  const QSignalBlocker input_blocker(input_device_);
+  const QSignalBlocker output_blocker(output_device_);
+
+  if (auto found = client::audio::input_devices(); found) {
+    for (const client::audio::AudioDevice& device : found.value()) {
+      input_device_->addItem(QString::fromStdString(device.name),
+                             QString::fromStdString(device.id));
+    }
+  } else {
+    input_device_->addItem(QStringLiteral("indisponível"));
+    input_device_->setEnabled(false);
+  }
+
+  if (auto found = client::audio::output_devices(); found) {
+    for (const client::audio::AudioDevice& device : found.value()) {
+      output_device_->addItem(QString::fromStdString(device.name),
+                              QString::fromStdString(device.id));
+    }
+  } else {
+    output_device_->addItem(QStringLiteral("indisponível"));
+    output_device_->setEnabled(false);
+  }
 }
 
 void MainWindow::apply_metrics(const QString& summary) {

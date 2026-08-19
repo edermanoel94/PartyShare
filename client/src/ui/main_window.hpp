@@ -3,15 +3,19 @@
 #include <memory>
 #include <vector>
 
+#include <QHash>
 #include <QMainWindow>
 #include <QString>
 
 #include "app/call_session.hpp"
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QProgressBar;
 class QPushButton;
+class QSlider;
 
 namespace dv::ui {
 
@@ -37,11 +41,16 @@ class MainWindow : public QMainWindow {
   void on_join_room();
   void on_leave_room();
   void on_toggle_mute();
+  void on_input_device_changed(int index);
+  void on_output_device_changed(int index);
+  void on_participant_selected();
+  void on_volume_changed(int value);
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
   void apply_participants(const QStringList& names);
   void apply_metrics(const QString& summary);
+  void apply_local_level(double level, bool speaking);
   void apply_error(const QString& code, const QString& message);
   void apply_room_created(const QString& room_id);
 
@@ -49,6 +58,8 @@ class MainWindow : public QMainWindow {
   void build_widgets();
   void wire_session();
   void refresh_controls();
+  void load_devices();
+  void update_volume_label(const QString& participant, int volume);
 
   client::app::CallSession& session_;
 
@@ -61,10 +72,20 @@ class MainWindow : public QMainWindow {
   QPushButton* leave_button_ = nullptr;
   QPushButton* mute_button_ = nullptr;
   QListWidget* participants_ = nullptr;
+  QComboBox* input_device_ = nullptr;
+  QComboBox* output_device_ = nullptr;
+  QProgressBar* microphone_level_ = nullptr;
+  QSlider* volume_ = nullptr;
+  QLabel* volume_label_ = nullptr;
   QLabel* status_ = nullptr;
   QLabel* metrics_ = nullptr;
 
   client::app::CallSession::State state_ = client::app::CallSession::State::Idle;
+  /// Whose volume the slider is showing. Empty when nobody is selected.
+  QString selected_participant_;
+  /// The volume applied to each participant, by user id, as a percentage.
+  /// Anyone missing is at 100, which is the volume they were sent at.
+  QHash<QString, int> volumes_;
 };
 
 }  // namespace dv::ui

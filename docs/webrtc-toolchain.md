@@ -228,6 +228,36 @@ Dois detalhes do build merecem registro, porque nenhum dos dois é evidente:
 
 Ambos são aplicados pelo patch em `patches/webrtc/build/`, que o script aplica sozinho.
 
+### 5.1 Patches que o projeto carrega
+
+Ficam em `patches/webrtc/<repo>/`, onde `<repo>` é o checkout do gclient a que se aplicam.
+O `build_webrtc.sh` aplica todos sozinho e falha cedo se algum não aplicar, o que é o sinal de que o milestone fixado se moveu.
+
+| Patch | Por quê |
+| --- | --- |
+| `build/0001-libstdcxx-and-crel-opt-outs.patch` | Permite apontar para uma libstdc++ externa e desligar as relocações CREL, descrito acima. |
+| `src/0001-qualify-nullptr-t.patch` | Correção de compilação com a libstdc++ fixada. |
+| `src/0002-pulse-adm-reset-quit-on-init.patch` | Bug no dispositivo PulseAudio, descrito abaixo. |
+
+### 5.2 O bug de captura do PulseAudio
+
+Vale registrar porque custou tempo e porque é um bug real da libwebrtc, não do projeto.
+
+Sintoma: a primeira chamada de um processo funciona, e toda chamada seguinte demora exatos dez segundos para negociar e fica sem microfone.
+
+```text
+(audio_device_pulse_linux.cc:1084): failed to activate recording
+(thread.cc:551): Message to dv-worker took 10001ms to dispatch.
+```
+
+Causa: `AudioDeviceLinuxPulse::Terminate()` marca `quit_ = true`, e o `Init()` nunca volta essa flag para `false`.
+Na segunda inicialização, a thread de captura recém-criada lê `quit_` na primeira passagem e termina imediatamente.
+O `StartRecording()` então espera dez segundos por um evento que aquela thread deveria sinalizar, desiste, e a sessão fica sem captura.
+
+O patch põe `quit_ = false` no `Init()`.
+Com ele, sessões sucessivas no mesmo processo levam 1,2 s em vez de 10,2 s, e todas capturam áudio.
+Vale reportar para o upstream.
+
 ### Como o spike verifica isso
 
 O spike linka `dv::shared` quando a árvore da libwebrtc foi construída contra a biblioteca padrão do sistema, e serializa e reanalisa uma mensagem do protocolo passando pela fronteira.

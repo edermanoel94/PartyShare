@@ -275,7 +275,7 @@ class SfuTest : public ::testing::Test {
     options.sfu.ice_servers.clear();
 
     server_ = std::make_unique<SignalingServer>(options);
-    for (const char* name : {"ana", "bruno", "carla"}) {
+    for (const char* name : {"ana", "bruno", "carla", "diego", "elena"}) {
       ASSERT_TRUE(server_->add_user(name, "senha", name).ok());
     }
     server_->start();
@@ -365,6 +365,42 @@ TEST_F(SfuTest, AudioReachesTheOtherParticipant) {
   // The sender must not hear themselves: forwarding to the source would be an
   // echo the client cannot cancel.
   EXPECT_EQ(ana.received_rtp(), 0U);
+}
+
+TEST_F(SfuTest, FiveParticipantsEachGetFourTracks) {
+  // The room limit of the MVP, section 3 of SPEC.md. Five participants is
+  // twenty forwarding paths, and each of them has to exist.
+  Participant& first = add("ana");
+  ASSERT_TRUE(first.login());
+  ASSERT_TRUE(first.create_room());
+  const std::string room = first.created_room_id();
+  ASSERT_TRUE(first.join(room));
+
+  std::vector<Participant*> everyone{&first};
+  for (const char* name : {"bruno", "carla", "diego", "elena"}) {
+    Participant& participant = add(name);
+    ASSERT_TRUE(participant.login()) << name;
+    ASSERT_TRUE(participant.join(room)) << name;
+    everyone.push_back(&participant);
+  }
+
+  auto* router = server_->audio_router();
+  EXPECT_TRUE(wait_until([&] { return router->session_count() == 5; }));
+
+  for (Participant* participant : everyone) {
+    EXPECT_TRUE(wait_until([&] {
+      return router->outbound_track_count(participant->user().id) == 4;
+    })) << "participant "
+        << participant->user().id << " is missing tracks";
+    EXPECT_TRUE(participant->wait_until_media_connected());
+  }
+
+  // One of them talking has to reach the other four.
+  ASSERT_TRUE(wait_until([&] { return everyone.back()->has_outgoing_track(); }));
+  ASSERT_TRUE(everyone.back()->send_audio(50));
+
+  EXPECT_TRUE(wait_until([&] { return router->packets_forwarded() >= 4; }))
+      << "forwarded " << router->packets_forwarded();
 }
 
 TEST_F(SfuTest, LeavingTakesTheSessionAndTheTracksAway) {

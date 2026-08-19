@@ -643,7 +643,8 @@ O M5 está entregue.
 Dispositivos, volume por participante, níveis, detecção de fala e o processamento de áudio da seção 9 estão implementados e verificados com áudio real, sobre um dispositivo virtual que também roda no CI.
 Falta apenas a parte do primeiro critério que exige cinco pessoas em cinco máquinas para julgar eco.
 
-O M8 está em andamento: as tarefas 1, 2, 3, 5, 6 e 7 estão feitas, e falta um backend de encoder por hardware, que depende de a máquina de desenvolvimento ser reiniciada.
+O M8 está em andamento: as tarefas 1, 2, 3, 5, 6 e 7 estão feitas, e a 4 está escrita mas não executada.
+O encoder por hardware existe inteiro, do backend NVENC ao fallback, e falta rodá-lo: a máquina de desenvolvimento foi atualizada sem ser reiniciada, e nem o NVENC nem o `tc netem` funcionam nesse estado.
 Os números da seção 22 estão em [docs/benchmarks.md](docs/benchmarks.md) e a revisão de segurança em [docs/security-review.md](docs/security-review.md).
 A simulação de rede encontrou e corrigiu um congelamento do compartilhamento de tela sob perda, que era a diferença entre "degrada" e "para".
 

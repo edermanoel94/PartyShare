@@ -171,7 +171,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset windows-release
-          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
         shell: bash
 
@@ -261,7 +261,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
-          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
 
       - name: Build

@@ -86,7 +86,7 @@ jobs:
       - name: Configure
         run: >
           cmake -S . -B build/packaging -G Ninja
-          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DCMAKE_BUILD_TYPE=Release
           -DDV_BUILD_TESTS=OFF
 
@@ -186,7 +186,7 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
-          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
         shell: bash
 
       - name: Build
@@ -226,7 +226,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build/asan -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DDV_ENABLE_SANITIZERS=ON \
             -DDV_WARNINGS_AS_ERRORS=ON \
@@ -252,10 +252,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-tidy-18 cppcheck ninja-build libx11-dev
 
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
+
       - name: Generate the compilation database
         run: |
           cmake -S . -B build/analysis -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DDV_BUILD_CLIENT_UI=OFF
@@ -327,7 +331,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build/media -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN" \
             -DCMAKE_BUILD_TYPE=Release \
             -DDV_BUILD_CLIENT_MEDIA=ON \
             -DDV_WEBRTC_ROOT="$HOME/.cache/partyshare/webrtc/dist"

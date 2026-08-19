@@ -28,3 +28,6 @@ Thumbs.db
 config.local.json
 *.pem
 *.key
+
+# The pinned vcpkg checkout, created by scripts/ci_vcpkg.sh
+.vcpkg/

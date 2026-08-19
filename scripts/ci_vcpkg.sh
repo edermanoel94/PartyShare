@@ -1,48 +1,82 @@
 #!/usr/bin/env bash
 #
-# Makes the runner's vcpkg able to resolve the baseline this project pins.
+# Puts a vcpkg at the commit this project pins, and exports the toolchain file
+# that points at it.
 #
-# The runners ship vcpkg as a shallow clone. A shallow clone has the tip and
-# nothing behind it, so vcpkg's own lookup of the pinned baseline fails with a
-# message that reads like the file is missing rather than the history:
+# The runners ship their own vcpkg, and using it does not work. Its ports tree
+# is at whatever commit the runner image was built from, while `builtin-baseline`
+# in vcpkg.json pins the version database to an older one, and vcpkg needs the
+# two to agree:
 #
-#   fatal: path 'versions/baseline.json' exists on disk, but not in '<sha>'
+#   error: no version database entry for gtest at 1.18.0
 #
-# The file is there. The commit is not, or rather its tree is not, and git says
-# the same thing either way.
+# The ports offered 1.18.0 and the pinned database had never heard of it. There
+# is no fixing that from the outside: either the pin follows whatever the runner
+# happens to have, which is the opposite of pinning, or the checkout follows the
+# pin. This does the second.
 #
-# Fetching the one commit is enough and costs almost nothing: it brings the tree
-# behind it, which is all vcpkg reads. Unshallowing the whole repository is the
-# fallback for a server that refuses to serve a commit by hash.
+# The cost is a clone and a bootstrap, and the clone is a single commit rather
+# than the history behind it. What it buys is a build that resolves the same
+# dependency versions on a runner today and on a runner in a year, which is the
+# only reason to write a baseline down.
 #
-# Run from the repository root, on every job that configures with vcpkg.
+# Exports DV_VCPKG_TOOLCHAIN through GITHUB_ENV, and prints it when run outside
+# Actions.
 
 set -euo pipefail
 
-root="${VCPKG_INSTALLATION_ROOT:-}"
-if [[ -z "$root" ]]; then
-  echo "VCPKG_INSTALLATION_ROOT is not set, so there is no vcpkg to prepare" >&2
+VCPKG_DIR="${VCPKG_DIR:-$PWD/.vcpkg}"
+
+# Read without a JSON parser: this runs on the Windows runner too, and the only
+# thing guaranteed there is the shell it is already using.
+baseline="$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' vcpkg.json)"
+if [[ -z "$baseline" ]]; then
+  echo "no builtin-baseline in vcpkg.json, so there is nothing to pin to" >&2
   exit 1
 fi
 
-# Read without a JSON parser, because this runs on the Windows runner too and
-# the only thing guaranteed there is the shell this script is already using.
-baseline="$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' vcpkg.json)"
-if [[ -z "$baseline" ]]; then
-  echo "no builtin-baseline in vcpkg.json, so there is nothing to fetch" >&2
-  exit 0
+if [[ ! -d "$VCPKG_DIR/.git" ]]; then
+  echo "cloning vcpkg at ${baseline}"
+  mkdir -p "$VCPKG_DIR"
+  git -C "$VCPKG_DIR" init --quiet
+  git -C "$VCPKG_DIR" remote add origin https://github.com/microsoft/vcpkg.git
 fi
 
-if git -C "$root" cat-file -e "${baseline}^{tree}" 2>/dev/null; then
-  echo "vcpkg already has the baseline ${baseline}"
-  exit 0
+current="$(git -C "$VCPKG_DIR" rev-parse HEAD 2>/dev/null || echo none)"
+if [[ "$current" != "$baseline" ]]; then
+  # One commit, without the history behind it: the ports and the version
+  # database are both in the tree, and nothing here ever looks further back.
+  git -C "$VCPKG_DIR" fetch --depth 1 origin "$baseline"
+  git -C "$VCPKG_DIR" checkout --quiet FETCH_HEAD
 fi
 
-echo "fetching the baseline ${baseline} into ${root}"
-if ! git -C "$root" fetch --depth 1 origin "$baseline" 2>/dev/null; then
-  echo "fetching it by hash was refused, unshallowing instead"
-  git -C "$root" fetch --unshallow || git -C "$root" fetch
+case "${RUNNER_OS:-$(uname -s)}" in
+  Windows|MINGW*|MSYS*|CYGWIN*)
+    bootstrap="$VCPKG_DIR/bootstrap-vcpkg.bat"
+    executable="$VCPKG_DIR/vcpkg.exe"
+    ;;
+  *)
+    bootstrap="$VCPKG_DIR/bootstrap-vcpkg.sh"
+    executable="$VCPKG_DIR/vcpkg"
+    ;;
+esac
+
+if [[ ! -x "$executable" ]]; then
+  echo "bootstrapping vcpkg"
+  # -disableMetrics because a build machine phoning home is a dependency on a
+  # service being up, in a step whose only job is to produce a compiler.
+  "$bootstrap" -disableMetrics
 fi
 
-git -C "$root" cat-file -e "${baseline}^{tree}"
-echo "vcpkg can resolve the baseline"
+toolchain="$VCPKG_DIR/scripts/buildsystems/vcpkg.cmake"
+if [[ ! -f "$toolchain" ]]; then
+  echo "vcpkg was checked out but has no toolchain file at ${toolchain}" >&2
+  exit 1
+fi
+
+echo "vcpkg ${baseline} ready"
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "DV_VCPKG_TOOLCHAIN=${toolchain}" >> "$GITHUB_ENV"
+else
+  echo "DV_VCPKG_TOOLCHAIN=${toolchain}"
+fi

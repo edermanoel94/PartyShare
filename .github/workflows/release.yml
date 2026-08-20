@@ -54,11 +54,26 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/partyshare/webrtc/dist
-          key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
+          key: webrtc-ubuntu-22.04-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
 
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
         run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
+
+      # libdatachannel is the one dependency with no FetchContent fallback, so
+      # Dependencies.cmake stops the configure outright when it is absent. The
+      # Windows and macOS jobs below have always prepared vcpkg and this one
+      # never did, which made the tag that first exercised this pipeline the
+      # thing that found out.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-ubuntu-22.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-ubuntu-22.04-
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
 
       - name: Build the AppImage
         run: scripts/appimage.sh

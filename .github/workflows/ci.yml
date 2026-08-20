@@ -397,7 +397,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/partyshare/webrtc/dist
-          key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
+          key: webrtc-ubuntu-24.04-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
 
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'

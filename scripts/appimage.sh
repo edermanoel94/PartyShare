@@ -95,13 +95,32 @@ MSG
   exit 1
 fi
 
+# libdatachannel comes from vcpkg or from a system package, and Dependencies.cmake
+# stops the configure when it finds neither. scripts/ci_vcpkg.sh exports the
+# toolchain it prepared as DV_VCPKG_TOOLCHAIN; honouring it here is what lets this
+# script run on a machine whose only copy of the library is the one vcpkg built.
+# A developer with the library installed system wide sets nothing and gets the
+# find_package path, which is why this is a variable and not a required argument.
+# The expansion below uses the +"..." form because set -u makes an empty array
+# an unbound variable on the bash 3.2 a Mac still ships.
+TOOLCHAIN_ARGS=()
+if [[ -n "${DV_VCPKG_TOOLCHAIN:-}" ]]; then
+  if [[ ! -f "$DV_VCPKG_TOOLCHAIN" ]]; then
+    echo "DV_VCPKG_TOOLCHAIN points at ${DV_VCPKG_TOOLCHAIN}, which is not a file" >&2
+    exit 1
+  fi
+  log "using the vcpkg toolchain at ${DV_VCPKG_TOOLCHAIN}"
+  TOOLCHAIN_ARGS=(-DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN")
+fi
+
 if [[ $SKIP_BUILD -eq 0 ]]; then
   log "configuring"
   cmake -S "$REPO_ROOT" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DDV_BUILD_TESTS=OFF \
     -DDV_BUILD_CLIENT_MEDIA=ON \
-    -DDV_WEBRTC_ROOT="$WEBRTC_ROOT"
+    -DDV_WEBRTC_ROOT="$WEBRTC_ROOT" \
+    ${TOOLCHAIN_ARGS[@]+"${TOOLCHAIN_ARGS[@]}"}
 
   log "building"
   cmake --build "$BUILD_DIR" --parallel "$(nproc)"

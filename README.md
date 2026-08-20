@@ -52,6 +52,19 @@ Binaries land in `build/<preset>/bin/`.
 Without Qt, pass `-DDV_BUILD_CLIENT=OFF`.
 Without libdatachannel or OpenSSL, pass `-DDV_BUILD_SERVER=OFF`.
 
+Four presets exist for Linux.
+Windows has `windows-debug`, `windows-release` and `windows-asan`; macOS has `macos-arm64-debug`, `macos-arm64-release`, `macos-arm64-asan` and `macos-x64-release`.
+
+| Preset | Generator | Build type | Sanitizers |
+| --- | --- | --- | --- |
+| `linux-debug` | Ninja | Debug | off |
+| `linux-release` | Ninja | RelWithDebInfo | off |
+| `linux-asan` | Ninja | Debug | AddressSanitizer and UndefinedBehaviorSanitizer |
+| `linux-make` | Unix Makefiles | Debug | off |
+
+Every preset except `linux-make` generates for Ninja, so without `ninja` on the path they fail at configure time with `unable to find a build program corresponding to "Ninja"`.
+Install Ninja, or use `linux-make`, which is there for exactly that case.
+
 The client builds without libwebrtc by default, and in that mode the interface and signaling work but there is no call.
 Building with media requires the tree that `scripts/build_webrtc.sh` produces:
 

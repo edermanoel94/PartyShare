@@ -4,20 +4,20 @@
 
 | | |
 | --- | --- |
-| Origem | https://github.com/FFmpeg/nv-codec-headers, `include/ffnvcodec/nvEncodeAPI.h` |
-| Versão da API | 13.1 |
-| Licença | MIT, no cabeçalho do próprio arquivo |
+| Origin | https://github.com/FFmpeg/nv-codec-headers, `include/ffnvcodec/nvEncodeAPI.h` |
+| API version | 13.1 |
+| License | MIT, in the header of the file itself |
 
-## Por que está aqui
+## Why it is here
 
-O NVENC não tem biblioteca para linkar: a `libnvidia-encode.so` vem com o driver e é aberta em tempo de execução, e o que o programa precisa em tempo de compilação é só a declaração das structs e dos enums que atravessam essa fronteira.
+NVENC has no library to link against: `libnvidia-encode.so` ships with the driver and is opened at runtime, and all the program needs at compile time is the declaration of the structs and enums that cross that boundary.
 
-Essa declaração não é distribuída como pacote em todas as plataformas, e o projeto não pode depender de o desenvolvedor ter instalado o Video Codec SDK.
-O ffmpeg resolve isso do mesmo jeito, e é de lá que este arquivo vem.
+That declaration is not distributed as a package on every platform, and the project cannot depend on the developer having installed the Video Codec SDK.
+ffmpeg solves it the same way, and this file comes from there.
 
-Nada é linkado: `client/src/webrtc/hardware_encoder_nvenc.cpp` abre `libnvidia-encode.so.1` e `libcuda.so.1` com `dlopen`, de forma que um binário compilado com NVENC roda igual em uma máquina sem placa NVIDIA nenhuma.
+Nothing is linked: `client/src/webrtc/hardware_encoder_nvenc.cpp` opens `libnvidia-encode.so.1` and `libcuda.so.1` with `dlopen`, so a binary compiled with NVENC runs just the same on a machine with no NVIDIA card at all.
 
-## Como atualizar
+## How to update it
 
-Baixe o arquivo de novo do repositório acima e atualize a versão da tabela.
-As structs carregam um campo `version`, e o NVENC recusa uma versão mais nova do que o driver conhece, então subir isto sem necessidade só reduz o conjunto de máquinas em que o encoder funciona.
+Download the file again from the repository above and update the version in the table.
+The structs carry a `version` field, and NVENC refuses a version newer than the driver knows about, so raising this without needing to only shrinks the set of machines where the encoder works.

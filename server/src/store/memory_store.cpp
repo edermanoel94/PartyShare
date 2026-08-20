@@ -87,8 +87,8 @@ std::optional<Error> MemoryRoomStore::upsert(RoomRecord record) {
     record.created_at = unix_seconds_now();
   }
 
-  const auto it = std::ranges::find_if(
-      rooms_, [&](const RoomRecord& other) { return other.id == record.id; });
+  const auto it =
+      std::ranges::find_if(rooms_, [&](const RoomRecord& other) { return other.id == record.id; });
   if (it == rooms_.end()) {
     rooms_.push_back(std::move(record));
     return std::nullopt;

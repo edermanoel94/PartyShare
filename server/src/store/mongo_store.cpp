@@ -124,13 +124,12 @@ Account account_from(const bsoncxx::document::view& document) {
 }
 
 bsoncxx::document::value account_to_document(const Account& account) {
-  return make_document(kvp("user_id", account.user.id), kvp("username", account.username),
-                       kvp("display_name", account.user.display_name),
-                       kvp("avatar", account.user.avatar),
-                       kvp("role", std::string(models::to_string(account.user.role))),
-                       kvp("salt_hex", account.salt_hex),
-                       kvp("password_hash_hex", account.password_hash_hex),
-                       kvp("created_at", account.created_at));
+  return make_document(
+      kvp("user_id", account.user.id), kvp("username", account.username),
+      kvp("display_name", account.user.display_name), kvp("avatar", account.user.avatar),
+      kvp("role", std::string(models::to_string(account.user.role))),
+      kvp("salt_hex", account.salt_hex), kvp("password_hash_hex", account.password_hash_hex),
+      kvp("created_at", account.created_at));
 }
 
 RoomRecord room_from(const bsoncxx::document::view& document) {
@@ -216,7 +215,8 @@ class MongoUserStore final : public UserStore {
     }
   }
 
-  [[nodiscard]] std::optional<Account> find_by_username(const std::string& username) const override {
+  [[nodiscard]] std::optional<Account> find_by_username(
+      const std::string& username) const override {
     return find_one(make_document(kvp("username", username)));
   }
 
@@ -248,13 +248,12 @@ class MongoUserStore final : public UserStore {
       const auto result = (*client)[session_.database]["users"].update_one(
           make_document(kvp("user_id", account.user.id)),
           make_document(kvp(
-              "$set",
-              make_document(kvp("username", account.username),
-                            kvp("display_name", account.user.display_name),
-                            kvp("avatar", account.user.avatar),
-                            kvp("role", std::string(models::to_string(account.user.role))),
-                            kvp("salt_hex", account.salt_hex),
-                            kvp("password_hash_hex", account.password_hash_hex)))));
+              "$set", make_document(kvp("username", account.username),
+                                    kvp("display_name", account.user.display_name),
+                                    kvp("avatar", account.user.avatar),
+                                    kvp("role", std::string(models::to_string(account.user.role))),
+                                    kvp("salt_hex", account.salt_hex),
+                                    kvp("password_hash_hex", account.password_hash_hex)))));
       if (!result || result->matched_count() == 0) {
         return Error{.code = "user_not_found", .message = "no such account"};
       }
@@ -339,8 +338,7 @@ class MongoRoomStore final : public RoomStore {
       (*client)[session_.database]["rooms"].update_one(
           make_document(kvp("id", record.id)),
           make_document(
-              kvp("$set", make_document(kvp("name", record.name),
-                                        kvp("owner_id", record.owner_id),
+              kvp("$set", make_document(kvp("name", record.name), kvp("owner_id", record.owner_id),
                                         kvp("persistent", record.persistent))),
               // Only on insert, so that rewriting a room does not restate when
               // it was created.
@@ -355,7 +353,8 @@ class MongoRoomStore final : public RoomStore {
   [[nodiscard]] std::optional<RoomRecord> find(const std::string& room_id) const override {
     try {
       auto client = session_.pool.acquire();
-      const auto document = (*client)[session_.database]["rooms"].find_one(make_document(kvp("id", room_id)));
+      const auto document =
+          (*client)[session_.database]["rooms"].find_one(make_document(kvp("id", room_id)));
       if (!document) {
         return std::nullopt;
       }
@@ -445,8 +444,8 @@ class MongoAuditLog final : public AuditLog {
       auto options = mongocxx::options::find{}
                          .sort(make_document(kvp("timestamp_seconds", -1)))
                          .limit(clamp_audit_limit(limit));
-      const auto filter = actor_id.empty() ? make_document()
-                                           : make_document(kvp("actor_id", actor_id));
+      const auto filter =
+          actor_id.empty() ? make_document() : make_document(kvp("actor_id", actor_id));
       auto cursor = (*client)[session_.database]["audit"].find(filter.view(), options);
       for (const auto& document : cursor) {
         entries.push_back(audit_from(document));

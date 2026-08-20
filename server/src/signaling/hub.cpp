@@ -166,14 +166,25 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
       return out;
 
     case Access::AdminOnly: {
+      // Unreachable without an identity: the only message an unauthenticated
+      // connection may send is `authenticate`, which is not administrative.
+      // Checked all the same, because that reasoning lives in a table in
+      // another file and what it costs to be wrong here is an empty optional
+      // dereferenced.
+      if (!state->user.has_value()) {
+        reply_error(out, connection, unauthorized("authenticate before sending anything else"));
+        return out;
+      }
+
       // The authority on the role is the store, not what this connection was
       // when it logged in. The cached identity is brought back into step at
       // the same time, so the handlers and the audit entry agree with it.
-      const models::Role role = current_role(state->user->id);
+      const std::string user_id = state->user->id;
+      const models::Role role = current_role(user_id);
       state->user->role = role;
       if (!is_allowed(role, type)) {
         DV_LOG_WARN("Connection {} ({}) attempted '{}' without administrator rights", connection,
-                    state->user->id, protocol::type_name(type));
+                    user_id, protocol::type_name(type));
         reply_error(out, connection,
                     Error{.code = "forbidden", .message = "this action requires an administrator"});
         return out;

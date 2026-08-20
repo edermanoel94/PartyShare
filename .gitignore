@@ -15,6 +15,9 @@ third_party/*
 vcpkg_installed/
 .cache/
 
+# The database tool, when it is built in place rather than with `go run`.
+tools/dbadmin/dbadmin
+
 # IDE
 .vscode/
 .idea/

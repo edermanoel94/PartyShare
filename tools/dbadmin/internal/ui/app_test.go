@@ -1,0 +1,459 @@
+package ui
+
+import (
+	"bytes"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/exp/teatest"
+)
+
+// The screens are driven the way a person drives them: a terminal of a known
+// size, keystrokes in, and the frames that came out. Nothing here calls Update
+// directly, because a test that does cannot tell a key that is handled from a
+// key that a form swallowed.
+const (
+	testWidth  = 120
+	testHeight = 32
+	// Generous. Every wait below is on work that takes microseconds against
+	// the fake, so reaching this means something is stuck rather than slow.
+	waitTimeout = 5 * time.Second
+)
+
+// session is a running program and everything it has drawn so far.
+//
+// The frames are accumulated rather than read once, because the program's
+// output is a stream that is consumed as it is read: a second look at what was
+// already drawn finds nothing, and every assertion below is about a screen
+// that was drawn at some point.
+type session struct {
+	model  *teatest.TestModel
+	output io.Reader
+	frames bytes.Buffer
+}
+
+func start(t *testing.T, database Database) *session {
+	t.Helper()
+
+	model := teatest.NewTestModel(t, New(database),
+		teatest.WithInitialTermSize(testWidth, testHeight))
+	return &session{model: model, output: model.Output()}
+}
+
+// drawn is everything the program has written, draining whatever it has
+// written since the last look.
+//
+// The reader underneath is a buffer, so it answers io.EOF whenever it happens
+// to be empty rather than when the program is finished. That is not the end of
+// anything and is deliberately ignored.
+func (s *session) drawn() string {
+	written, _ := io.ReadAll(s.output)
+	s.frames.Write(written)
+	return s.frames.String()
+}
+
+// awaits blocks until the text has been drawn at least once, and fails with
+// everything that was drawn instead, which is a screen somebody can read.
+func (s *session) awaits(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(waitTimeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(s.drawn(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%q was never drawn. What was:\n%s", want, s.drawn())
+}
+
+func (s *session) press(keys ...string) {
+	for _, name := range keys {
+		s.model.Send(key(name))
+	}
+}
+
+func (s *session) typeText(text string) { s.model.Type(text) }
+
+// finish stops the program and returns the last frame, which is where an
+// assertion about what is on the screen now rather than what was on it at some
+// point belongs.
+func (s *session) finish(t *testing.T) string {
+	t.Helper()
+	if err := s.model.Quit(); err != nil {
+		t.Fatalf("could not quit: %v", err)
+	}
+	s.model.WaitFinished(t, teatest.WithFinalTimeout(waitTimeout))
+
+	final, ok := s.model.FinalModel(t, teatest.WithFinalTimeout(waitTimeout)).(Model)
+	if !ok {
+		t.Fatal("the program finished on a model of another type")
+	}
+	// Rendered rather than read from the stream: the renderer only writes the
+	// lines that changed, so the last frame is not the last bytes.
+	return final.View()
+}
+
+func key(name string) tea.KeyMsg {
+	switch name {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	default:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
+	}
+}
+
+func TestTheUsersScreenShowsTheAccountsAndTheConnection(t *testing.T) {
+	t.Parallel()
+	screen := start(t, twoAccounts())
+	screen.awaits(t, "Ana Souza")
+
+	final := screen.finish(t)
+	for _, want := range []string{
+		// Which database is being edited, which is the question somebody with
+		// two terminals open needs answered.
+		"partyshare_test", "127.0.0.1:27017", "as test",
+		"USERNAME", "DISPLAY NAME", "ROLE", "USER ID", "CREATED",
+		"ana", "Ana Souza", "admin", "bruno", "Bruno Lima",
+		"2 accounts · 1 administrator",
+	} {
+		if !strings.Contains(final, want) {
+			t.Errorf("the screen does not show %q. It shows:\n%s", want, final)
+		}
+	}
+}
+
+func TestQuittingWithQ(t *testing.T) {
+	t.Parallel()
+	screen := start(t, twoAccounts())
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("q")
+	screen.model.WaitFinished(t, teatest.WithFinalTimeout(waitTimeout))
+}
+
+func TestCreatingAnAccountSendsWhatTheFormHolds(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("n")
+	screen.awaits(t, "New account")
+
+	screen.typeText("carla")
+	screen.press("tab")
+	screen.typeText("a good password")
+	screen.press("tab")
+	screen.typeText("a good password")
+	screen.press("tab")
+	screen.typeText("Carla Reis")
+	screen.press("tab") // avatar, left empty
+	screen.press("tab") // role
+	screen.press("right")
+	screen.press("enter")
+
+	screen.awaits(t, "was created")
+	final := screen.finish(t)
+
+	if len(database.created) != 1 {
+		t.Fatalf("the screen sent %d creates, want 1", len(database.created))
+	}
+	created := database.created[0]
+	if created.Username != "carla" || created.DisplayName != "Carla Reis" {
+		t.Errorf("created %+v, want the names that were typed", created)
+	}
+	if created.Password != "a good password" {
+		t.Errorf("the password arrived as %q", created.Password)
+	}
+	if created.Role != "admin" {
+		t.Errorf("the role arrived as %q, want the one the arrow key selected", created.Role)
+	}
+	// The list was read again, so the new account is on the screen and not
+	// only in the database.
+	if !strings.Contains(final, "Carla Reis") {
+		t.Errorf("the new account is not in the list:\n%s", final)
+	}
+}
+
+// A password that is typed once is a password that is typed wrong, and this
+// program is often the last way into a server.
+func TestTheCreateFormRefusesTwoDifferentPasswords(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("n")
+	screen.awaits(t, "New account")
+	screen.typeText("carla")
+	screen.press("tab")
+	screen.typeText("one password")
+	screen.press("tab")
+	screen.typeText("another password")
+	screen.press("enter")
+
+	screen.awaits(t, "The two passwords are not the same")
+	final := screen.finish(t)
+
+	if len(database.created) != 0 {
+		t.Errorf("the screen sent %d creates, want none", len(database.created))
+	}
+	// The form is still open, with what was typed still in it.
+	if !strings.Contains(final, "New account") {
+		t.Errorf("the form closed on a refusal:\n%s", final)
+	}
+}
+
+func TestPasswordsAreNeverOnTheScreen(t *testing.T) {
+	t.Parallel()
+	screen := start(t, twoAccounts())
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("p")
+	screen.awaits(t, "Password of ana")
+
+	const secret = "hunter2andthensome"
+	screen.typeText(secret)
+	screen.awaits(t, "•")
+
+	final := screen.finish(t)
+	if strings.Contains(screen.drawn(), secret) || strings.Contains(final, secret) {
+		t.Error("a typed password was drawn on the screen")
+	}
+}
+
+func TestSettingAPassword(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("p")
+	screen.awaits(t, "Password of ana")
+	screen.typeText("a new password")
+	screen.press("tab")
+	screen.typeText("a new password")
+	screen.press("enter")
+
+	screen.awaits(t, "The password of \"ana\" was changed")
+	screen.finish(t)
+
+	want := "id-ana a new password"
+	if len(database.passwords) != 1 || database.passwords[0] != want {
+		t.Errorf("the database was asked for %v, want [%q]", database.passwords, want)
+	}
+}
+
+func TestDeleteAsksFirst(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("d")
+	screen.awaits(t, "Delete ana?")
+	// The consequence a database tool cannot undo for the operator: the
+	// server's own copy of the session.
+	screen.awaits(t, "goes on")
+
+	screen.press("n")
+	if len(database.deleted) != 0 {
+		t.Fatalf("answering no deleted %v", database.deleted)
+	}
+
+	screen.press("d")
+	screen.awaits(t, "Delete ana?")
+	screen.press("y")
+	screen.awaits(t, "was deleted")
+	final := screen.finish(t)
+
+	if len(database.deleted) != 1 || database.deleted[0] != "id-ana" {
+		t.Errorf("deleted %v, want the selected account", database.deleted)
+	}
+	if strings.Contains(final, "Ana Souza") {
+		t.Errorf("the deleted account is still in the list:\n%s", final)
+	}
+}
+
+func TestAFailedChangeIsReportedAndNothingIsLost(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	database.failure = errDatabaseUnreachable
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("d")
+	screen.awaits(t, "Delete ana?")
+	screen.press("y")
+
+	screen.awaits(t, "could not reach the database")
+	final := screen.finish(t)
+	if !strings.Contains(final, "Ana Souza") {
+		t.Errorf("the account vanished from a screen whose delete failed:\n%s", final)
+	}
+}
+
+func TestFilteringTheUsers(t *testing.T) {
+	t.Parallel()
+	screen := start(t, twoAccounts())
+	screen.awaits(t, "Bruno Lima")
+
+	screen.press("/")
+	screen.typeText("bru")
+	screen.awaits(t, "filter bru")
+
+	screen.press("enter")
+	if drawn := screen.drawn(); !strings.Contains(drawn, "bruno") {
+		t.Errorf("the filtered list lost its only match:\n%s", drawn)
+	}
+
+	screen.press("esc")
+	final := screen.finish(t)
+	if !strings.Contains(final, "Ana Souza") {
+		t.Errorf("clearing the filter did not bring the other account back:\n%s", final)
+	}
+}
+
+func TestTheAuditTabReadsTheLog(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("tab")
+	screen.awaits(t, "create_user")
+	screen.awaits(t, "username=bruno role=user")
+
+	// The entry as a card, where the identifiers are shown in full.
+	screen.press("enter")
+	screen.awaits(t, "id-bruno")
+	screen.press("esc")
+
+	// Only this actor: a different query, not a filter over what was read.
+	screen.press("a")
+	screen.awaits(t, "actor ana")
+	screen.finish(t)
+
+	var byActor int
+	for _, query := range database.queries {
+		if query.ActorID == "id-ana" {
+			byActor++
+		}
+	}
+	if byActor == 0 {
+		t.Errorf("the actor key did not reach the database, the queries were %+v",
+			database.queries)
+	}
+}
+
+func TestTheAuditLimitIsPartOfTheQuery(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("tab")
+	screen.awaits(t, "create_user")
+	screen.press("l")
+	screen.awaits(t, "read 1000")
+	screen.finish(t)
+
+	var limits []int
+	for _, query := range database.queries {
+		limits = append(limits, query.Limit)
+	}
+	if !contains(limits, 500) {
+		t.Errorf("the limit key did not change the query, the limits were %v", limits)
+	}
+}
+
+func contains(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAnEmptyDatabaseSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	screen := start(t, &fakeDatabase{})
+
+	screen.awaits(t, "No accounts in this database yet")
+	screen.press("tab")
+	screen.awaits(t, "The audit log is empty")
+	screen.finish(t)
+}
+
+// The single letter shortcuts belong to the list. Inside a field they are
+// letters, and a display name that cannot contain a d is not a display name.
+func TestShortcutsDoNotFireWhileTyping(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("e")
+	screen.awaits(t, "Edit ana")
+	screen.press("tab")
+	screen.typeText("dqnper")
+	screen.awaits(t, "dqnper")
+
+	screen.press("esc")
+	final := screen.finish(t)
+	if len(database.deleted) != 0 || len(database.updated) != 0 {
+		t.Error("a letter typed into a field reached the list underneath")
+	}
+	if !strings.Contains(final, "USERNAME") {
+		t.Errorf("escape did not close the form:\n%s", final)
+	}
+}
+
+func TestEditingAnAccountSendsTheWholeAccount(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("down") // bruno
+	screen.press("e")
+	screen.awaits(t, "Edit bruno")
+	screen.press("tab") // display name
+	screen.typeText(" Junior")
+	screen.press("tab") // avatar
+	screen.press("tab") // role
+	screen.press("right")
+	screen.press("enter")
+
+	screen.awaits(t, "was saved")
+	screen.finish(t)
+
+	if len(database.updated) != 1 {
+		t.Fatalf("the screen sent %d updates, want 1", len(database.updated))
+	}
+	updated := database.updated[0]
+	if updated.UserID != "id-bruno" {
+		t.Errorf("the update names %q, want the selected account", updated.UserID)
+	}
+	if updated.Username != "bruno" {
+		t.Errorf("the username arrived as %q, want it unchanged", updated.Username)
+	}
+	if updated.DisplayName != "Bruno Lima Junior" {
+		t.Errorf("the display name arrived as %q", updated.DisplayName)
+	}
+	if updated.Role != "admin" {
+		t.Errorf("the role arrived as %q, want the promoted one", updated.Role)
+	}
+}

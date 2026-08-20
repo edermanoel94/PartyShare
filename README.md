@@ -152,6 +152,9 @@ Neither of those turns the database on by naming a URI, unlike the command line 
 `timeout_ms` defaults to 2000 and is deliberately short: the store is called with the server's lock held, so the driver's own default of thirty seconds would not fail one login, it would hold every call on the server for half a minute.
 Writing the configuration back out replaces the credentials in the URI with asterisks, so dumping it is not a way to read the password.
 
+[tools/dbadmin](tools/dbadmin/README.md) does the same job from a terminal, and more of it: it lists, creates, edits and removes accounts, sets passwords, and reads the audit log, against the database and without a running server.
+It writes the same documents and the same audit entries the server writes.
+
 `--users-file` points at a list of development accounts:
 
 ```json
@@ -215,6 +218,7 @@ PartyShare/
 ├── server/     # signaling, rooms, sfu
 ├── tests/      # unit, integration
 ├── scripts/    # libwebrtc build, AppImage, netem, virtual audio
+├── tools/      # dbadmin, a terminal front end for the database
 ├── cmake/      # Findlibwebrtc, warnings, sanitizers, packaging
 ├── patches/    # fixes applied on top of the libwebrtc source
 ├── assets/     # icons, .desktop entry, Windows resource
@@ -233,5 +237,6 @@ PartyShare/
 | [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md) | Why a custom libwebrtc build exists, and how to rebuild it |
 | [docs/webrtc-validation.md](docs/webrtc-validation.md) | How to validate the toolchain on a new platform |
 | [docs/benchmarks.md](docs/benchmarks.md) | Latency, CPU, memory, and behaviour under an impaired network |
+| [tools/dbadmin/README.md](tools/dbadmin/README.md) | The terminal front end for the accounts and the audit log |
 | [docs/security-review.md](docs/security-review.md) | The section 17 review, and what remains open |
 | [docs/release.md](docs/release.md) | Cutting a release, and what each platform produces |

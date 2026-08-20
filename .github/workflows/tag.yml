@@ -1,0 +1,109 @@
+name: Tag
+
+# The version lives in exactly one place, the project() call in CMakeLists.txt,
+# because two other things already read it from there: scripts/appimage.sh names
+# the AppImage with it, and CPACK_PACKAGE_FILE_NAME is built from PROJECT_VERSION.
+# A tag computed anywhere else - from commit messages, from a counter - is a tag
+# that can disagree with the file names inside the release it points at, and
+# v0.2.0 carrying partyshare-0.1.0-windows-x64.msi is a release nobody can
+# reason about afterwards.
+#
+# So bumping a version is editing that one line in a pull request, and this job
+# is only the part nobody should have to remember: noticing that master now says
+# something no tag says yet, and writing the tag.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write   # create the tag
+  actions: write    # dispatch the release below
+
+concurrency:
+  group: tag-master
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag the version in CMakeLists.txt
+    if: github.repository == 'edermanoel94/PartyShare'
+    runs-on: ubuntu-24.04
+    steps:
+      # No shallow clone: the tag check below asks the remote directly, but a
+      # tag object still has to be written against real history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          set -euo pipefail
+          # The same expression scripts/appimage.sh uses, deliberately: two
+          # readers of one line should not disagree about how to read it.
+          version="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)"
+          if [[ -z "$version" ]]; then
+            echo "::error::could not read the version out of CMakeLists.txt"
+            exit 1
+          fi
+          # Semver, and checked rather than assumed: CPack and WiX both reject a
+          # version they cannot parse, and finding that out here costs a second
+          # while finding it out in the release job costs the whole build.
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$version' is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "CMakeLists.txt says $version"
+
+      # Asked of the remote rather than of the local clone, because the answer
+      # that matters is whether the tag exists on GitHub. This is also what makes
+      # the job idempotent: every push to master runs it, and all but the ones
+      # that follow a version bump stop here.
+      - name: Has this version been tagged?
+        id: check
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${tag} is already there, nothing to do"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${tag} does not exist yet"
+          fi
+
+      # Annotated, not lightweight: an annotated tag carries who made it and
+      # when, which is the difference between a release you can date and a
+      # pointer to a commit.
+      - name: Create the tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" -m "PartyShare ${{ steps.version.outputs.version }}"
+          git push origin "$tag"
+          echo "::notice::created ${tag}"
+
+      # A tag pushed with GITHUB_TOKEN does not start a workflow. GitHub refuses
+      # to let a run create a run, which would otherwise be an easy infinite
+      # loop, so release.yml's `push: tags` trigger will not see the tag above.
+      # workflow_dispatch and repository_dispatch are the two documented
+      # exceptions to that rule, which is why the release is asked for
+      # explicitly here instead of being left to fire on its own.
+      #
+      # --ref is the tag, not the branch: dispatching against a tag is what makes
+      # github.ref inside that run refs/tags/v..., and the publish job checks
+      # exactly that before it uploads anything.
+      - name: Ask for the release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref "${{ steps.version.outputs.tag }}"
+          echo "::notice::release requested for ${{ steps.version.outputs.tag }}"

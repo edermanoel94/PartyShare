@@ -1,57 +1,57 @@
 # SPEC.md
 
-# PartyShare - compartilhamento de tela e voz no desktop
+# PartyShare - desktop screen sharing and voice
 
-## 1. Objetivo
+## 1. Goal
 
-Construir um aplicativo desktop multiplataforma, desenvolvido em **C++**, capaz de realizar:
+Build a cross platform desktop application, written in **C++**, able to do:
 
-* Compartilhamento de tela em tempo real.
-* Transmissão de áudio com boa qualidade.
-* Comunicação em canais de voz.
-* Suporte inicial para aproximadamente **5 participantes simultâneos**.
-* Funcionamento em Windows, Linux e macOS.
-* Geração de binários nativos para cada plataforma.
+* Real time screen sharing.
+* Good quality audio transmission.
+* Voice channel communication.
+* Initial support for roughly **5 simultaneous participants**.
+* Running on Windows, Linux and macOS.
+* Producing native binaries for each platform.
 
-O projeto deve priorizar **baixa latência, estabilidade, baixo consumo de CPU/memória e qualidade de áudio/vídeo**.
-
----
-
-## 2. Plataformas
-
-O aplicativo deverá gerar binários para:
-
-| Plataforma | Arquitetura | Status      |
-| ---------- | ----------- | ----------- |
-| Windows    | x64         | Obrigatório |
-| Linux      | x64         | Obrigatório |
-| macOS      | ARM64       | Obrigatório |
-| macOS      | x64         | Desejável   |
-
-O código deverá ser majoritariamente compartilhado entre as plataformas, evitando implementações específicas de sistema operacional sempre que possível.
+The project must prioritize **low latency, stability, low CPU and memory usage, and audio and video quality**.
 
 ---
 
-## 3. Stack tecnológica
+## 2. Platforms
 
-### Linguagem
+The application has to produce binaries for:
+
+| Platform | Architecture | Status    |
+| -------- | ------------ | --------- |
+| Windows  | x64          | Mandatory |
+| Linux    | x64          | Mandatory |
+| macOS    | ARM64        | Mandatory |
+| macOS    | x64          | Desirable |
+
+The code has to be mostly shared across platforms, avoiding operating system specific implementations wherever possible.
+
+---
+
+## 3. Technology stack
+
+### Language
 
 * **C++20**
-* Compilação com:
+* Compiled with:
 
-  * MSVC no Windows
-  * GCC/Clang no Linux
-  * Clang no macOS
+  * MSVC on Windows
+  * GCC/Clang on Linux
+  * Clang on macOS
 
 ### Build
 
-Utilizar:
+Use:
 
 * CMake
 * CMake Presets
 * Ninja
 
-Estrutura esperada:
+Expected structure:
 
 ```text
 project/
@@ -68,108 +68,108 @@ project/
 
 ---
 
-## 4. Framework da interface
+## 4. Interface framework
 
-A interface gráfica deverá ser multiplataforma.
+The graphical interface has to be cross platform.
 
-Preferência inicial:
+Initial preference:
 
 **Qt 6**
 
-Motivos:
+Reasons:
 
-* Suporte nativo a Windows, Linux e macOS.
-* Boa integração com C++.
-* Sistema de janelas, eventos e componentes de UI.
-* Possibilidade de gerar aplicações nativas.
-* Boa integração com threads e recursos multimídia.
+* Native support for Windows, Linux and macOS.
+* Good integration with C++.
+* A window, event and UI component system.
+* The ability to produce native applications.
+* Good integration with threads and multimedia facilities.
 
-A camada de UI deverá permanecer separada da camada responsável por captura, processamento e transmissão de mídia.
+The UI layer has to stay separate from the layer responsible for capturing, processing and transmitting media.
 
 ---
 
-# 5. Funcionalidades principais
+# 5. Main features
 
-## 5.1 Sala / Canal
+## 5.1 Room / channel
 
-O aplicativo deverá permitir criar ou entrar em um canal.
+The application has to allow creating or joining a channel.
 
-Exemplo:
+Example:
 
 ```text
-Canal: sala-dev
+Channel: sala-dev
 ID: 8F42A1
 ```
 
-Cada canal deverá permitir inicialmente:
+Each channel initially has to allow:
 
-* Até 5 participantes com áudio simultâneo.
-* 1 participante compartilhando tela por vez.
-* Entrada e saída dinâmica de participantes.
+* Up to 5 participants with simultaneous audio.
+* 1 participant sharing a screen at a time.
+* Participants joining and leaving dynamically.
 
 ---
 
-## 5.2 Compartilhamento de tela
+## 5.2 Screen sharing
 
-O usuário deverá conseguir iniciar e parar o compartilhamento da tela.
+The user has to be able to start and stop sharing their screen.
 
-Configuração inicial:
-
-```text
-Resolução: 1280x720
-FPS: 30
-```
-
-Características:
-
-* Captura da tela em tempo real.
-* Seleção de monitor quando houver múltiplos monitores.
-* Possibilidade futura de compartilhar apenas uma janela.
-* Controle para iniciar/parar transmissão.
-* Indicador visual de que o compartilhamento está ativo.
-
-### Configuração inicial
+Initial configuration:
 
 ```text
 Resolution: 1280x720
 FPS: 30
 ```
 
-### Objetivos de qualidade
+Characteristics:
 
-O sistema deverá priorizar:
+* Real time screen capture.
+* Monitor selection when there are multiple monitors.
+* The future possibility of sharing a single window.
+* A control to start and stop the transmission.
+* A visual indicator that sharing is active.
 
-1. Baixa latência.
-2. Estabilidade do FPS.
-3. Boa qualidade visual.
-4. Uso eficiente de CPU.
-5. Adaptação à largura de banda disponível.
+### Initial configuration
+
+```text
+Resolution: 1280x720
+FPS: 30
+```
+
+### Quality goals
+
+The system has to prioritize:
+
+1. Low latency.
+2. Stable FPS.
+3. Good visual quality.
+4. Efficient CPU usage.
+5. Adaptation to the available bandwidth.
 
 ---
 
-# 6. Codec de vídeo
+# 6. Video codec
 
-O sistema deverá utilizar inicialmente um codec moderno de vídeo.
+The system has to use a modern video codec from the start.
 
-Preferência:
+Preference:
 
 **H.264**
 
-Motivos:
+Reasons:
 
-* Excelente suporte multiplataforma.
-* Hardware encoding disponível em muitas GPUs/CPUs.
-* Boa relação qualidade/bitrate.
-* Ecossistema maduro.
+* Excellent cross platform support.
+* Hardware encoding available on many GPUs and CPUs.
+* A good quality to bitrate ratio.
+* A mature ecosystem.
 
-O sistema deverá ser arquitetado para permitir adicionar futuramente:
+The system has to be architected so that these can be added later:
 
 * VP9
 * AV1
 
-### Bitrate inicial
+### Initial bitrate
 
-Configuração inicial sugerida:
+Suggested initial configuration:
 
 ```text
 Resolution: 1280x720
@@ -177,17 +177,17 @@ FPS: 30
 Bitrate: 1.5 Mbps ~ 3 Mbps
 ```
 
-O bitrate deverá ser configurável e futuramente adaptativo.
+The bitrate has to be configurable, and adaptive later on.
 
 ---
 
-# 7. Captura de tela
+# 7. Screen capture
 
-A captura deverá utilizar APIs nativas quando necessário.
+Capture has to use native APIs where necessary.
 
 ### Windows
 
-Preferência:
+Preference:
 
 * Windows Graphics Capture
 
@@ -197,46 +197,46 @@ Fallback:
 
 ### macOS
 
-Utilizar:
+Use:
 
 * ScreenCaptureKit
 
 ### Linux
 
-Suportar inicialmente:
+Support initially:
 
 * PipeWire
 * X11
 
-O suporte a Wayland deverá ser considerado desde o início da arquitetura.
+Wayland support has to be considered from the start of the architecture.
 
 ---
 
-# 8. Áudio
+# 8. Audio
 
-O aplicativo deverá permitir comunicação de voz em tempo real.
+The application has to allow real time voice communication.
 
-Requisitos:
+Requirements:
 
-* Microfone em tempo real.
-* Reprodução dos participantes.
-* Mute/unmute.
-* Controle individual de volume.
-* Seleção do dispositivo de entrada.
-* Seleção do dispositivo de saída.
-* Cancelamento de eco.
+* Real time microphone.
+* Playback of the participants.
+* Mute and unmute.
+* Individual volume control.
+* Input device selection.
+* Output device selection.
+* Echo cancellation.
 * Noise suppression.
-* Automatic Gain Control, quando apropriado.
+* Automatic Gain Control, where appropriate.
 
 ---
 
-# 9. Codec de áudio
+# 9. Audio codec
 
-Utilizar:
+Use:
 
 **Opus**
 
-Configuração inicial:
+Initial configuration:
 
 ```text
 Sample Rate: 48 kHz
@@ -245,15 +245,15 @@ Bitrate: 32 ~ 64 kbps
 Frame Duration: 20 ms
 ```
 
-O codec deverá suportar posteriormente áudio estéreo.
+The codec has to support stereo audio later on.
 
-O Opus é preferível devido à baixa latência e boa qualidade em chamadas de voz.
+Opus is preferred for its low latency and good quality on voice calls.
 
 ---
 
-# 10. Comunicação em tempo real
+# 10. Real time communication
 
-A arquitetura deverá separar:
+The architecture has to separate:
 
 ```text
 Application
@@ -271,25 +271,25 @@ Application
     └── Network Layer
 ```
 
-Para transporte de mídia em tempo real, avaliar:
+For real time media transport, evaluate:
 
 **WebRTC**
 
-O WebRTC deverá ser a principal alternativa para:
+WebRTC has to be the primary option for:
 
-* Transporte de áudio.
-* Transporte de vídeo.
-* Controle de congestionamento.
+* Audio transport.
+* Video transport.
+* Congestion control.
 * NAT traversal.
 * Jitter buffering.
 * RTP/RTCP.
-* Criptografia da comunicação.
+* Encryption of the communication.
 
 ---
 
-# 11. Arquitetura de rede
+# 11. Network architecture
 
-O sistema deverá possuir uma arquitetura cliente/servidor.
+The system has to have a client/server architecture.
 
 ```text
                 ┌──────────────┐
@@ -305,22 +305,22 @@ O sistema deverá possuir uma arquitetura cliente/servidor.
        Client A     Client B     Client C
 ```
 
-O servidor deverá inicialmente ser responsável por:
+Initially the server has to be responsible for:
 
-* Autenticação.
-* Criação de salas.
-* Entrada/saída de usuários.
+* Authentication.
+* Room creation.
+* Users joining and leaving.
 * Signaling.
-* Gerenciamento dos participantes.
-* Coordenação das conexões WebRTC.
+* Participant management.
+* Coordinating the WebRTC connections.
 
 ---
 
-# 12. Modelo de mídia
+# 12. Media model
 
-Para o MVP, utilizar arquitetura **SFU (Selective Forwarding Unit)**.
+For the MVP, use an **SFU (Selective Forwarding Unit)** architecture.
 
-Exemplo:
+Example:
 
 ```text
 User A ───────┐
@@ -335,26 +335,26 @@ User E ───────┘      │
            User A  User B  User C
 ```
 
-O SFU deverá encaminhar os streams sem realizar transcoding sempre que possível.
+The SFU has to forward the streams without transcoding wherever possible.
 
-Isso reduz:
+That reduces:
 
-* Uso de CPU.
-* Latência.
-* Custo do servidor.
+* CPU usage.
+* Latency.
+* Server cost.
 
 ---
 
 # 13. Signaling
 
-O signaling será responsável por negociar as conexões.
+Signaling is responsible for negotiating the connections.
 
-Pode utilizar:
+It may use:
 
 * WebSocket
 * JSON
 
-Exemplo:
+Example:
 
 ```json
 {
@@ -364,7 +364,7 @@ Exemplo:
 }
 ```
 
-Mensagens esperadas:
+Expected messages:
 
 ```text
 join_room
@@ -382,13 +382,13 @@ unmute
 
 ---
 
-# 14. Servidor
+# 14. Server
 
-O servidor poderá inicialmente ser implementado em C++ para manter o ecossistema homogêneo.
+The server may initially be implemented in C++ to keep the ecosystem homogeneous.
 
-Entretanto, a arquitetura deverá manter o protocolo independente da linguagem para permitir futuramente implementar o backend em outra linguagem.
+Even so, the architecture has to keep the protocol language independent, so the backend can be implemented in another language later.
 
-Responsabilidades:
+Responsibilities:
 
 ```text
 Server
@@ -402,7 +402,7 @@ Server
 
 ---
 
-# 15. Estrutura do projeto
+# 15. Project structure
 
 ```text
 partyshare/
@@ -446,9 +446,9 @@ partyshare/
 
 # 16. Threads
 
-O aplicativo não deverá realizar processamento pesado na thread principal da UI.
+The application must not do heavy processing on the main UI thread.
 
-Sugestão:
+Suggestion:
 
 ```text
 Main/UI Thread
@@ -466,43 +466,43 @@ Main/UI Thread
       └── WebRTC Thread
 ```
 
-A comunicação entre componentes deverá utilizar estruturas thread-safe.
+Communication between components has to use thread safe structures.
 
-Evitar:
+Avoid:
 
-* Locks excessivos.
-* Operações bloqueantes.
-* I/O na UI thread.
-* Cópias desnecessárias de frames.
+* Excessive locking.
+* Blocking operations.
+* I/O on the UI thread.
+* Unnecessary frame copies.
 
-Preferir:
+Prefer:
 
 * Move semantics.
 * RAII.
 * Smart pointers.
-* Lock-free queues quando justificável.
-* Zero-copy quando possível.
+* Lock free queues where justified.
+* Zero copy where possible.
 
 ---
 
-# 17. Segurança
+# 17. Security
 
-Toda comunicação de mídia deverá ser criptografada.
+All media communication has to be encrypted.
 
-Utilizar as primitivas de segurança fornecidas pelo WebRTC sempre que possível.
+Use the security primitives WebRTC provides wherever possible.
 
-O sistema deverá evitar:
+The system has to avoid:
 
-* Comunicação de áudio/vídeo sem criptografia.
-* Armazenamento desnecessário de streams.
-* Credenciais em texto puro.
-* Tokens persistidos sem proteção.
+* Unencrypted audio or video communication.
+* Unnecessary storage of streams.
+* Plain text credentials.
+* Tokens persisted without protection.
 
 ---
 
-# 18. Identidade do usuário
+# 18. User identity
 
-Cada usuário deverá possuir:
+Every user has to have:
 
 ```text
 User
@@ -511,46 +511,46 @@ User
 └── Avatar
 ```
 
-Para o MVP, autenticação poderá ser simples.
+For the MVP, authentication may be simple.
 
-Exemplo:
+Example:
 
 ```text
 Username
 Password
 ```
 
-Posteriormente poderão ser adicionados:
+These may be added later:
 
 * OAuth.
 * Google.
 * GitHub.
-* Login por e-mail.
+* Email login.
 
 ---
 
-# 19. Interface inicial
+# 19. Initial interface
 
-A aplicação deverá possuir pelo menos:
+The application has to have at least:
 
-### Tela inicial
+### Home screen
 
 ```text
 ┌─────────────────────────────────┐
 │            PartyShare           │
 │                                 │
-│        [ Criar Sala ]           │
+│        [ Create Room ]          │
 │                                 │
-│        [ Entrar em Sala ]       │
+│        [ Join Room ]            │
 │                                 │
 └─────────────────────────────────┘
 ```
 
-### Tela da sala
+### Room screen
 
 ```text
 ┌────────────────────────────────────────────┐
-│ Sala: 8F42A1                               │
+│ Room: 8F42A1                               │
 ├────────────────────────────────────────────┤
 │                                            │
 │              Screen Share                  │
@@ -579,80 +579,80 @@ A aplicação deverá possuir pelo menos:
 
 # 20. MVP
 
-A primeira versão deverá conter somente:
+The first version has to contain only:
 
-* [ ] Aplicação desktop C++.
+* [ ] A C++ desktop application.
 * [ ] Windows.
 * [ ] Linux.
 * [ ] macOS.
-* [ ] Criar sala.
-* [ ] Entrar em sala.
-* [ ] Até 5 usuários.
-* [ ] Comunicação de voz.
-* [ ] Mute/unmute.
+* [ ] Creating a room.
+* [ ] Joining a room.
+* [ ] Up to 5 users.
+* [ ] Voice communication.
+* [ ] Mute and unmute.
 * [ ] Screen sharing.
 * [ ] 1280x720.
 * [ ] 30 FPS.
 * [ ] H.264.
 * [ ] Opus.
 * [ ] WebRTC.
-* [ ] Signaling via WebSocket.
+* [ ] Signaling over WebSocket.
 * [ ] SFU.
-* [ ] Seleção de microfone.
-* [ ] Seleção de dispositivo de saída.
-* [ ] Seleção de monitor.
-* [ ] Criptografia.
-* [ ] Build automatizado para as três plataformas.
+* [ ] Microphone selection.
+* [ ] Output device selection.
+* [ ] Monitor selection.
+* [ ] Encryption.
+* [ ] Automated builds for all three platforms.
 
 ---
 
-# 21. Fora do MVP
+# 21. Out of scope for the MVP
 
-Não implementar inicialmente:
+Do not implement initially:
 
-* Gravação de chamadas.
-* Compartilhamento de arquivos.
+* Call recording.
+* File sharing.
 * Chat.
-* Streaming público.
-* Mais de 5 participantes.
-* Vídeo da webcam.
-* Transmissão 4K.
+* Public streaming.
+* More than 5 participants.
+* Webcam video.
+* 4K transmission.
 * Background blur.
 * Virtual camera.
 * Virtual microphone.
-* Noise suppression avançado baseado em IA.
+* Advanced AI based noise suppression.
 * Mobile applications.
 
-Esses recursos poderão ser adicionados posteriormente.
+These may be added later.
 
 ---
 
 # 22. Performance
 
-Objetivos iniciais:
+Initial goals:
 
-| Métrica       |         Objetivo |
+| Metric        |             Goal |
 | ------------- | ---------------: |
 | Screen Share  |         1280x720 |
 | FPS           |               30 |
-| Participantes |                5 |
+| Participants  |                5 |
 | Audio         |           48 kHz |
 | Audio codec   |             Opus |
 | Video codec   |            H.264 |
-| Latência      |   < 150 ms ideal |
-| CPU           |    Baixo consumo |
-| Memory        | < 500 MB cliente |
-| Startup       |     < 3 segundos |
+| Latency       |  < 150 ms ideal  |
+| CPU           |        Low usage |
+| Memory        | < 500 MB client  |
+| Startup       |    < 3 seconds   |
 
-Os números deverão ser tratados como metas e validados através de benchmarks reais.
+The numbers have to be treated as targets and validated through real benchmarks.
 
 ---
 
-# 23. Observabilidade
+# 23. Observability
 
-O aplicativo deverá possuir logging estruturado.
+The application has to have structured logging.
 
-Níveis:
+Levels:
 
 ```text
 TRACE
@@ -663,7 +663,7 @@ ERROR
 FATAL
 ```
 
-Exemplo:
+Example:
 
 ```text
 [INFO] Connected to signaling server
@@ -674,7 +674,7 @@ Exemplo:
 [INFO] FPS: 30
 ```
 
-Métricas importantes:
+Important metrics:
 
 * FPS.
 * Bitrate.
@@ -689,39 +689,39 @@ Métricas importantes:
 
 ---
 
-# 24. Testes
+# 24. Tests
 
-Deverão existir:
+There have to be:
 
 ### Unit tests
 
-Testar:
+Covering:
 
-* Protocolos.
+* Protocols.
 * Room management.
-* Serialização.
-* Configurações.
-* Estados da conexão.
-* Gerenciamento de participantes.
+* Serialization.
+* Configuration.
+* Connection states.
+* Participant management.
 
 ### Integration tests
 
-Testar:
+Covering:
 
 * Signaling.
 * WebRTC.
-* Criação de salas.
-* Entrada/saída de usuários.
-* Audio pipeline.
-* Video pipeline.
+* Room creation.
+* Users joining and leaving.
+* The audio pipeline.
+* The video pipeline.
 
 ### Performance tests
 
-Testar:
+Covering:
 
-* 5 usuários.
-* 720p/30 FPS.
-* Diferentes condições de rede.
+* 5 users.
+* 720p at 30 FPS.
+* Different network conditions.
 * Packet loss.
 * High latency.
 * CPU usage.
@@ -731,7 +731,7 @@ Testar:
 
 # 25. CI/CD
 
-Utilizar GitHub Actions ou equivalente.
+Use GitHub Actions or equivalent.
 
 Pipeline:
 
@@ -755,7 +755,7 @@ macOS ARM64
 macOS x64
 ```
 
-Artefatos:
+Artifacts:
 
 ```text
 Windows → .exe / installer
@@ -765,25 +765,25 @@ macOS   → .app / .dmg
 
 ---
 
-# 26. Qualidade do código
+# 26. Code quality
 
-O projeto deverá seguir:
+The project has to follow:
 
 * C++20.
 * RAII.
-* SOLID quando aplicável.
-* Preferência por composição.
-* Interfaces bem definidas.
-* Separação entre UI e core.
-* Tratamento explícito de erros.
+* SOLID where applicable.
+* A preference for composition.
+* Well defined interfaces.
+* Separation between UI and core.
+* Explicit error handling.
 * Smart pointers.
-* `std::unique_ptr` por padrão.
-* `std::shared_ptr` somente quando houver ownership compartilhado real.
-* Evitar `new`/`delete` manual.
-* Evitar estado global.
-* Testes automatizados.
+* `std::unique_ptr` by default.
+* `std::shared_ptr` only where there is real shared ownership.
+* Avoiding manual `new`/`delete`.
+* Avoiding global state.
+* Automated tests.
 
-Ferramentas recomendadas:
+Recommended tooling:
 
 ```text
 clang-format
@@ -795,7 +795,7 @@ UndefinedBehaviorSanitizer
 
 ---
 
-# 27. Arquitetura de alto nível
+# 27. High level architecture
 
 ```text
                     ┌─────────────────────┐
@@ -834,37 +834,37 @@ UndefinedBehaviorSanitizer
 
 # 28. Roadmap
 
-## Fase 1 — Fundação
+## Phase 1 - Foundation
 
 * [ ] CMake.
-* [ ] Estrutura do projeto.
+* [ ] Project structure.
 * [ ] Qt 6.
 * [ ] Logging.
-* [ ] Configuração.
+* [ ] Configuration.
 * [ ] CI.
-* [ ] Builds multiplataforma.
+* [ ] Cross platform builds.
 
-## Fase 2 — Áudio
+## Phase 2 - Audio
 
-* [ ] Captura de microfone.
-* [ ] Reprodução.
+* [ ] Microphone capture.
+* [ ] Playback.
 * [ ] Opus.
 * [ ] Mute.
-* [ ] Seleção de dispositivos.
+* [ ] Device selection.
 * [ ] WebRTC Audio Track.
 
-## Fase 3 — Screen Share
+## Phase 3 - Screen share
 
-* [ ] Captura Windows.
-* [ ] Captura macOS.
-* [ ] Captura Linux.
-* [ ] Pipeline de frames.
+* [ ] Windows capture.
+* [ ] macOS capture.
+* [ ] Linux capture.
+* [ ] Frame pipeline.
 * [ ] H.264.
 * [ ] 720p.
 * [ ] 30 FPS.
 * [ ] WebRTC Video Track.
 
-## Fase 4 — Networking
+## Phase 4 - Networking
 
 * [ ] Signaling server.
 * [ ] WebSocket.
@@ -874,19 +874,19 @@ UndefinedBehaviorSanitizer
 * [ ] SFU.
 * [ ] Room management.
 
-## Fase 5 — UI
+## Phase 5 - UI
 
 * [ ] Login.
-* [ ] Criar sala.
-* [ ] Entrar em sala.
-* [ ] Lista de participantes.
-* [ ] Controles de áudio.
+* [ ] Creating a room.
+* [ ] Joining a room.
+* [ ] Participant list.
+* [ ] Audio controls.
 * [ ] Screen sharing.
-* [ ] Status da conexão.
+* [ ] Connection status.
 
-## Fase 6 — Hardening
+## Phase 6 - Hardening
 
-* [ ] Testes.
+* [ ] Tests.
 * [ ] Benchmarks.
 * [ ] Network simulation.
 * [ ] Packet loss testing.
@@ -894,7 +894,7 @@ UndefinedBehaviorSanitizer
 * [ ] Security review.
 * [ ] Performance optimization.
 
-## Fase 7 — Release
+## Phase 7 - Release
 
 * [ ] Windows installer.
 * [ ] Linux AppImage.
@@ -905,33 +905,33 @@ UndefinedBehaviorSanitizer
 
 ---
 
-# 29. Critérios de aceitação do MVP
+# 29. MVP acceptance criteria
 
-O MVP será considerado funcional quando:
+The MVP is considered functional when:
 
-1. Um usuário conseguir criar uma sala.
-2. Outros usuários conseguirem entrar utilizando um ID.
-3. Até 5 usuários conseguirem permanecer conectados simultaneamente.
-4. Todos conseguirem conversar utilizando áudio.
-5. O áudio possuir baixa latência e qualidade adequada.
-6. Um usuário conseguir iniciar o compartilhamento de tela.
-7. Os demais participantes conseguirem visualizar a tela.
-8. O compartilhamento funcionar em **1280x720 a 30 FPS**.
-9. O sistema utilizar H.264 para vídeo.
-10. O sistema utilizar Opus para áudio.
-11. A comunicação utilizar WebRTC.
-12. O sistema funcionar em Windows, Linux e macOS.
-13. O projeto possuir builds automatizados para as plataformas suportadas.
-14. O aplicativo permanecer responsivo durante captura, encoding e transmissão.
-15. O sistema não depender de componentes específicos de uma única plataforma.
+1. A user can create a room.
+2. Other users can join it using an ID.
+3. Up to 5 users can stay connected simultaneously.
+4. All of them can talk over audio.
+5. The audio has low latency and adequate quality.
+6. A user can start sharing their screen.
+7. The other participants can see that screen.
+8. Sharing works at **1280x720 and 30 FPS**.
+9. The system uses H.264 for video.
+10. The system uses Opus for audio.
+11. The communication uses WebRTC.
+12. The system runs on Windows, Linux and macOS.
+13. The project has automated builds for the supported platforms.
+14. The application stays responsive during capture, encoding and transmission.
+15. The system does not depend on components specific to a single platform.
 
 ---
 
-# 30. Princípio arquitetural
+# 30. Architectural principle
 
-O projeto deverá ser construído pensando primeiro em **mídia em tempo real**, e não apenas como uma aplicação desktop tradicional.
+The project has to be built thinking first about **real time media**, and not merely as a traditional desktop application.
 
-A separação fundamental deverá ser:
+The fundamental separation has to be:
 
 ```text
 UI
@@ -947,5 +947,4 @@ Network
 SFU
 ```
 
-Dessa forma, a interface poderá evoluir independentemente do mecanismo de transmissão, permitindo posteriormente adicionar webcam, gravação, chat, compartilhamento de arquivos e aumentar o número de participantes sem precisar reescrever o núcleo do sistema.
-
+That way the interface can evolve independently of the transmission mechanism, allowing webcam, recording, chat and file sharing to be added later, and the participant count to grow, without rewriting the core of the system.

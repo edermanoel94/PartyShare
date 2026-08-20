@@ -10,7 +10,7 @@
 namespace dv::ui {
 
 ScreenView::ScreenView(QWidget* parent)
-    : QWidget(parent), placeholder_(QStringLiteral("ninguém está compartilhando a tela")) {
+    : QWidget(parent), placeholder_(QStringLiteral("nobody is sharing a screen")) {
   setMinimumSize(320, 180);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   // Painted edge to edge, so Qt does not have to clear it first.

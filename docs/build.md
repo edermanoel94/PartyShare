@@ -1,54 +1,54 @@
 # Build
 
-O hardware necessário para rodar o cliente e o servidor está em [requirements.md](requirements.md).
-Esta página é sobre as ferramentas necessárias para compilá-los.
+The hardware needed to run the client and the server is in [requirements.md](requirements.md).
+This page is about the tooling needed to compile them.
 
-## Pré-requisitos
+## Prerequisites
 
-| Ferramenta | Versão mínima | Observação |
+| Tool | Minimum version | Note |
 | --- | --- | --- |
-| CMake | 3.25 | Presets versão 6 |
-| Ninja | 1.11 | Gerador padrão de todos os presets |
-| Qt | 6.5 | Apenas para o cliente |
-| Compilador | MSVC 2022, GCC 12, Clang 15 | C++20 |
+| CMake | 3.25 | Presets version 6 |
+| Ninja | 1.11 | The default generator for every preset |
+| Qt | 6.5 | Client only |
+| Compiler | MSVC 2022, GCC 12, Clang 15 | C++20 |
 
-Dependências resolvidas automaticamente: spdlog, nlohmann/json e GoogleTest.
-Cada uma é procurada primeiro com `find_package`, e só é baixada via `FetchContent` quando não estiver instalada.
-Isso permite usar vcpkg, pacotes da distribuição ou nada, sem alterar o CMake.
+Dependencies resolved automatically: spdlog, nlohmann/json and GoogleTest.
+Each is looked up with `find_package` first, and only downloaded through `FetchContent` when it is not installed.
+That allows using vcpkg, distribution packages, or nothing at all, without touching the CMake.
 
-Duas dependências precisam existir de verdade, porque não são header only:
+Two dependencies have to really exist, because they are not header only:
 
-| Dependência | Usada por | Onde obter |
+| Dependency | Used by | Where to get it |
 | --- | --- | --- |
-| libdatachannel | Servidor: WebSocket do signaling (M2) e SFU (M4) | vcpkg ou pacote da distribuição |
-| OpenSSL | Servidor: hash de senha e tokens | vcpkg ou pacote da distribuição |
+| libdatachannel | Server: signaling WebSocket (M2) and SFU (M4) | vcpkg or a distribution package |
+| OpenSSL | Server: password hashing and tokens | vcpkg or a distribution package |
 
-Sem elas, use `-DDV_BUILD_SERVER=OFF` para compilar apenas o cliente e os testes compartilhados.
+Without them, use `-DDV_BUILD_SERVER=OFF` to build only the client and the shared tests.
 
-No Linux, quem linka a libwebrtc precisa também dos headers de X11, glib, gbm e libdrm.
-Eles não são dependências nossas: vêm da captura de tela da própria libwebrtc, que fala com o portal do XDG por GDBus e importa frames como DMA-BUF.
+On Linux, whoever links libwebrtc also needs the X11, glib, gbm and libdrm headers.
+They are not our dependencies: they come from libwebrtc's own screen capture, which talks to the XDG portal over GDBus and imports frames as DMA-BUF.
 
 ```sh
 # Arch
 sudo pacman -S --needed libx11 libxext libxfixes libxdamage libxrandr libxcomposite libxtst glib2 mesa libdrm
 
-# Debian e Ubuntu
+# Debian and Ubuntu
 sudo apt install libx11-dev libxext-dev libxfixes-dev libxdamage-dev libxrandr-dev \
   libxcomposite-dev libxtst-dev libglib2.0-dev libgbm-dev libdrm-dev
 ```
 
-Com vcpkg:
+With vcpkg:
 
 ```sh
 cmake --preset linux-release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 ```
 
-## Camada de mídia do cliente
+## The client media layer
 
-O cliente compila sem a libwebrtc por padrão.
-Nesse modo tudo funciona menos o áudio: `create_media_session` falha com `media_unavailable`, e a interface e o signaling continuam inteiros.
+The client builds without libwebrtc by default.
+In that mode everything works except audio: `create_media_session` fails with `media_unavailable`, and the interface and signaling stay intact.
 
-Para compilar com mídia é preciso a árvore que o `scripts/build_webrtc.sh` produz, pelos motivos da seção 5 de [webrtc-toolchain.md](webrtc-toolchain.md):
+Building with media requires the tree that `scripts/build_webrtc.sh` produces, for the reasons in section 5 of [webrtc-toolchain.md](webrtc-toolchain.md):
 
 ```sh
 cmake -S . -B build/media \
@@ -57,25 +57,25 @@ cmake -S . -B build/media \
 cmake --build build/media
 ```
 
-Duas variáveis de ambiente ajudam a depurar mídia:
+Two environment variables help when debugging media:
 
-| Variável | Efeito |
+| Variable | Effect |
 | --- | --- |
-| `DV_WEBRTC_LOG` | `warning`, `info` ou `verbose`. Liga o log interno da libwebrtc, que é a única forma de ver por que um dispositivo não abriu ou um codec foi recusado. |
-| `DV_AUDIO_NULL_DEVICE` | Usa um dispositivo de áudio nulo em vez do sistema. Serve para máquina sem placa de som e para CI. Nada é capturado nem reproduzido. |
-| `DV_VIRTUAL_INPUT_DEVICE` | Nome do dispositivo de captura que os testes de mídia devem usar. Exportado pelo `scripts/virtual_audio.sh`, descrito abaixo. |
-| `DV_VIRTUAL_OUTPUT_DEVICE` | O mesmo para a reprodução. |
-| `DV_DUMP_SDP` | Faz o SFU registrar cada oferta que envia. É a forma de responder "isto foi negociado?" sobre codecs, extensões e feedback. |
-| `DV_DISABLE_HARDWARE_ENCODER` | Força o codificador de software mesmo em uma máquina com placa capaz. Serve para comparar os dois e para contornar driver problemático. |
-| `DV_CRASH_DIRECTORY` | Onde os relatórios de crash são escritos. O padrão é o diretório de estado da plataforma. |
-| `DV_CRASH_REPORTS` | `0` desliga o relatório de crash por completo. |
+| `DV_WEBRTC_LOG` | `warning`, `info` or `verbose`. Turns on libwebrtc's internal log, which is the only way to see why a device did not open or a codec was refused. |
+| `DV_AUDIO_NULL_DEVICE` | Uses a null audio device instead of the system one. Useful for machines without a sound card and for CI. Nothing is captured and nothing is played. |
+| `DV_VIRTUAL_INPUT_DEVICE` | Name of the capture device the media tests should use. Exported by `scripts/virtual_audio.sh`, described below. |
+| `DV_VIRTUAL_OUTPUT_DEVICE` | The same, for playback. |
+| `DV_DUMP_SDP` | Makes the SFU log every offer it sends. It is how you answer "was this negotiated?" about codecs, extensions and feedback. |
+| `DV_DISABLE_HARDWARE_ENCODER` | Forces the software encoder even on a machine with a capable card. Useful for comparing the two and for working around a problematic driver. |
+| `DV_CRASH_DIRECTORY` | Where crash reports are written. The default is the platform state directory. |
+| `DV_CRASH_REPORTS` | `0` turns crash reporting off entirely. |
 
-### Dispositivo de áudio virtual
+### Virtual audio device
 
-`DV_AUDIO_NULL_DEVICE` faz os testes de negociação passarem em uma máquina sem placa de som, mas um dispositivo nulo não captura nada.
-Tudo que dependa de áudio real, que é a maior parte do M5, continua sem poder ser verificado.
+`DV_AUDIO_NULL_DEVICE` makes the negotiation tests pass on a machine without a sound card, but a null device captures nothing.
+Anything that depends on real audio, which is most of M5, still cannot be verified.
 
-O `scripts/virtual_audio.sh` resolve isso criando uma placa de som virtual em cima do PulseAudio, com um tom tocando no microfone:
+`scripts/virtual_audio.sh` solves that by creating a virtual sound card on top of PulseAudio, with a tone playing into the microphone:
 
 ```sh
 eval "$(scripts/virtual_audio.sh start)"
@@ -83,58 +83,58 @@ ctest --test-dir build/media -L media --output-on-failure
 scripts/virtual_audio.sh stop
 ```
 
-O `eval` exporta `DV_VIRTUAL_INPUT_DEVICE` e `DV_VIRTUAL_OUTPUT_DEVICE`, e os testes de mídia passam a escolher esses dispositivos explicitamente.
+The `eval` exports `DV_VIRTUAL_INPUT_DEVICE` and `DV_VIRTUAL_OUTPUT_DEVICE`, and the media tests then pick those devices explicitly.
 
-Em uma máquina que já tem servidor de som o script se conecta ao que existe e não mexe nos dispositivos padrão, então rodar os testes não toma a caixa de som de quem está no teclado.
-Sem servidor de som algum, que é o caso de um runner de CI, ele sobe um servidor privado e aí sim torna os dispositivos virtuais os padrão.
+On a machine that already has a sound server the script attaches to it and leaves the default devices alone, so running the tests does not steal the speakers from whoever is at the keyboard.
+With no sound server at all, which is the case on a CI runner, it starts a private one and only then makes the virtual devices the defaults.
 
-O microfone virtual é um `module-remap-source` sobre o monitor de um sink nulo, e não o monitor direto: o backend PulseAudio da libwebrtc ignora toda fonte que monitora um sink quando enumera dispositivos de captura, e um dispositivo que ela não lista é um dispositivo que ela não abre.
+The virtual microphone is a `module-remap-source` over the monitor of a null sink, rather than the monitor directly: libwebrtc's PulseAudio backend ignores every source that monitors a sink when it enumerates capture devices, and a device it does not list is a device it does not open.
 
-### Rede degradada
+### Impaired network
 
-Os testes de mídia degradam a rede por dentro, pelos sockets do próprio cliente, e por isso rodam sem privilégio e sem preparo nenhum.
-Para degradar a rede de verdade, nas filas do sistema operacional, existe `scripts/netem.sh`:
+The media tests degrade the network from the inside, through the client's own sockets, and for that reason they run without privileges and without any setup.
+To degrade the network for real, in the operating system's queues, there is `scripts/netem.sh`:
 
 ```sh
-sudo scripts/netem.sh apply lossy      # 5% de perda, o número da seção 22
-sudo scripts/netem.sh apply distant    # 150 ms de latência com jitter
-sudo scripts/netem.sh apply awful      # os dois, mais reordenação
+sudo scripts/netem.sh apply lossy      # 5% loss, the number from section 22
+sudo scripts/netem.sh apply distant    # 150 ms latency with jitter
+sudo scripts/netem.sh apply awful      # both, plus reordering
 sudo scripts/netem.sh clear
 ```
 
-Precisa de root e do módulo `sch_netem`, que não carrega em uma máquina cujo kernel foi atualizado sem reiniciar.
-O script diz isso em vez de deixar o `tc` responder que a qdisc é desconhecida.
-`DV_NETEM_DRY_RUN=1` mostra o comando que seria executado, sem executá-lo e sem root.
+It needs root and the `sch_netem` module, which does not load on a machine whose kernel was upgraded without a reboot.
+The script says so, instead of letting `tc` answer that the qdisc is unknown.
+`DV_NETEM_DRY_RUN=1` shows the command that would run, without running it and without root.
 
-A diferença entre os dois caminhos, e os números medidos com cada um, estão em [benchmarks.md](benchmarks.md).
+The difference between the two paths, and the numbers measured with each, are in [benchmarks.md](benchmarks.md).
 
-### Encoder por hardware
+### Hardware encoder
 
-O compartilhamento de tela é codificado pela placa quando existe uma, e pelo processador quando não.
-No Linux o backend é NVENC, ligado por padrão e desligável com `-DDV_HARDWARE_ENCODER_NVENC=OFF`.
+The screen share is encoded by the graphics card when there is one, and by the processor when there is not.
+On Linux the backend is NVENC, on by default and switchable off with `-DDV_HARDWARE_ENCODER_NVENC=OFF`.
 
-Nada é linkado: `libnvidia-encode.so.1` e `libcuda.so.1` são abertas em tempo de execução, então o mesmo binário roda em uma máquina sem placa NVIDIA.
-O cabeçalho da API está em `third_party/nvcodec`, com a procedência ao lado.
+Nothing is linked: `libnvidia-encode.so.1` and `libcuda.so.1` are opened at runtime, so the same binary runs on a machine without an NVIDIA card.
+The API header is in `third_party/nvcodec`, with its provenance alongside.
 
-Qual codificador está rodando aparece no log a cada intervalo de métricas, lido das estatísticas da libwebrtc:
+Which encoder is running shows up in the log at every metrics interval, read from libwebrtc's statistics:
 
 ```text
 Video: 1280x720 at 30.0 fps, up 835 kbps, estimate 1621 kbps, 0 frames dropped, encoder OpenH264
 ```
 
-Quando não há hardware, o motivo é dito uma vez, na criação da engine, e vale a pena ler antes de procurar o problema no driver:
+When there is no hardware, the reason is stated once, when the engine is created, and it is worth reading before going looking for the problem in the driver:
 
 ```text
 Media: no hardware encoding (the NVIDIA driver does not match its own kernel module, which is
 what an upgrade without a reboot leaves behind), the screen is encoded in software
 ```
 
-`DV_DISABLE_HARDWARE_ENCODER=1` força o software mesmo com placa capaz, que é como se compara os dois.
+`DV_DISABLE_HARDWARE_ENCODER=1` forces software even with a capable card, which is how the two get compared.
 
-### Relatórios de crash
+### Crash reports
 
-Um crash que não deixa nada para trás vira um relato que diz "fechou sozinho".
-Cliente e servidor instalam um handler para os sinais em que um crash chega, e escrevem um arquivo com o build, o sinal e o backtrace:
+A crash that leaves nothing behind turns into a report that says "it closed by itself".
+The client and the server install a handler for the signals a crash arrives through, and write a file with the build, the signal and the backtrace:
 
 ```text
 partyshare crash report
@@ -150,13 +150,13 @@ backtrace:
 /usr/lib/libQt6Core.so.6(_ZN10QEventLoop4execE...+0x193) [0x7f6888391983]
 ```
 
-O padrão é `$XDG_STATE_HOME/partyshare/crashes` no Linux, `~/Library/Logs` no macOS e `%LOCALAPPDATA%` no Windows, e os dez mais recentes são mantidos.
-Cada linha é `binário(+deslocamento) [endereço]`; o deslocamento é o que `addr2line -Cfe <binário> <deslocamento>` transforma em arquivo e linha.
-Nomes vindos de bibliotecas saem mangled, porque desfazer isso aloca memória e um handler de sinal não pode: `c++filt` resolve.
+The default is `$XDG_STATE_HOME/partyshare/crashes` on Linux, `~/Library/Logs` on macOS and `%LOCALAPPDATA%` on Windows, and the ten most recent are kept.
+Each line is `binary(+offset) [address]`; the offset is what `addr2line -Cfe <binary> <offset>` turns into a file and a line.
+Names coming from libraries come out mangled, because demangling allocates memory and a signal handler cannot: `c++filt` sorts it out.
 
-O processo continua morrendo como morreria, então core dump configurado continua sendo gerado e o código de saída continua dizendo o que matou o programa.
+The process still dies the way it would have died, so a configured core dump is still produced and the exit code still says what killed the program.
 
-## Compilar
+## Building
 
 ```sh
 cmake --preset linux-release
@@ -164,7 +164,7 @@ cmake --build --preset linux-release
 ctest --preset linux-release
 ```
 
-Presets disponíveis:
+Available presets:
 
 ```text
 linux-debug     linux-release     linux-asan     linux-make
@@ -172,29 +172,29 @@ windows-debug   windows-release   windows-asan
 macos-arm64-debug   macos-arm64-release   macos-arm64-asan   macos-x64-release
 ```
 
-O preset `linux-make` usa Unix Makefiles, para máquinas sem Ninja.
+The `linux-make` preset uses Unix Makefiles, for machines without Ninja.
 
-Os binários ficam em `build/<preset>/bin/`.
+Binaries land in `build/<preset>/bin/`.
 
-## Opções
+## Options
 
-| Opção | Padrão | Efeito |
+| Option | Default | Effect |
 | --- | --- | --- |
-| `DV_BUILD_CLIENT` | ON | Compila o cliente. Exige Qt 6. |
-| `DV_BUILD_SERVER` | ON | Compila o servidor. |
-| `DV_BUILD_TESTS` | ON | Compila a suíte de testes. |
-| `DV_ENABLE_SANITIZERS` | OFF | AddressSanitizer e UndefinedBehaviorSanitizer. |
-| `DV_WARNINGS_AS_ERRORS` | OFF | Ligado em todos os presets. |
-| `DV_ENABLE_WEBRTC_SPIKE` | OFF | Spike do M3. Ver docs/webrtc-toolchain.md. |
+| `DV_BUILD_CLIENT` | ON | Builds the client. Requires Qt 6. |
+| `DV_BUILD_SERVER` | ON | Builds the server. |
+| `DV_BUILD_TESTS` | ON | Builds the test suite. |
+| `DV_ENABLE_SANITIZERS` | OFF | AddressSanitizer and UndefinedBehaviorSanitizer. |
+| `DV_WARNINGS_AS_ERRORS` | OFF | On in every preset. |
+| `DV_ENABLE_WEBRTC_SPIKE` | OFF | The M3 spike. See docs/webrtc-toolchain.md. |
 
-Os testes são rotulados: `ctest -L unit` roda só os unitários, `ctest -L integration` só os de integração.
-Os de integração sobem um servidor real em porta efêmera e conectam clientes WebSocket de verdade.
+Tests are labelled: `ctest -L unit` runs only the unit tests, `ctest -L integration` only the integration ones.
+The integration tests start a real server on an ephemeral port and connect real WebSocket clients.
 
-Sem Qt instalado, use `-DDV_BUILD_CLIENT=OFF` para compilar apenas o servidor e os testes.
+Without Qt installed, use `-DDV_BUILD_CLIENT=OFF` to build only the server and the tests.
 
-## Configuração em tempo de execução
+## Runtime configuration
 
-A precedência é: padrões embutidos, depois arquivo, depois variáveis de ambiente, depois linha de comando.
+Precedence is: built-in defaults, then the file, then environment variables, then the command line.
 
 ```sh
 ./build/linux-release/bin/partyshare-server \
@@ -202,25 +202,25 @@ A precedência é: padrões embutidos, depois arquivo, depois variáveis de ambi
   --users-file=dev-users.json
 ```
 
-`--users-file` aponta para uma lista de contas de desenvolvimento:
+`--users-file` points at a list of development accounts:
 
 ```json
 [
-  {"username": "ana", "password": "senha-de-teste", "display_name": "Ana"}
+  {"username": "ana", "password": "test-password", "display_name": "Ana"}
 ]
 ```
 
-Esse arquivo guarda senhas em texto puro e existe apenas para o MVP ter usuários.
-A seção 17 da SPEC proíbe isso em produção, e o servidor loga um aviso a cada inicialização.
+That file stores passwords in plain text and exists only so the MVP has users.
+Section 17 of the SPEC forbids it in production, and the server logs a warning on every startup.
 
-Variáveis de ambiente usam o prefixo `DV_`, por exemplo `DV_SIGNALING_URL`, `DV_LOG_LEVEL`, `DV_VIDEO_FPS`.
-A lista completa está em `shared/src/config/config.cpp`.
+Environment variables use the `DV_` prefix, for example `DV_SIGNALING_URL`, `DV_LOG_LEVEL`, `DV_VIDEO_FPS`.
+The complete list is in `shared/src/config/config.cpp`.
 
-## Formatação e análise estática
+## Formatting and static analysis
 
 ```sh
 find shared client server tests tools -name '*.cpp' -o -name '*.hpp' | xargs clang-format -i
 clang-tidy -p build/linux-debug $(find shared server -name '*.cpp')
 ```
 
-O CI roda ambos, mais cppcheck, mais a suíte sob ASan e UBSan.
+CI runs both, plus cppcheck, plus the suite under ASan and UBSan.

@@ -1,56 +1,56 @@
-# Validação da libwebrtc no Windows e no macOS
+# Validating libwebrtc on Windows and macOS
 
-Este documento é o roteiro para você fechar os itens do M3 que o ambiente de desenvolvimento não alcança.
-O que falta validar está listado na seção 6 de [webrtc-toolchain.md](webrtc-toolchain.md).
+This document is the walkthrough for closing the M3 items the development environment cannot reach.
+What remains to be validated is listed in section 6 of [webrtc-toolchain.md](webrtc-toolchain.md).
 
-## 1. O que precisa ser respondido
+## 1. What has to be answered
 
-| Pergunta | Onde |
+| Question | Where |
 | --- | --- |
-| A libwebrtc linka e roda no Windows x64? | Máquina Windows |
-| A libwebrtc linka e roda no macOS ARM64? | Máquina macOS |
-| A captura funciona em Wayland, e não só em X11? | Linux com sessão Wayland |
-| `std::string` atravessa a fronteira da libwebrtc intacta? | Windows e macOS |
+| Does libwebrtc link and run on Windows x64? | A Windows machine |
+| Does libwebrtc link and run on macOS ARM64? | A macOS machine |
+| Does capture work on Wayland, and not only on X11? | Linux with a Wayland session |
+| Does `std::string` cross the libwebrtc boundary intact? | Windows and macOS |
 
-No Linux as duas últimas já têm resposta em X11, sobre a árvore construída do fonte.
-A captura enumerou o monitor e entregou um frame de 1920x1080, e a `std::string` atravessou a fronteira intacta.
-O que falta no Linux é a mesma verificação em uma sessão Wayland.
+On Linux the last two are already answered under X11, over the tree built from source.
+Capture enumerated the monitor and delivered a 1920x1080 frame, and `std::string` crossed the boundary intact.
+What is missing on Linux is the same check in a Wayland session.
 
-A pergunta sobre a `std::string` é a mais importante das quatro.
-Ela é o conflito descrito na seção 5 de [webrtc-toolchain.md](webrtc-toolchain.md), confirmado no Linux com o pacote pré-compilado e resolvido lá pelo build do fonte.
-O spike testa isso diretamente: quando o `dv::shared` é linkado junto, ele serializa e reanalisa uma mensagem do protocolo passando pela fronteira.
+The `std::string` question is the most important of the four.
+It is the conflict described in section 5 of [webrtc-toolchain.md](webrtc-toolchain.md), confirmed on Linux with the prebuilt package and solved there by building from source.
+The spike tests it directly: when `dv::shared` is linked in, it serializes and reparses a protocol message across the boundary.
 
-## 2. Importante sobre a sessão
+## 2. Important, about the session
 
-Rode em uma sessão gráfica normal, na frente da máquina.
+Run this in a normal graphical session, sitting in front of the machine.
 
-Em console de texto ou em runner de CI não vale: sem servidor gráfico anexado, `CreateScreenCapturer` devolve nulo e o spike reporta a captura como pulada, que é exatamente o que já sabemos e não acrescenta nada.
+A text console or a CI runner does not count: with no graphics server attached, `CreateScreenCapturer` returns null and the spike reports capture as skipped, which is exactly what we already know and adds nothing.
 
-Por SSH vale pela metade.
-Se houver uma sessão X11 rodando na máquina, apontar o spike para ela funciona e a captura é real:
+Over SSH it counts halfway.
+If there is an X11 session running on the machine, pointing the spike at it works and the capture is real:
 
 ```sh
 DISPLAY=:1 XAUTHORITY=$HOME/.Xauthority ./build/spike/bin/webrtc-spike
 ```
 
-Foi assim que a validação de X11 no Linux foi feita.
-Em Wayland isso não se aplica: o portal do XDG precisa exibir um diálogo de consentimento na sessão do usuário, então ali é preciso estar na frente da máquina mesmo.
+That is how the X11 validation on Linux was done.
+On Wayland it does not apply: the XDG portal has to show a consent dialog in the user's session, so there you really do have to be in front of the machine.
 
-## 3. Linux, em sessão gráfica
+## 3. Linux, in a graphical session
 
 ```sh
 scripts/validate_webrtc.sh
 ```
 
-Depois repita em uma sessão do outro tipo.
-Se você usa Wayland, entre uma vez em X11, e vice-versa, porque os dois caminhos de captura são implementações diferentes:
+Then repeat it in a session of the other kind.
+If you use Wayland, log into X11 once, and vice versa, because the two capture paths are different implementations:
 
 ```sh
-echo $XDG_SESSION_TYPE   # deve dizer wayland em uma das rodadas e x11 na outra
+echo $XDG_SESSION_TYPE   # should say wayland on one run and x11 on the other
 ```
 
-Em Wayland a captura passa pelo portal do XDG e o sistema deve exibir um diálogo de permissão.
-Se o diálogo não aparecer e a captura falhar, isso é informação relevante, anote.
+On Wayland capture goes through the XDG portal and the system should show a permission dialog.
+If the dialog does not appear and capture fails, that is relevant information, write it down.
 
 ## 4. macOS ARM64
 
@@ -58,19 +58,19 @@ Se o diálogo não aparecer e a captura falhar, isso é informação relevante, 
 scripts/validate_webrtc.sh
 ```
 
-Na primeira execução o macOS deve pedir permissão de gravação de tela.
-Conceda em Ajustes do Sistema, Privacidade e Segurança, Gravação de Tela, e rode de novo.
-Sem essa permissão a enumeração de monitores devolve uma lista vazia, o que é diferente de falhar.
+On the first run macOS should ask for screen recording permission.
+Grant it in System Settings, Privacy and Security, Screen Recording, and run it again.
+Without that permission monitor enumeration returns an empty list, which is different from failing.
 
-O download do pacote pré-compilado é de 322 MB.
+The prebuilt package download is 322 MB.
 
 ## 5. Windows x64
 
-Não há script de shell aqui, porque a máquina não tem bash por padrão.
-Abra o **x64 Native Tools Command Prompt for VS 2022** e rode:
+There is no shell script here, because the machine has no bash by default.
+Open the **x64 Native Tools Command Prompt for VS 2022** and run:
 
 ```bat
-cd C:\caminho\para\PartyShare
+cd C:\path\to\PartyShare
 
 cmake -S . -B build\spike -G Ninja ^
   -DCMAKE_BUILD_TYPE=Release ^
@@ -84,11 +84,11 @@ cmake --build build\spike
 build\spike\bin\webrtc-spike.exe
 ```
 
-O download do pacote pré-compilado é de 739 MB, então a primeira configuração demora.
+The prebuilt package download is 739 MB, so the first configure takes a while.
 
-Se o Ninja não estiver instalado, troque `-G Ninja` por `-G "Visual Studio 17 2022" -A x64`, e o binário sai em `build\spike\bin\Release\`.
+If Ninja is not installed, swap `-G Ninja` for `-G "Visual Studio 17 2022" -A x64`, and the binary lands in `build\spike\bin\Release\`.
 
-## 6. Como é uma execução boa
+## 6. What a good run looks like
 
 ```text
 libwebrtc toolchain spike
@@ -107,48 +107,48 @@ libwebrtc toolchain spike
 spike passed
 ```
 
-As três linhas que interessam mais:
+The three lines that matter most:
 
-- `screen capturer` precisa dizer `monitors found: N` com N maior que zero.
-  `skipped` significa que não havia sessão gráfica e o teste não valeu.
-- `screen capture frame` precisa trazer uma resolução.
-  Essa é a linha que prova que a captura entrega pixels, e não apenas que ela consegue listar monitores.
-  Em Wayland ela só aparece depois de você aceitar o diálogo do portal, e o spike espera até 15 segundos por isso.
-- `std::string across ABI` precisa dizer `dv::shared linked and interoperating`.
+- `screen capturer` has to say `monitors found: N` with N greater than zero.
+  `skipped` means there was no graphical session and the test did not count.
+- `screen capture frame` has to carry a resolution.
+  That is the line proving capture delivers pixels, and not merely that it can list monitors.
+  On Wayland it only appears after you accept the portal dialog, and the spike waits up to 15 seconds for it.
+- `std::string across ABI` has to say `dv::shared linked and interoperating`.
 
-Sobre essa última linha, o sintoma do conflito é diferente por plataforma:
+About that last line, the symptom of the conflict differs by platform:
 
-- No **Linux com pacote pré-compilado** o spike é construído standalone de propósito, e a linha diz `skipped`.
-  Isso é esperado e já é o conflito conhecido.
-  A validação real no Linux é sobre a árvore que o `scripts/build_webrtc.sh` produz, e já foi feita: o spike passa sobre ela com `dv::shared` linkado.
-- No **Windows e no macOS** o spike tenta linkar o `dv::shared` direto.
-  Se o conflito existir ali também, ele **não compila**: o link falha com símbolos `std::__Cr::`.
-  Essa falha é justamente o resultado que precisamos saber, então mande a saída em vez de tentar contornar.
+- On **Linux with the prebuilt package** the spike is built standalone on purpose, and the line says `skipped`.
+  That is expected and is already the known conflict.
+  The real validation on Linux is over the tree `scripts/build_webrtc.sh` produces, and it has been done: the spike passes over it with `dv::shared` linked.
+- On **Windows and macOS** the spike tries to link `dv::shared` directly.
+  If the conflict exists there too, it **does not compile**: the link fails with `std::__Cr::` symbols.
+  That failure is precisely the result we need to know, so send the output rather than trying to work around it.
 
-## 7. Se falhar
+## 7. If it fails
 
-Mande a saída completa, inclusive os erros de compilação ou de link.
-Erro de link mencionando símbolos com `std::__Cr::` é a assinatura exata do conflito de biblioteca padrão.
+Send the complete output, including compile or link errors.
+A link error mentioning symbols with `std::__Cr::` is the exact signature of the standard library conflict.
 
-Vale mandar também:
+Worth sending as well:
 
 ```sh
-uname -a                    # Linux e macOS
+uname -a                    # Linux and macOS
 cmake --version
 ```
 
-## 8. Compilando do fonte nessas plataformas
+## 8. Building from source on those platforms
 
-Se o item 5 falhar no Windows ou no macOS, aquela plataforma precisa do mesmo tratamento do Linux.
+If item 5 fails on Windows or macOS, that platform needs the same treatment Linux got.
 
-No macOS o mesmo script serve:
+On macOS the same script works:
 
 ```sh
 scripts/build_webrtc.sh
 scripts/validate_webrtc.sh --root ~/.cache/partyshare/webrtc/dist
 ```
 
-No Windows o build exige Visual Studio com o Windows SDK e as ferramentas do depot_tools, e o procedimento é o descrito na documentação oficial da WebRTC.
-Vale registrar aqui quando for feito pela primeira vez.
+On Windows the build requires Visual Studio with the Windows SDK and the depot_tools toolchain, and the procedure is the one in the official WebRTC documentation.
+Worth recording here once it has been done for the first time.
 
-Em ambos os casos, reserve tempo: o checkout passa de 30 GB e o build leva dezenas de minutos.
+In both cases, set aside the time: the checkout is over 30 GB and the build takes tens of minutes.

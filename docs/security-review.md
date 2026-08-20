@@ -1,109 +1,109 @@
-# Revisão de segurança
+# Security review
 
-A seção 17 da SPEC lista quatro coisas que o sistema deve evitar.
-Este documento diz, para cada uma, o que existe hoje, onde está a evidência, e o que ainda falta.
+Section 17 of the SPEC lists four things the system must avoid.
+This document says, for each of them, what exists today, where the evidence is, and what is still missing.
 
-Achados abertos aparecem com severidade. Um achado sem correção fica aqui até ser corrigido, não some.
+Open findings carry a severity. A finding without a fix stays here until it is fixed, it does not quietly disappear.
 
-## 1. Comunicação de áudio ou vídeo sem criptografia
+## 1. Unencrypted audio or video
 
-**Situação: coberto, e verificado por teste.**
+**Status: covered, and verified by a test.**
 
-Toda mídia atravessa DTLS-SRTP, que é o que WebRTC exige e o que as duas bibliotecas implementam: a libwebrtc no cliente, a libdatachannel no SFU.
-Não existe caminho no código que negocie mídia em claro, porque nenhuma das duas oferece um.
+All media crosses DTLS-SRTP, which is what WebRTC requires and what both libraries implement: libwebrtc on the client, libdatachannel on the SFU.
+There is no path in the code that negotiates media in the clear, because neither library offers one.
 
-A evidência não é a afirmação acima. `SfuTest.TheMediaIsEncryptedAndNothingElseIsOffered` lê o SDP que atravessa a negociação de verdade e exige três coisas de cada lado:
+The evidence is not the claim above. `SfuTest.TheMediaIsEncryptedAndNothingElseIsOffered` reads the SDP that crosses a real negotiation and demands three things from each side:
 
-- `a=fingerprint:` presente, ou seja, o par DTLS é autenticado por certificado;
-- perfil `RTP/SAVPF`, o seguro;
-- ausência de `RTP/AVP`, que é o mesmo sem criptografia.
+- `a=fingerprint:` present, meaning the DTLS peer is authenticated by certificate;
+- the `RTP/SAVPF` profile, the secure one;
+- the absence of `RTP/AVP`, which is the same thing without encryption.
 
-O signaling em si roda sobre WebSocket sem TLS na configuração padrão (`ws://`).
-Em produção isso tem que ser `wss://`, e o cliente aceita ambos. **Achado, severidade média:** o padrão deveria ser recusar `ws://` para qualquer host que não seja loopback, em vez de aceitar em silêncio.
+Signaling itself runs over WebSocket without TLS in the default configuration (`ws://`).
+In production this has to be `wss://`, and the client accepts both. **Finding, medium severity:** the default should be to refuse `ws://` for any host that is not loopback, rather than accepting it silently.
 
-## 2. Armazenamento desnecessário de streams
+## 2. Unnecessary storage of streams
 
-**Situação: coberto.**
+**Status: covered.**
 
-Nada no projeto grava áudio ou vídeo em disco.
-Os quadros capturados vivem em uma fila de dois e são descartados; os decodificados vão para a tela e morrem.
-O único caminho que escreve arquivo é o log, e ele registra números, não mídia.
+Nothing in the project writes audio or video to disk.
+Captured frames live in a queue of two and are dropped; decoded ones go to the screen and die there.
+The only path that writes a file is the log, and it records numbers, not media.
 
-## 3. Credenciais em texto puro
+## 3. Plain text credentials
 
-**Situação: parcialmente coberto, com um achado.**
+**Status: partially covered, with one finding.**
 
-O que já está certo:
+What is already right:
 
-- Senhas no servidor passam por scrypt com sal por conta, nunca são guardadas em claro (`server/src/signaling/authenticator.cpp`).
-- A senha nunca é registrada em log. O hub registra o nome de usuário e diz isso explicitamente no código.
-- `config::to_json` omite `turn_password` de propósito, para que despejar a configuração não vaze a credencial.
-- O arquivo de contas de desenvolvimento é aceito, mas o servidor avisa em nível `warning` que ele contém senhas em texto puro e que precisa ser substituído antes de qualquer uso real.
+- Passwords on the server go through scrypt with a per-account salt, and are never stored in the clear (`server/src/signaling/authenticator.cpp`).
+- The password is never logged. The hub logs the username and says so explicitly in the code.
+- `config::to_json` omits `turn_password` on purpose, so that dumping the configuration does not leak the credential.
+- The development accounts file is accepted, but the server warns at `warning` level that it contains plain text passwords and has to be replaced before any real use.
 
-**Achado corrigido nesta revisão: o hash de senha era SHA-256 com sal.**
-Um digest é rápido por construção, que é exatamente a propriedade que um armazenamento de senha não pode ter: uma placa moderna testa bilhões de candidatos por segundo contra um arquivo roubado.
+**Finding fixed in this review: the password hash was salted SHA-256.**
+A digest is fast by construction, which is exactly the property a password store cannot have: a modern GPU tries billions of candidates per second against a stolen file.
 
-Agora é scrypt, com N de 2^14, r de 8 e p de 1, o que dá dezesseis mebibytes e algo como cinquenta milissegundos por tentativa.
-Os parâmetros são deliberadamente os interativos e não os máximos: o mesmo custo que protege o arquivo roubado é o custo que uma enxurrada de logins aponta contra o servidor.
+It is scrypt now, with N of 2^14, r of 8 and p of 1, which comes to sixteen mebibytes and something like fifty milliseconds per attempt.
+The parameters are deliberately the interactive ones rather than the maximum: the same cost that protects the stolen file is the cost a flood of logins aims at the server.
 
-Dois testes guardam isso.
-`HashingAPasswordIsDeliberatelySlow` falha se alguém trocar a derivação por um hash simples, porque o tempo cairia de milissegundos para microssegundos.
-`TheSamePasswordStoresDifferentlyForDifferentUsers` garante que o sal por conta é usado, e não apenas gerado.
+Two tests hold this in place.
+`HashingAPasswordIsDeliberatelySlow` fails if someone swaps the derivation for a plain hash, because the time would drop from milliseconds to microseconds.
+`TheSamePasswordStoresDifferentlyForDifferentUsers` ensures the per-account salt is actually used, and not merely generated.
 
-**Achado, severidade média: o cliente mantém a senha em memória durante toda a sessão.**
-É consequência da reconexão automática do M7: o protocolo não tem retomada de sessão, então voltar depois que o servidor reinicia significa autenticar de novo.
-A correção é um token de retomada emitido no `authenticated`, e está registrada em `docs/protocol.md`.
+**Finding, medium severity: the client keeps the password in memory for the whole session.**
+It follows from the automatic reconnection added in M7: the protocol has no session resumption, so coming back after the server restarts means authenticating again.
+The fix is a resume token issued in `authenticated`, and it is recorded in `docs/protocol.md`.
 
-## 4. Tokens persistidos sem proteção
+## 4. Tokens persisted without protection
 
-**Situação: coberto, por não existir persistência.**
+**Status: covered, by there being no persistence.**
 
-O `authenticated` traz um token com validade, e o cliente o mantém apenas em memória.
-Nada é escrito em disco, então não há nada para proteger em repouso.
-Isso deixa de ser verdade no momento em que existir "lembrar de mim", e aí a resposta é o armazenamento de credenciais do sistema operacional, não um arquivo.
+The `authenticated` message carries a token with an expiry, and the client keeps it in memory only.
+Nothing is written to disk, so there is nothing to protect at rest.
+That stops being true the moment a "remember me" feature exists, and at that point the answer is the operating system credential store, not a file.
 
-## 5. TURN com credenciais efêmeras
+## 5. TURN with ephemeral credentials
 
-Pedido pela tarefa 6 do M8, e não coberto.
+Requested by task 6 of M8, and not covered.
 
-**Achado, severidade média: as credenciais de TURN são estáticas e vêm da configuração.**
-Um usuário do aplicativo tem o usuário e a senha do servidor TURN, e pode usá-lo para o que quiser pelo tempo que quiser.
+**Finding, medium severity: the TURN credentials are static and come from the configuration.**
+Any user of the application holds the TURN server username and password, and can use it for whatever they like for as long as they like.
 
-A correção conhecida é a de sempre com coturn: o servidor de signaling deriva `username = <expiração>:<user_id>` e `password = base64(HMAC-SHA1(segredo, username))`, e entrega isso ao cliente junto do `authenticated`.
-O segredo nunca sai do servidor, e a credencial expira sozinha.
-Isso é uma mudança de protocolo, então fica registrada aqui em vez de improvisada.
+The known fix is the usual one with coturn: the signaling server derives `username = <expiry>:<user_id>` and `password = base64(HMAC-SHA1(secret, username))`, and hands that to the client alongside `authenticated`.
+The secret never leaves the server, and the credential expires on its own.
+This is a protocol change, so it is recorded here rather than improvised.
 
-## 6. Um pacote que derrubava o servidor
+## 6. A packet that took the server down
 
-Não pedido pela seção 17, e encontrado enquanto a tarefa 3 do M8 media adaptação de bitrate.
+Not requested by section 17, and found while task 3 of M8 was measuring bitrate adaptation.
 
-**Achado, severidade alta: qualquer participante autenticado derrubava o servidor inteiro com um pacote RTP.**
+**Finding, high severity: any authenticated participant could take down the entire server with one RTP packet.**
 
-Um pacote com o bit de padding do RFC 3550 ligado, encaminhado pelo SFU, chega ao construtor de sender report da libdatachannel, que tem um `assert(!header->padding())`.
-O processo aborta, e com ele todas as chamadas de todas as salas.
+A packet with the RFC 3550 padding bit set, forwarded by the SFU, reaches libdatachannel's sender report constructor, which holds an `assert(!header->padding())`.
+The process aborts, and with it every call in every room.
 
-Não é preciso má fé para produzir um: a libwebrtc envia exatamente esses pacotes quando sonda banda, o que foi como isto apareceu.
-Basta um cliente com uma extensão de cabeçalho a mais para que aconteça sozinho.
+No bad faith is needed to produce one: libwebrtc sends exactly those packets when probing bandwidth, which is how this turned up.
+A single client with one extra header extension is enough for it to happen on its own.
 
-**Corrigido:** o SFU descarta pacotes com padding em vez de encaminhá-los.
-Um participante que os envie perde os próprios quadros, que a retransmissão então repara, em vez de encerrar a chamada de todo mundo.
-`tests/integration/test_sfu.cpp` envia pacotes com padding e exige que o servidor continue encaminhando vídeo depois; sem a correção, o teste aborta em vez de falhar.
+**Fixed:** the SFU drops padded packets instead of forwarding them.
+A participant who sends them loses their own frames, which retransmission then repairs, rather than ending everyone else's call.
+`tests/integration/test_sfu.cpp` sends padded packets and requires the server to keep forwarding video afterwards; without the fix, the test aborts rather than fails.
 
-O `assert` continua na libdatachannel, e continua sendo um `assert` em uma biblioteca de rede que processa entrada não confiável.
-Enquanto estiver lá, nenhuma extensão que faça a libwebrtc sondar banda pode ser negociada.
+The `assert` is still in libdatachannel, and it is still an `assert` in a network library that processes untrusted input.
+While it is there, no extension that makes libwebrtc probe bandwidth may be negotiated.
 
-## Resumo
+## Summary
 
-| Item | Severidade | Situação |
+| Item | Severity | Status |
 | --- | --- | --- |
-| Mídia sem criptografia | - | Coberto, verificado por teste |
-| Armazenamento de streams | - | Coberto, nada é gravado |
-| Hash de senha sem custo | Alta | Corrigido nesta revisão, scrypt |
-| Pacote com padding derrubava o servidor | Alta | Corrigido, o SFU descarta o pacote |
-| Senha em memória durante a sessão | Média | Aberto, precisa de token de retomada |
-| Credenciais de TURN estáticas | Média | Aberto, precisa de credencial efêmera |
-| Signaling sem TLS por padrão | Média | Aberto, deveria recusar `ws://` remoto |
-| Tokens em repouso | - | Coberto, não há persistência |
+| Unencrypted media | - | Covered, verified by a test |
+| Stream storage | - | Covered, nothing is written |
+| Password hash without cost | High | Fixed in this review, scrypt |
+| Padded packet took the server down | High | Fixed, the SFU drops the packet |
+| Password in memory during the session | Medium | Open, needs a resume token |
+| Static TURN credentials | Medium | Open, needs an ephemeral credential |
+| Signaling without TLS by default | Medium | Open, should refuse remote `ws://` |
+| Tokens at rest | - | Covered, there is no persistence |
 
-O critério de aceitação do M8 é "nenhum achado aberto de alta severidade".
-Não há nenhum aberto. Os três que restam são de severidade média e estão descritos acima com a correção conhecida de cada um.
+The M8 acceptance criterion is "no open high severity findings".
+There are none open. The three that remain are medium severity and are described above with the known fix for each.

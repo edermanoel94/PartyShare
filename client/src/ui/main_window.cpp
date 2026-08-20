@@ -48,17 +48,17 @@ constexpr int kNameRole = Qt::UserRole + 1;
 [[nodiscard]] QString to_display(client::app::CallSession::State state) {
   switch (state) {
     case client::app::CallSession::State::Idle:
-      return QStringLiteral("desconectado");
+      return QStringLiteral("disconnected");
     case client::app::CallSession::State::Connecting:
-      return QStringLiteral("conectando");
+      return QStringLiteral("connecting");
     case client::app::CallSession::State::Authenticated:
-      return QStringLiteral("conectado");
+      return QStringLiteral("connected");
     case client::app::CallSession::State::InCall:
-      return QStringLiteral("em chamada");
+      return QStringLiteral("in call");
     case client::app::CallSession::State::Failed:
-      return QStringLiteral("falhou");
+      return QStringLiteral("failed");
   }
-  return QStringLiteral("desconhecido");
+  return QStringLiteral("unknown");
 }
 
 /// Turns an audio level into how much of a meter to fill.
@@ -87,23 +87,23 @@ constexpr int kNameRole = Qt::UserRole + 1;
 /// an identifier from the protocol.
 [[nodiscard]] QString describe(const QString& code, const QString& message) {
   static const QHash<QString, QString> kKnown = {
-      {QStringLiteral("room_not_found"), QStringLiteral("Essa sala não existe.")},
-      {QStringLiteral("room_full"), QStringLiteral("A sala está cheia.")},
-      {QStringLiteral("unauthorized"), QStringLiteral("Usuário ou senha incorretos.")},
+      {QStringLiteral("room_not_found"), QStringLiteral("That room does not exist.")},
+      {QStringLiteral("room_full"), QStringLiteral("The room is full.")},
+      {QStringLiteral("unauthorized"), QStringLiteral("Wrong username or password.")},
       {QStringLiteral("not_connected"),
-       QStringLiteral("Sem conexão com o servidor. Tentando de novo.")},
+       QStringLiteral("No connection to the server. Trying again.")},
       {QStringLiteral("capture_denied"),
-       QStringLiteral("A permissão para capturar a tela foi negada.")},
+       QStringLiteral("Permission to capture the screen was denied.")},
       {QStringLiteral("capture_unavailable"),
-       QStringLiteral("Este sistema não tem como capturar a tela.")},
+       QStringLiteral("This system has no way to capture the screen.")},
       {QStringLiteral("capture_failed"),
-       QStringLiteral("A captura da tela parou. O monitor pode ter sido desconectado.")},
-      {QStringLiteral("monitor_not_found"), QStringLiteral("Esse monitor não existe mais.")},
+       QStringLiteral("Screen capture stopped. The monitor may have been disconnected.")},
+      {QStringLiteral("monitor_not_found"), QStringLiteral("That monitor no longer exists.")},
       {QStringLiteral("screen_share_busy"),
-       QStringLiteral("Outra pessoa já está compartilhando a tela.")},
+       QStringLiteral("Someone else is already sharing their screen.")},
       {QStringLiteral("media_unavailable"),
-       QStringLiteral("Esta versão foi compilada sem áudio e vídeo.")},
-      {QStringLiteral("device_not_found"), QStringLiteral("Esse dispositivo não existe mais.")},
+       QStringLiteral("This build was compiled without audio and video.")},
+      {QStringLiteral("device_not_found"), QStringLiteral("That device no longer exists.")},
   };
 
   if (const auto it = kKnown.find(code); it != kKnown.end()) {
@@ -129,7 +129,7 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   build_home_page();
   build_room_page();
 
-  status_ = new QLabel(QStringLiteral("desconectado"), this);
+  status_ = new QLabel(QStringLiteral("disconnected"), this);
   quality_ = new QLabel(QString{}, this);
   metrics_ = new QLabel(QString{}, this);
   QFont small = metrics_->font();
@@ -153,16 +153,16 @@ void MainWindow::build_login_page() {
   auto* outer = new QVBoxLayout(page);
   outer->addStretch();
 
-  auto* box = new QGroupBox(QStringLiteral("Entrar"), page);
+  auto* box = new QGroupBox(QStringLiteral("Sign in"), page);
   box->setMaximumWidth(420);
   auto* form = new QFormLayout(box);
 
   username_ = new QLineEdit(box);
-  username_->setPlaceholderText(QStringLiteral("usuário"));
+  username_->setPlaceholderText(QStringLiteral("username"));
   password_ = new QLineEdit(box);
   password_->setEchoMode(QLineEdit::Password);
-  password_->setPlaceholderText(QStringLiteral("senha"));
-  connect_button_ = new QPushButton(QStringLiteral("Conectar"), box);
+  password_->setPlaceholderText(QStringLiteral("password"));
+  connect_button_ = new QPushButton(QStringLiteral("Connect"), box);
   connect_button_->setDefault(true);
 
   login_error_ = new QLabel(QString{}, box);
@@ -171,8 +171,8 @@ void MainWindow::build_login_page() {
   // theme, which is an error message nobody can read.
   login_error_->setStyleSheet(QStringLiteral("color: #c62828;"));
 
-  form->addRow(QStringLiteral("Usuário"), username_);
-  form->addRow(QStringLiteral("Senha"), password_);
+  form->addRow(QStringLiteral("Username"), username_);
+  form->addRow(QStringLiteral("Password"), password_);
   form->addRow(connect_button_);
   form->addRow(login_error_);
 
@@ -205,14 +205,14 @@ void MainWindow::build_home_page() {
   box->setMaximumWidth(420);
   auto* column = new QVBoxLayout(box);
 
-  create_button_ = new QPushButton(QStringLiteral("Criar sala"), box);
+  create_button_ = new QPushButton(QStringLiteral("Create room"), box);
   create_button_->setMinimumHeight(44);
 
   room_id_ = new QLineEdit(box);
-  room_id_->setPlaceholderText(QStringLiteral("ID da sala, por exemplo 8F42A1"));
+  room_id_->setPlaceholderText(QStringLiteral("Room ID, for example 8F42A1"));
   room_id_->setAlignment(Qt::AlignCenter);
 
-  join_button_ = new QPushButton(QStringLiteral("Entrar em sala"), box);
+  join_button_ = new QPushButton(QStringLiteral("Join room"), box);
   join_button_->setMinimumHeight(44);
 
   column->addWidget(create_button_);
@@ -254,7 +254,7 @@ void MainWindow::build_room_page() {
 
   screen_view_ = new ScreenView(page);
 
-  auto* people = new QGroupBox(QStringLiteral("Participantes"), page);
+  auto* people = new QGroupBox(QStringLiteral("Participants"), page);
   auto* people_column = new QVBoxLayout(people);
   participants_ = new QListWidget(people);
   participants_->setMinimumHeight(120);
@@ -266,7 +266,7 @@ void MainWindow::build_room_page() {
   microphone_level_->setFixedHeight(8);
 
   auto* volume_row = new QHBoxLayout();
-  volume_label_ = new QLabel(QStringLiteral("Volume: selecione um participante"), people);
+  volume_label_ = new QLabel(QStringLiteral("Volume: select a participant"), people);
   volume_ = new QSlider(Qt::Horizontal, people);
   // 0 to 200 percent: above 100 is amplification, which WebRTC allows.
   volume_->setRange(0, 200);
@@ -280,12 +280,12 @@ void MainWindow::build_room_page() {
   people_column->addLayout(volume_row);
 
   auto* controls = new QHBoxLayout();
-  mute_button_ = new QPushButton(QStringLiteral("Mutar microfone"), page);
+  mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
   mute_button_->setCheckable(true);
-  share_button_ = new QPushButton(QStringLiteral("Compartilhar tela"), page);
+  share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
   share_button_->setCheckable(true);
-  settings_button_ = new QPushButton(QStringLiteral("Configurações"), page);
-  leave_button_ = new QPushButton(QStringLiteral("Sair"), page);
+  settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
+  leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
   for (QPushButton* button : {mute_button_, share_button_, settings_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
@@ -335,14 +335,14 @@ void MainWindow::wire_session() {
                                                               : participant.user.display_name);
               QString label = name;
               if (participant.muted) {
-                label += QStringLiteral("  (mudo)");
+                label += QStringLiteral("  (muted)");
               } else if (participant.speaking) {
-                label += QStringLiteral("  (falando)");
+                label += QStringLiteral("  (speaking)");
               } else if (participant.audio_active) {
-                label += QStringLiteral("  (conectado)");
+                label += QStringLiteral("  (connected)");
               }
               if (participant.sharing_screen) {
-                label += QStringLiteral("  (compartilhando)");
+                label += QStringLiteral("  (sharing)");
               }
               label += QStringLiteral("\t") + QString::fromStdString(participant.user.id);
               label += QStringLiteral("\t") + name;
@@ -354,7 +354,7 @@ void MainWindow::wire_session() {
       .on_metrics =
           [this](client::media::AudioStats stats) {
             QString summary =
-                QStringLiteral("rtt %1 ms · jitter %2 ms · perdidos %3 · %4 kbps ↑ · %5 kbps ↓")
+                QStringLiteral("rtt %1 ms · jitter %2 ms · lost %3 · %4 kbps ↑ · %5 kbps ↓")
                     .arg(stats.round_trip_time_ms, 0, 'f', 0)
                     .arg(stats.jitter_ms, 0, 'f', 1)
                     .arg(stats.packets_lost)
@@ -368,10 +368,10 @@ void MainWindow::wire_session() {
             const client::media::VideoStats video = session_.video_stats();
             if (video.frames_sent > 0) {
               summary +=
-                  QStringLiteral(" · tela %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
+                  QStringLiteral(" · screen %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
             } else if (video.frames_received > 0) {
               summary +=
-                  QStringLiteral(" · tela %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
+                  QStringLiteral(" · screen %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
             }
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary),
@@ -411,7 +411,7 @@ void MainWindow::on_connect() {
   login_error_->clear();
   const QString user = username_->text().trimmed();
   if (user.isEmpty()) {
-    login_error_->setText(QStringLiteral("Informe o usuário."));
+    login_error_->setText(QStringLiteral("Enter a username."));
     return;
   }
 
@@ -424,7 +424,7 @@ void MainWindow::on_connect() {
 }
 
 void MainWindow::on_create_room() {
-  if (const auto created = session_.create_room("sala"); !created) {
+  if (const auto created = session_.create_room("room"); !created) {
     apply_error(QString::fromStdString(created.error().code),
                 QString::fromStdString(created.error().message));
   }
@@ -433,7 +433,7 @@ void MainWindow::on_create_room() {
 void MainWindow::on_join_room() {
   const QString room = room_id_->text().trimmed().toUpper();
   if (room.isEmpty()) {
-    apply_error(QStringLiteral("invalid_value"), QStringLiteral("Informe o ID da sala."));
+    apply_error(QStringLiteral("invalid_value"), QStringLiteral("Enter the room ID."));
     return;
   }
   room_id_->setText(room);
@@ -498,7 +498,7 @@ void MainWindow::on_participant_selected() {
   if (item == nullptr) {
     selected_participant_.clear();
     volume_->setEnabled(false);
-    volume_label_->setText(QStringLiteral("Volume: selecione um participante"));
+    volume_label_->setText(QStringLiteral("Volume: select a participant"));
     return;
   }
 
@@ -509,7 +509,7 @@ void MainWindow::on_participant_selected() {
   // happening at the other end of it.
   if (selected_participant_ == QString::fromStdString(session_.local_user().id)) {
     volume_->setEnabled(false);
-    volume_label_->setText(QStringLiteral("Volume: você não se escuta"));
+    volume_label_->setText(QStringLiteral("Volume: you do not hear yourself"));
     return;
   }
 
@@ -528,7 +528,7 @@ void MainWindow::on_participant_selected() {
 }
 
 void MainWindow::update_volume_label(const QString& participant, int volume) {
-  volume_label_->setText(QStringLiteral("Volume de %1: %2%").arg(participant).arg(volume));
+  volume_label_->setText(QStringLiteral("Volume for %1: %2%").arg(participant).arg(volume));
 }
 
 void MainWindow::on_volume_changed(int value) {
@@ -572,9 +572,10 @@ void MainWindow::apply_state(int state, const QString& detail) {
     login_error_->setText(describe(QString{}, detail));
   }
 
-  welcome_->setText(user.display_name.empty()
-                        ? QStringLiteral("PartyShare")
-                        : QStringLiteral("Olá, %1").arg(QString::fromStdString(user.display_name)));
+  welcome_->setText(
+      user.display_name.empty()
+          ? QStringLiteral("PartyShare")
+          : QStringLiteral("Hello, %1").arg(QString::fromStdString(user.display_name)));
 
   refresh_controls();
   show_page();
@@ -618,7 +619,7 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
     return;
   }
   quality_->setText(
-      QStringLiteral("● rede %1")
+      QStringLiteral("● network %1")
           .arg(QString::fromUtf8(client::app::to_string(measured).data(),
                                  static_cast<qsizetype>(client::app::to_string(measured).size()))));
   quality_->setStyleSheet(
@@ -654,7 +655,7 @@ void MainWindow::apply_room_created(const QString& room_id) {
 void MainWindow::apply_screen_share(const QString& user_id) {
   if (user_id.isEmpty()) {
     sharing_label_->clear();
-    screen_view_->set_placeholder(QStringLiteral("ninguém está compartilhando a tela"));
+    screen_view_->set_placeholder(QStringLiteral("nobody is sharing a screen"));
     screen_view_->clear();
     refresh_controls();
     return;
@@ -670,14 +671,14 @@ void MainWindow::apply_screen_share(const QString& user_id) {
   }
 
   const bool is_me = user_id == QString::fromStdString(session_.local_user().id);
-  sharing_label_->setText(is_me ? QStringLiteral("você está compartilhando")
-                                : QStringLiteral("%1 está compartilhando").arg(name));
+  sharing_label_->setText(is_me ? QStringLiteral("you are sharing")
+                                : QStringLiteral("%1 is sharing").arg(name));
 
   // Nobody receives their own screen back, so while you are the one sharing
   // this panel stays empty. Saying that nobody is sharing would be wrong in
   // exactly the moment it matters most.
   if (is_me) {
-    screen_view_->set_placeholder(QStringLiteral("você está compartilhando esta tela com a sala"));
+    screen_view_->set_placeholder(QStringLiteral("you are sharing this screen with the room"));
     screen_view_->clear();
   }
   refresh_controls();
@@ -696,7 +697,7 @@ void MainWindow::show_page() {
     case client::app::CallSession::State::InCall:
       pages_->setCurrentIndex(kRoomPage);
       room_title_->setText(
-          QStringLiteral("Sala: %1").arg(QString::fromStdString(session_.room_id())));
+          QStringLiteral("Room: %1").arg(QString::fromStdString(session_.room_id())));
       break;
   }
 }
@@ -713,8 +714,8 @@ void MainWindow::refresh_controls() {
   join_button_->setEnabled(authenticated);
 
   mute_button_->setChecked(session_.muted());
-  mute_button_->setText(session_.muted() ? QStringLiteral("Desmutar microfone")
-                                         : QStringLiteral("Mutar microfone"));
+  mute_button_->setText(session_.muted() ? QStringLiteral("Unmute microphone")
+                                         : QStringLiteral("Mute microphone"));
 
   const bool sharing = session_.sharing_screen();
   const std::string sharer = session_.screen_sharer();
@@ -725,8 +726,7 @@ void MainWindow::refresh_controls() {
   // through and answering with an error.
   share_button_->setEnabled(in_call && !someone_else_is_sharing);
   share_button_->setChecked(sharing);
-  share_button_->setText(sharing ? QStringLiteral("Parar de compartilhar")
-                                 : QStringLiteral("Compartilhar tela"));
+  share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
 }
 
 }  // namespace dv::ui

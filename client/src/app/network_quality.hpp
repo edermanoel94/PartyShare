@@ -19,15 +19,15 @@ enum class NetworkQuality : std::uint8_t {
 [[nodiscard]] constexpr std::string_view to_string(NetworkQuality quality) noexcept {
   switch (quality) {
     case NetworkQuality::Unknown:
-      return "desconhecida";
+      return "unknown";
     case NetworkQuality::Good:
-      return "boa";
+      return "good";
     case NetworkQuality::Fair:
-      return "razoável";
+      return "fair";
     case NetworkQuality::Poor:
-      return "ruim";
+      return "poor";
   }
-  return "desconhecida";
+  return "unknown";
 }
 
 /// Turns the measurements of section 22 of SPEC.md into one word.

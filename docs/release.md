@@ -1,77 +1,77 @@
 # Release
 
-Como uma versão sai, o que ela produz, e o que ainda não está verificado.
+How a version ships, what it produces, and what is not verified yet.
 
-A regra é uma só: nenhum artefato é construído numa máquina de desenvolvimento.
-Um binário publicado a partir de um laptop é um binário cujo conteúdo ninguém consegue reconstruir, e a primeira vez que isso importa é quando alguém reporta um crash em um build que não existe mais em lugar nenhum.
+There is one rule: no artifact is ever built on a development machine.
+A binary published from a laptop is a binary whose contents nobody can reproduce, and the first time that matters is when someone reports a crash in a build that no longer exists anywhere.
 
-## Cortar uma versão
+## Cutting a release
 
 ```sh
-# 1. A versão vive em um lugar só.
+# 1. The version lives in one place only.
 $EDITOR CMakeLists.txt        # project(partyshare VERSION x.y.z)
-$EDITOR vcpkg.json            # o mesmo número
+$EDITOR vcpkg.json            # the same number
 
 # 2. Commit, tag, push.
-git commit -am "Versão x.y.z"
+git commit -am "Version x.y.z"
 git tag vx.y.z
 git push origin master vx.y.z
 ```
 
-A tag dispara `.github/workflows/release.yml`.
-Nada além da tag é necessário: o workflow constrói, testa o que dá para testar, e publica.
+The tag triggers `.github/workflows/release.yml`.
+Nothing beyond the tag is needed: the workflow builds, tests what can be tested, and publishes.
 
-Para exercitar o pipeline sem cortar uma versão, use `workflow_dispatch` pela interface do GitHub.
-Ele constrói tudo e não publica nada, porque um release sem tag não tem versão para ser.
+To exercise the pipeline without cutting a release, use `workflow_dispatch` from the GitHub interface.
+It builds everything and publishes nothing, because a release without a tag has no version to be.
 
-## O que a tag produz
+## What the tag produces
 
-| Artefato | Plataforma | Estado |
+| Artifact | Platform | State |
 | --- | --- | --- |
-| `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Construído e verificado |
-| `partyshare-x.y.z-windows-x64.exe` | Windows x64 | Escrito, nunca executado |
-| `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Escrito, nunca executado |
-| `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Escrito, nunca executado |
-| `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Escrito, nunca executado |
-| `SHA256SUMS` | - | Gerado a partir do que existir |
+| `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Built and verified |
+| `partyshare-x.y.z-windows-x64.exe` | Windows x64 | Written, never run |
+| `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Written, never run |
+| `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Written, never run |
+| `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
+| `SHA256SUMS` | - | Generated over whatever exists |
 
-O `publish` roda com `always()` e exige só que o job do Linux tenha passado.
-Um job de macOS que falha não pode segurar um artefato de Linux já construído e testado: parcial é um release pior que completo e muito melhor que nenhum.
+The `publish` job runs with `always()` and requires only that the Linux job passed.
+A failing macOS job cannot hold back a Linux artifact that is already built and tested: partial is a worse release than complete, and a much better one than none.
 
 ## Linux
 
-O único que esta máquina consegue verificar, e o único que está verificado.
+The only one this machine can verify, and the only one that is verified.
 
-`scripts/appimage.sh` faz o trabalho, e dá para rodar localmente:
+`scripts/appimage.sh` does the work, and it can be run locally:
 
 ```sh
-scripts/appimage.sh                 # configura, compila, empacota
-scripts/appimage.sh --skip-build    # só reempacota o que já está compilado
+scripts/appimage.sh                 # configure, build, package
+scripts/appimage.sh --skip-build    # only repackage what is already built
 ```
 
-Três coisas que o script resolve e que não são óbvias:
+Three things the script handles that are not obvious:
 
-- **A camada de mídia é obrigatória.**
-  O primeiro AppImage construído subia sem ela: abria a janela, mostrava a tela de login, e não fazia chamada nenhuma.
-  Isso é pior do que artefato nenhum, porque parece o produto.
-  A ausência da libwebrtc agora é erro e não aviso, e o smoke test do CI recusa um artefato cujo log diga "no media layer".
-- **O `strip` da ferramenta é velho demais.**
-  O `linuxdeploy` carrega o próprio binutils, e ele rejeita a seção `.relr.dyn` que um linker atual emite, de forma fatal e não ignorável.
-  O empacotamento acontece em duas passagens por isso, com o `strip` do sistema entre elas.
-- **A glibc não pode ser embutida, e isso decide onde o artefato roda.**
-  Qt e a runtime de C++ vão dentro; a glibc não vai.
-  O AppImage roda em qualquer distribuição cuja glibc seja pelo menos tão nova quanto a da máquina que o construiu, e em nenhuma mais velha.
+- **The media layer is mandatory.**
+  The first AppImage built came up without it: it opened the window, showed the login screen, and made no calls at all.
+  That is worse than no artifact, because it looks like the product.
+  A missing libwebrtc is now an error rather than a warning, and the CI smoke test rejects any artifact whose log says "no media layer".
+- **The tool's `strip` is too old.**
+  `linuxdeploy` carries its own binutils, and it rejects the `.relr.dyn` section a current linker emits, fatally and without a way to ignore it.
+  Packaging happens in two passes because of that, with the system `strip` in between.
+- **glibc cannot be bundled, and that decides where the artifact runs.**
+  Qt and the C++ runtime go inside; glibc does not.
+  The AppImage runs on any distribution whose glibc is at least as new as the one on the machine that built it, and on none older.
 
-  Isso não é teórico. Um AppImage construído nesta máquina de desenvolvimento, que roda Arch com glibc 2.44, **não inicia em um Ubuntu 24.04 limpo**: pede `GLIBC_2.43` e `GLIBC_2.44`, e o 24.04 tem 2.39.
-  O script imprime o piso do arquivo que acabou de produzir por isso, porque é uma propriedade invisível até alguém não conseguir abrir o programa.
+  This is not theoretical. An AppImage built on this development machine, which runs Arch with glibc 2.44, **does not start on a clean Ubuntu 24.04**: it asks for `GLIBC_2.43` and `GLIBC_2.44`, and 24.04 has 2.39.
+  The script prints the floor of the file it just produced for that reason, because it is an invisible property until someone cannot open the program.
 
-  Um AppImage construído localmente é artefato de desenvolvimento, não de distribuição. O distribuível sai do CI, que constrói no runner mais antigo disponível.
+  An AppImage built locally is a development artifact, not a distribution one. The distributable comes out of CI, which builds on the oldest runner available.
 
-### Do que o AppImage depende do sistema
+### What the AppImage takes from the system
 
-Nem tudo é embutido, e o que fica de fora é deliberado: embutir a fontconfig faz o programa parar de achar as fontes do sistema, e embutir a pilha gráfica faz ele parar de achar o driver da máquina.
+Not everything is bundled, and what stays out is deliberate: bundling fontconfig makes the program stop finding the system fonts, and bundling the graphics stack makes it stop finding the machine's driver.
 
-O conjunto exato, verificado com `ldd` sobre a árvore extraída em um container limpo:
+The exact set, verified with `ldd` over the extracted tree in a clean container:
 
 ```text
 libX11  libX11-xcb  libxcb  libICE  libSM
@@ -79,47 +79,47 @@ libEGL  libGLX  libOpenGL  libdrm  libgbm
 libfontconfig  libfreetype  libharfbuzz
 ```
 
-Todo desktop Linux já tem os treze.
-O teste de máquina limpa do workflow instala exatamente essa lista e nada mais, o que é o que a mantém honesta: uma dependência nova que entrar sem estar aqui falha ali.
+Every Linux desktop already has all thirteen.
+The workflow's clean machine test installs exactly that list and nothing else, which is what keeps it honest: a new dependency that creeps in without being listed here fails there.
 
-## Windows e macOS
+## Windows and macOS
 
-Escritos a partir da documentação das ferramentas de cada plataforma, e **nunca executados**.
-Este repositório é desenvolvido em Linux, e nenhum dos dois jobs jamais produziu um arquivo que alguém tenha instalado.
+Written from the documentation of each platform's tooling, and **never run**.
+This repository is developed on Linux, and neither job has ever produced a file that anyone installed.
 
-Trate a primeira execução como a coisa que vai descobrir o que está errado neles, não como uma regressão.
-O que eles pretendem produzir:
+Treat the first run as the thing that will discover what is wrong with them, not as a regression.
+What they intend to produce:
 
-- O instalador do Windows é NSIS, com atalho no menu iniciar, ícone próprio e desinstalação. O ZIP continua ao lado para quem prefere os arquivos sem um instalador mexendo na máquina.
-- O `.dmg` tem o bundle, o atalho para `/Applications` e ícone de volume. Falta plano de fundo e posicionamento de ícones na janela, que é aparência e não função.
-- Nenhum dos dois foi aberto em uma máquina limpa, que é o critério de aceitação do marco.
+- The Windows installer is NSIS, with a start menu shortcut, its own icon, and uninstallation. The ZIP stays alongside it for people who prefer the files without an installer touching their machine.
+- The `.dmg` has the bundle, the shortcut to `/Applications`, and a volume icon. It lacks a background image and icon positioning in the window, which is appearance rather than function.
+- Neither has been opened on a clean machine, which is the milestone's acceptance criterion.
 
-## Assinatura e notarização
+## Signing and notarization
 
-Condicionais à existência dos segredos, e não presumidas.
-Um fork ou uma primeira tag produzem artefatos sem assinatura em vez de um pipeline quebrado: um build sem assinatura é um build sobre o qual o sistema operacional reclama, e isso é uma falha melhor do que build nenhum.
+Conditional on the secrets existing, and not assumed.
+A fork or a first tag produce unsigned artifacts rather than a broken pipeline: an unsigned build is a build the operating system complains about, and that is a better failure than no build at all.
 
-| Segredo | Para que serve |
+| Secret | What it is for |
 | --- | --- |
-| `WINDOWS_CERTIFICATE` | Certificado de assinatura de código, `.pfx` em base64 |
-| `WINDOWS_CERTIFICATE_PASSWORD` | Senha do `.pfx` |
-| `MACOS_CERTIFICATE` | Certificado Developer ID Application, `.p12` em base64 |
-| `MACOS_CERTIFICATE_PASSWORD` | Senha do `.p12` |
-| `MACOS_SIGNING_IDENTITY` | Nome da identidade, como aparece no `security find-identity` |
-| `MACOS_NOTARY_APPLE_ID` | Apple ID da conta de desenvolvedor |
-| `MACOS_NOTARY_PASSWORD` | Senha específica de aplicativo, não a senha da conta |
-| `MACOS_NOTARY_TEAM_ID` | Team ID de dez caracteres |
+| `WINDOWS_CERTIFICATE` | Code signing certificate, a `.pfx` in base64 |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Password for the `.pfx` |
+| `MACOS_CERTIFICATE` | Developer ID Application certificate, a `.p12` in base64 |
+| `MACOS_CERTIFICATE_PASSWORD` | Password for the `.p12` |
+| `MACOS_SIGNING_IDENTITY` | Identity name, as it appears in `security find-identity` |
+| `MACOS_NOTARY_APPLE_ID` | Apple ID of the developer account |
+| `MACOS_NOTARY_PASSWORD` | App specific password, not the account password |
+| `MACOS_NOTARY_TEAM_ID` | Ten character Team ID |
 
-Nenhum deles está configurado hoje.
-Notarização não é assinatura: a Apple quer o bundle assinado com um Developer ID, depois enviado, depois grampeado, e um bundle que pule qualquer uma das três é um que o Gatekeeper recusa a abrir em uma máquina que não o construiu.
+None of them is configured today.
+Notarization is not signing: Apple wants the bundle signed with a Developer ID, then uploaded, then stapled, and a bundle that skips any of the three is one Gatekeeper refuses to open on a machine that did not build it.
 
-## O que ainda não está feito
+## What is not done yet
 
-Das seis tarefas do M9, duas estão fechadas: o AppImage e a publicação por tag.
+Of the six M9 tasks, two are closed: the AppImage and publishing by tag.
 
-- Rodar os jobs de Windows e macOS uma primeira vez, que é o que vai dizer o que está errado neles.
-- `.dmg` com plano de fundo e posicionamento de ícones.
-- Assinatura e notarização, que dependem de certificados que ninguém comprou.
-- Instalar e rodar o artefato de Windows e o de macOS em uma máquina limpa da respectiva plataforma.
+- Running the Windows and macOS jobs for the first time, which is what will say what is wrong with them.
+- A `.dmg` with a background image and icon positioning.
+- Signing and notarization, which depend on certificates nobody has bought.
+- Installing and running the Windows and macOS artifacts on a clean machine of the respective platform.
 
-O Linux é o único que atravessa o caminho inteiro, e o teste de máquina limpa do workflow é o que sustenta essa afirmação: o job constrói no Ubuntu 22.04 e inicia o resultado em um container de Ubuntu 24.04 com só as treze bibliotecas de sistema listadas acima.
+Linux is the only one that goes through the whole path, and the workflow's clean machine test is what holds that claim up: the job builds on Ubuntu 22.04 and starts the result inside an Ubuntu 24.04 container with only the thirteen system libraries listed above.

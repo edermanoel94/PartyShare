@@ -1,22 +1,22 @@
-# Toolchain da libwebrtc (M3)
+# libwebrtc toolchain (M3)
 
-Este documento registra o resultado do spike do M3.
-O objetivo do marco era descobrir, antes de qualquer investimento em features, se um libwebrtc pré-compilado é utilizável nas três plataformas.
+This document records the outcome of the M3 spike.
+The milestone's goal was to find out, before investing in any feature, whether a prebuilt libwebrtc is usable on all three platforms.
 
-## 1. Resultado
+## 1. Outcome
 
-| Plataforma | Status | Observação |
+| Platform | Status | Note |
 | --- | --- | --- |
-| Linux x64, pré-compilado | Validado com ressalva | Compila, linka e executa, mas só com a libc++ do Chromium. Detalhes na seção 4. |
-| Linux x64, build do fonte | Validado | Build concluído com `use_custom_libcxx=false`, spike revalidado sobre ele, inclusive captura de um frame real. Detalhes na seção 5. |
-| Windows x64 | Não validado | Sem máquina Windows disponível no ambiente do spike. |
-| macOS ARM64 | Não validado | Sem máquina macOS disponível no ambiente do spike. |
-| macOS x64 | Bloqueado | A distribuição não publica build para essa arquitetura. |
+| Linux x64, prebuilt | Validated with a caveat | Compiles, links and runs, but only with Chromium's libc++. Details in section 4. |
+| Linux x64, built from source | Validated | Build completed with `use_custom_libcxx=false`, spike revalidated over it, including the capture of a real frame. Details in section 5. |
+| Windows x64 | Not validated | No Windows machine available in the spike environment. |
+| macOS ARM64 | Not validated | No macOS machine available in the spike environment. |
+| macOS x64 | Blocked | The distribution publishes no build for that architecture. |
 
-O spike está em `tools/webrtc_spike/` e é habilitado com `-DDV_ENABLE_WEBRTC_SPIKE=ON`.
-Ele verifica threads, `PeerConnectionFactory`, geração de SDP offer, enumeração de monitores, captura de um frame de tela, enumeração de dispositivos de áudio e a travessia de `std::string` pela fronteira da biblioteca.
+The spike lives in `tools/webrtc_spike/` and is enabled with `-DDV_ENABLE_WEBRTC_SPIKE=ON`.
+It checks threads, `PeerConnectionFactory`, SDP offer generation, monitor enumeration, capture of one screen frame, audio device enumeration, and `std::string` crossing the library boundary.
 
-Saída real em Linux, sem servidor gráfico anexado:
+Real output on Linux, with no graphics server attached:
 
 ```text
 libwebrtc toolchain spike
@@ -34,28 +34,28 @@ libwebrtc toolchain spike
 spike passed
 ```
 
-Essa execução é sobre a árvore construída do fonte, em uma sessão X11.
-Sem servidor gráfico anexado as duas linhas de captura viram `skipped`, e o resto continua igual.
+That run is over the tree built from source, in an X11 session.
+With no graphics server attached the two capture lines turn into `skipped`, and the rest stays the same.
 
-O SDP gerado traz `opus/48000/2` com `transport-cc`, além de H.264, VP8, VP9 e AV1, o que confirma que os codecs exigidos pela SPEC estão presentes no build.
+The generated SDP carries `opus/48000/2` with `transport-cc`, plus H.264, VP8, VP9 and AV1, which confirms the codecs the SPEC requires are present in the build.
 
-## 2. Versão fixada
+## 2. Pinned version
 
 ```text
 release:  m152.7977.0.0
-origem:   https://github.com/shiguredo-webrtc-build/webrtc-build
+source:   https://github.com/shiguredo-webrtc-build/webrtc-build
 ```
 
-Os checksums SHA-256 estão em `cmake/Findlibwebrtc.cmake`.
-Eles vêm dos digests publicados pela API do GitHub, então nada precisa ser baixado para conferir uma versão nova.
-Para atualizar:
+The SHA-256 checksums are in `cmake/Findlibwebrtc.cmake`.
+They come from the digests published by the GitHub API, so nothing has to be downloaded in order to check a new version.
+To update:
 
 ```sh
-scripts/webrtc_checksums.sh                 # última release
-scripts/webrtc_checksums.sh m153.0000.0.0   # uma release específica
+scripts/webrtc_checksums.sh                 # latest release
+scripts/webrtc_checksums.sh m153.0000.0.0   # a specific release
 ```
 
-## 3. Como reproduzir
+## 3. How to reproduce
 
 ```sh
 cmake -S . -B build/spike \
@@ -66,61 +66,61 @@ cmake --build build/spike
 ./build/spike/bin/webrtc-spike
 ```
 
-O download é de aproximadamente 110 MB no Linux, 322 MB no macOS e 739 MB no Windows.
-Para reaproveitar uma árvore já extraída, use `-DDV_WEBRTC_ROOT=/caminho/para/webrtc`.
+The download is roughly 110 MB on Linux, 322 MB on macOS and 739 MB on Windows.
+To reuse an already extracted tree, use `-DDV_WEBRTC_ROOT=/path/to/webrtc`.
 
-## 4. Armadilhas do pacote pré-compilado
+## 4. Traps in the prebuilt package
 
-Todas foram descobertas rodando o spike, e todas estão codificadas em `cmake/Findlibwebrtc.cmake`.
-As duas primeiras valem só para os binários publicados.
-As duas últimas valem também para a árvore construída do fonte.
+All of them were discovered by running the spike, and all of them are encoded in `cmake/Findlibwebrtc.cmake`.
+The first two apply only to the published binaries.
+The last two apply to the tree built from source as well.
 
-### 4.1 O arquivo extrai para um subdiretório
+### 4.1 The archive extracts into a subdirectory
 
-O tarball extrai para `webrtc/`, contendo `include/`, `lib/libwebrtc.a`, `VERSIONS` e `DEPS`.
-O módulo procura os headers e a biblioteca nos dois layouts, para também aceitar uma árvore construída à mão.
+The tarball extracts into `webrtc/`, containing `include/`, `lib/libwebrtc.a`, `VERSIONS` and `DEPS`.
+The module looks for the headers and the library in both layouts, so that a hand built tree is also accepted.
 
-### 4.2 A libc++ do Chromium, com os headers incompletos
+### 4.2 Chromium's libc++, with incomplete headers
 
-O build usa a libc++ do Chromium, cujos símbolos ficam no namespace de ABI `std::__Cr`, e não `std::__1` nem libstdc++.
-Verificação:
+The build uses Chromium's libc++, whose symbols live in the `std::__Cr` ABI namespace, and not `std::__1` or libstdc++.
+To check:
 
 ```sh
 nm -C --defined-only lib/libwebrtc.a | grep -oE 'std::__[A-Za-z0-9]+::' | sort -u
 # std::__Cr::
 ```
 
-O arquivo traz essa libc++ em `include/third_party/libc++/src/include`, mas com todos os headers sem extensão removidos.
-Sobram apenas os diretórios internos `__*` e os headers de compatibilidade com C.
-Ou seja, `<string>`, `<vector>` e `<cstdio>` não existem ali, e a árvore é inutilizável sozinha.
+The archive ships that libc++ in `include/third_party/libc++/src/include`, but with every extensionless header removed.
+Only the internal `__*` directories and the C compatibility headers survive.
+In other words, `<string>`, `<vector>` and `<cstdio>` are not there, and the tree is unusable on its own.
 
-A solução é buscar o conjunto completo de headers no commit exato que o build fixa, que está em `VERSIONS`:
+The solution is to fetch the complete header set from the exact commit the build pins, which is recorded in `VERSIONS`:
 
 ```text
 WEBRTC_SRC_THIRD_PARTY_LIBCXX_SRC_COMMIT=5abc7f839700f0f17338434e1c1c6a8c87c00c11
 ```
 
-O módulo lê esse commit do próprio arquivo e baixa `include.tar.gz` do espelho do Chromium, cerca de 1,8 MB.
-Faltam ainda dois headers que normalmente são gerados pelo build da libc++, e que o módulo escreve:
+The module reads that commit out of the file itself and downloads `include.tar.gz` from the Chromium mirror, about 1.8 MB.
+Two headers are still missing, the ones normally generated by the libc++ build, and the module writes them:
 
-- `__config_site`, com `_LIBCPP_ABI_NAMESPACE __Cr` e `_LIBCPP_ABI_VERSION 2`.
-- `__assertion_handler`, com um handler vazio.
+- `__config_site`, with `_LIBCPP_ABI_NAMESPACE __Cr` and `_LIBCPP_ABI_VERSION 2`.
+- `__assertion_handler`, with an empty handler.
 
-Consumidores compilam com `-nostdinc++` mais o include dessa árvore, e linkam com `-nostdlib++`, porque os símbolos de runtime da libc++ já estão dentro de `libwebrtc.a`.
+Consumers compile with `-nostdinc++` plus that tree's include path, and link with `-nostdlib++`, because libc++'s runtime symbols are already inside `libwebrtc.a`.
 
-### 4.3 O abseil do pacote precisa vir antes do abseil do sistema
+### 4.3 The package's abseil has to come before the system abseil
 
-Os headers públicos da libwebrtc incluem `absl/...`.
-Se o abseil do sistema for encontrado primeiro, a compilação falha dentro de `absl/strings/internal/str_format` com erros sobre `std::basic_ostream` e `std::wstring`, porque as duas cópias discordam sobre a configuração da biblioteca padrão.
-O módulo coloca `include/third_party/abseil-cpp` antes de `include`.
+libwebrtc's public headers include `absl/...`.
+If the system abseil is found first, compilation fails inside `absl/strings/internal/str_format` with errors about `std::basic_ostream` and `std::wstring`, because the two copies disagree about the standard library configuration.
+The module puts `include/third_party/abseil-cpp` ahead of `include`.
 
-### 4.4 WEBRTC_USE_X11 e WEBRTC_USE_PIPEWIRE mudam o layout de structs públicas
+### 4.4 WEBRTC_USE_X11 and WEBRTC_USE_PIPEWIRE change the layout of public structs
 
-Esta é a mais perigosa de todas, porque falha em silêncio.
+This is the most dangerous of them all, because it fails silently.
 
-`DesktopCaptureOptions` tem membros dentro de `#if defined(WEBRTC_USE_X11)` e `#if defined(WEBRTC_USE_PIPEWIRE)`.
-A biblioteca foi construída com os dois definidos.
-Um consumidor que não os define compila sem nenhum aviso, e depois corrompe a própria pilha quando a biblioteca escreve no objeto:
+`DesktopCaptureOptions` has members inside `#if defined(WEBRTC_USE_X11)` and `#if defined(WEBRTC_USE_PIPEWIRE)`.
+The library was built with both defined.
+A consumer that does not define them compiles without a single warning, and then corrupts its own stack when the library writes into the object:
 
 ```text
 *** stack smashing detected ***: terminated
@@ -128,14 +128,14 @@ Um consumidor que não os define compila sem nenhum aviso, e depois corrompe a p
 #6  check_screen_capture ()
 ```
 
-O módulo define os dois como requisitos de uso da INTERFACE, então qualquer alvo que linke `libwebrtc::libwebrtc` os recebe automaticamente.
+The module defines both as INTERFACE usage requirements, so any target linking `libwebrtc::libwebrtc` receives them automatically.
 
-### 4.5 O caminho do portal exige glib, gbm e libdrm no link
+### 4.5 The portal path requires glib, gbm and libdrm at link time
 
-Consequência direta de `WEBRTC_USE_PIPEWIRE`, e portanto do suporte a Wayland que o M6 precisa.
+A direct consequence of `WEBRTC_USE_PIPEWIRE`, and therefore of the Wayland support M6 needs.
 
-O código de `modules/desktop_capture` que fala com o portal do XDG usa GDBus, e importa os frames capturados como DMA-BUF.
-Isso deixa referências a `g_dbus_*`, `g_variant_*`, `gbm_*` e `drm*` dentro de `libwebrtc.a`, que o consumidor precisa resolver:
+The code in `modules/desktop_capture` that talks to the XDG portal uses GDBus, and imports captured frames as DMA-BUF.
+That leaves references to `g_dbus_*`, `g_variant_*`, `gbm_*` and `drm*` inside `libwebrtc.a`, which the consumer has to resolve:
 
 ```text
 undefined reference to `g_dbus_proxy_new_finish'
@@ -143,71 +143,71 @@ undefined reference to `gbm_create_device'
 undefined reference to `drmGetDevices2'
 ```
 
-O módulo resolve isso com `pkg-config`, pedindo `glib-2.0`, `gio-2.0`, `gobject-2.0`, `gbm` e `libdrm`.
-O PipeWire em si não entra na lista, porque a libwebrtc o carrega com `dlopen` em tempo de execução.
+The module resolves this through `pkg-config`, asking for `glib-2.0`, `gio-2.0`, `gobject-2.0`, `gbm` and `libdrm`.
+PipeWire itself is not on the list, because libwebrtc loads it with `dlopen` at runtime.
 
-### 4.6 O alvo `webrtc` do GN não é a biblioteca inteira
+### 4.6 GN's `webrtc` target is not the whole library
 
-Esta vale só para a árvore construída do fonte, e é a razão de o empacotamento do `build_webrtc.sh` não ser um `cp`.
+This one applies only to the tree built from source, and it is the reason packaging in `build_webrtc.sh` is not a `cp`.
 
-`ninja webrtc` produz `obj/libwebrtc.a`, que parece completo mas não é.
-`CreateBuiltinVideoEncoderFactory` e `CreateBuiltinVideoDecoderFactory` moram em alvos próprios do GN, e sem eles o cliente não linka:
+`ninja webrtc` produces `obj/libwebrtc.a`, which looks complete and is not.
+`CreateBuiltinVideoEncoderFactory` and `CreateBuiltinVideoDecoderFactory` live in GN targets of their own, and without them the client does not link:
 
 ```text
 undefined reference to `webrtc::CreateBuiltinVideoEncoderFactory()'
 undefined reference to `webrtc::CreateBuiltinVideoDecoderFactory()'
 ```
 
-O script constrói esses alvos junto, expande cada um para o fecho transitivo das suas dependências com `gn desc ... deps --all`, e acrescenta ao arquivo os objetos que ainda não estão lá.
-No estado atual isso são 88 objetos vindos de 448 arquivos, e a lista se ajusta sozinha quando um alvo novo entrar em `EXTRA_TARGETS`.
+The script builds those targets alongside, expands each one into the transitive closure of its dependencies with `gn desc ... deps --all`, and appends to the archive the objects that are not already there.
+As things stand that is 88 objects out of 448 files, and the list adjusts itself when a new target enters `EXTRA_TARGETS`.
 
-A comparação é feita por nome de objeto, porque um arquivo `.a` gordo só guarda o nome.
-Se dois objetos diferentes tivessem o mesmo nome, um seria descartado, e isso apareceria como referência indefinida no link, nunca como um binário silenciosamente errado.
+The comparison is done by object name, because a thin `.a` file only stores the name.
+If two different objects had the same name, one would be dropped, and that would show up as an undefined reference at link time, never as a silently wrong binary.
 
-## 5. Consequência arquitetural: libc++ contra libstdc++ no Linux
+## 5. Architectural consequence: libc++ against libstdc++ on Linux
 
-Esta é a descoberta mais importante do M3, e afeta o M4 em diante.
+This is the most important finding of M3, and it affects M4 onwards.
 
-No Linux, os binários publicados exigem que qualquer código que troque tipos `std::` com a libwebrtc seja compilado com a libc++ do Chromium.
-A API pública da libwebrtc usa `std::string`, `std::vector` e `std::unique_ptr` por toda parte, então essa troca acontece o tempo todo, e não é evitável.
+On Linux, the published binaries require any code exchanging `std::` types with libwebrtc to be compiled against Chromium's libc++.
+libwebrtc's public API uses `std::string`, `std::vector` and `std::unique_ptr` everywhere, so that exchange happens constantly, and it cannot be avoided.
 
-O problema é que o Qt 6 das distribuições Linux é construído contra libstdc++.
-Um único binário não pode usar as duas bibliotecas padrão para os mesmos tipos.
+The problem is that the Qt 6 shipped by Linux distributions is built against libstdc++.
+A single binary cannot use both standard libraries for the same types.
 
-Foram consideradas três saídas:
+Three ways out were considered:
 
-1. **Construir a libwebrtc a partir do fonte com `use_custom_libcxx=false`.**
-   Passa a usar a biblioteca padrão do sistema e o conflito desaparece.
-   Custo: um checkout acima de 30 GB, um build de dezenas de minutos, e a responsabilidade de manter e distribuir esse binário.
+1. **Build libwebrtc from source with `use_custom_libcxx=false`.**
+   It then uses the system standard library and the conflict disappears.
+   Cost: a checkout over 30 GB, a build of tens of minutes, and the responsibility of maintaining and distributing that binary.
 
-2. **Isolar a libwebrtc atrás de uma ABI em C, dentro de uma biblioteca compartilhada separada.**
-   O processo passa a ter as duas bibliotecas padrão, mas nenhum tipo `std::` cruza a fronteira.
-   Custo: uma camada de tradução para toda a superfície de mídia, mantida à mão para sempre.
+2. **Isolate libwebrtc behind a C ABI, inside a separate shared library.**
+   The process then holds both standard libraries, but no `std::` type crosses the boundary.
+   Cost: a translation layer over the whole media surface, maintained by hand forever.
 
-3. **Compilar todo o cliente, inclusive o Qt, contra a libc++ do Chromium.**
-   Inviável na prática: exigiria recompilar o Qt e todas as dependências.
+3. **Compile the entire client, Qt included, against Chromium's libc++.**
+   Not viable in practice: it would require recompiling Qt and every dependency.
 
-**Decisão: opção 1.**
-`scripts/build_webrtc.sh` automatiza o processo e empacota o resultado no layout que o `Findlibwebrtc.cmake` já consome.
-Os argumentos de GN que importam:
+**Decision: option 1.**
+`scripts/build_webrtc.sh` automates the process and packages the result in the layout `Findlibwebrtc.cmake` already consumes.
+The GN arguments that matter:
 
 ```text
-use_custom_libcxx=false     # a razão de existir do script
-use_rtti=true               # nosso código e o Qt usam RTTI
-rtc_use_h264=true           # H.264 é exigido pela seção 6 da SPEC
+use_custom_libcxx=false     # the reason the script exists
+use_rtti=true               # our code and Qt both use RTTI
+rtc_use_h264=true           # H.264 is required by section 6 of the SPEC
 proprietary_codecs=true
 ffmpeg_branding="Chrome"
-use_sysroot=false           # linka contra a glibc desta máquina
+use_sysroot=false           # links against this machine's glibc
 ```
 
-O script escreve um arquivo marcador `DV_SYSTEM_LIBCXX` na árvore de saída.
-O `Findlibwebrtc.cmake` procura por ele e desliga automaticamente todo o tratamento de libc++ descrito na seção 4.2.
+The script writes a `DV_SYSTEM_LIBCXX` marker file into the output tree.
+`Findlibwebrtc.cmake` looks for it and automatically turns off all the libc++ handling described in section 4.2.
 
-### Resultado do build do fonte
+### Result of the source build
 
-O build foi concluído no Linux x64 e o resultado confirma a decisão.
+The build completed on Linux x64 and the result confirms the decision.
 
-A biblioteca não tem mais um único símbolo no namespace `std::__Cr`:
+The library no longer holds a single symbol in the `std::__Cr` namespace:
 
 ```sh
 nm -C --defined-only lib/libwebrtc.a | grep -oE 'std::__[A-Za-z0-9]+::' | sort -u
@@ -215,78 +215,78 @@ nm -C --defined-only lib/libwebrtc.a | grep -oE 'std::__[A-Za-z0-9]+::' | sort -
 # std::__detail::
 ```
 
-`std::__cxx11` é a ABI do libstdc++, a mesma que o Qt 6 das distribuições usa.
-O arquivo final tem cerca de 66 MB.
+`std::__cxx11` is the libstdc++ ABI, the same one the distributions' Qt 6 uses.
+The final archive is about 66 MB.
 
-Dois detalhes do build merecem registro, porque nenhum dos dois é evidente:
+Two details of the build are worth recording, because neither is obvious:
 
-- A biblioteca padrão usada na compilação é fixada em uma libstdc++ 14 baixada à parte, e não a do sistema.
-  A faixa utilizável é estreita: mais antiga não tem os recursos de C++20 que a WebRTC usa, e mais nova faz o clang e o libstdc++ discordarem sobre `std::is_constructible`.
-  Nesta máquina, com GCC 16, a compilação quebra em `call/rtp_config.cc` com um `std::optional::emplace` que o clang considera não construtível.
-- As relocações CREL do Chromium são desligadas com `dv_disable_crel=true`.
-  Só o lld as lê, e mantê-las obrigaria todo consumidor, inclusive o cliente Qt, a linkar com lld.
+- The standard library used during compilation is pinned to a libstdc++ 14 downloaded separately, rather than the system one.
+  The usable range is narrow: older lacks the C++20 features WebRTC uses, and newer makes clang and libstdc++ disagree about `std::is_constructible`.
+  On this machine, with GCC 16, compilation breaks in `call/rtp_config.cc` on a `std::optional::emplace` that clang considers non constructible.
+- Chromium's CREL relocations are turned off with `dv_disable_crel=true`.
+  Only lld reads them, and keeping them would force every consumer, the Qt client included, to link with lld.
 
-Ambos são aplicados pelo patch em `patches/webrtc/build/`, que o script aplica sozinho.
+Both are applied by the patch in `patches/webrtc/build/`, which the script applies on its own.
 
-### 5.1 Patches que o projeto carrega
+### 5.1 Patches the project carries
 
-Ficam em `patches/webrtc/<repo>/`, onde `<repo>` é o checkout do gclient a que se aplicam.
-O `build_webrtc.sh` aplica todos sozinho e falha cedo se algum não aplicar, o que é o sinal de que o milestone fixado se moveu.
+They live in `patches/webrtc/<repo>/`, where `<repo>` is the gclient checkout they apply to.
+`build_webrtc.sh` applies them all on its own and fails early if any of them does not apply, which is the signal that the pinned milestone has moved.
 
-| Patch | Por quê |
+| Patch | Why |
 | --- | --- |
-| `build/0001-libstdcxx-and-crel-opt-outs.patch` | Permite apontar para uma libstdc++ externa e desligar as relocações CREL, descrito acima. |
-| `src/0001-qualify-nullptr-t.patch` | Correção de compilação com a libstdc++ fixada. |
-| `src/0002-pulse-adm-reset-quit-on-init.patch` | Bug no dispositivo PulseAudio, descrito abaixo. |
+| `build/0001-libstdcxx-and-crel-opt-outs.patch` | Allows pointing at an external libstdc++ and turning off CREL relocations, described above. |
+| `src/0001-qualify-nullptr-t.patch` | Compilation fix with the pinned libstdc++. |
+| `src/0002-pulse-adm-reset-quit-on-init.patch` | A bug in the PulseAudio device, described below. |
 
-### 5.2 O bug de captura do PulseAudio
+### 5.2 The PulseAudio capture bug
 
-Vale registrar porque custou tempo e porque é um bug real da libwebrtc, não do projeto.
+Worth recording because it cost time and because it is a real libwebrtc bug, not a project one.
 
-Sintoma: a primeira chamada de um processo funciona, e toda chamada seguinte demora exatos dez segundos para negociar e fica sem microfone.
+Symptom: the first call in a process works, and every call after it takes exactly ten seconds to negotiate and ends up with no microphone.
 
 ```text
 (audio_device_pulse_linux.cc:1084): failed to activate recording
 (thread.cc:551): Message to dv-worker took 10001ms to dispatch.
 ```
 
-Causa: `AudioDeviceLinuxPulse::Terminate()` marca `quit_ = true`, e o `Init()` nunca volta essa flag para `false`.
-Na segunda inicialização, a thread de captura recém-criada lê `quit_` na primeira passagem e termina imediatamente.
-O `StartRecording()` então espera dez segundos por um evento que aquela thread deveria sinalizar, desiste, e a sessão fica sem captura.
+Cause: `AudioDeviceLinuxPulse::Terminate()` sets `quit_ = true`, and `Init()` never puts that flag back to `false`.
+On the second initialization, the freshly created capture thread reads `quit_` on its first pass and exits immediately.
+`StartRecording()` then waits ten seconds for an event that thread was supposed to signal, gives up, and the session ends up without capture.
 
-O patch põe `quit_ = false` no `Init()`.
-Com ele, sessões sucessivas no mesmo processo levam 1,2 s em vez de 10,2 s, e todas capturam áudio.
-Vale reportar para o upstream.
+The patch sets `quit_ = false` in `Init()`.
+With it, successive sessions in the same process take 1.2 s instead of 10.2 s, and all of them capture audio.
+Worth reporting upstream.
 
-### Como o spike verifica isso
+### How the spike checks this
 
-O spike linka `dv::shared` quando a árvore da libwebrtc foi construída contra a biblioteca padrão do sistema, e serializa e reanalisa uma mensagem do protocolo passando pela fronteira.
-Se as duas bibliotecas padrão fossem incompatíveis, isso falharia no link ou corromperia a string.
-Sobre a árvore do fonte a linha diz `dv::shared linked and interoperating`, que é a confirmação de que o conflito acabou.
+The spike links `dv::shared` when the libwebrtc tree was built against the system standard library, and serializes and reparses a protocol message across the boundary.
+If the two standard libraries were incompatible, that would fail at link time or corrupt the string.
+Over the source built tree the line says `dv::shared linked and interoperating`, which is the confirmation that the conflict is gone.
 
-Em uma árvore pré-compilada no Linux, o spike é construído standalone e reporta a limitação em vez de falhar.
-A linha `std::string across ABI` da saída diz qual dos dois casos ocorreu.
+On a prebuilt tree on Linux, the spike is built standalone and reports the limitation instead of failing.
+The `std::string across ABI` line in the output says which of the two cases happened.
 
-### Windows e macOS
+### Windows and macOS
 
-Provavelmente têm o mesmo problema, porque o Chromium usa a própria libc++ nas três plataformas por padrão.
-Isso ainda não foi confirmado, e é uma das coisas que [webrtc-validation.md](webrtc-validation.md) manda verificar.
+They probably have the same problem, because Chromium uses its own libc++ on all three platforms by default.
+That has not been confirmed yet, and it is one of the things [webrtc-validation.md](webrtc-validation.md) asks to check.
 
-## 6. O que falta para fechar o M3
+## 6. What is left to close M3
 
-- [x] Fixar versão e checksums verificáveis.
-- [x] `Findlibwebrtc.cmake` com download, verificação e alvo importado.
-- [x] Spike compilando, linkando e executando no Linux.
-- [x] Decidir como resolver o conflito de biblioteca padrão: compilar do fonte, opção 1 da seção 5.
-- [x] `scripts/build_webrtc.sh` automatizando esse build.
-- [x] Spike capaz de detectar o conflito por si só, linkando `dv::shared`.
-- [x] Rodar o build do fonte até o fim e revalidar o spike sobre ele.
-- [x] Validar a captura de tela em X11, com servidor gráfico anexado.
-      Um monitor enumerado e um frame de 1920x1080 capturado de verdade.
-- [ ] Validar a captura de tela em Wayland, pelo portal do XDG.
-      A máquina de desenvolvimento roda X11, então isso depende de outra sessão.
-- [ ] Spike executando no Windows x64, ver [webrtc-validation.md](webrtc-validation.md).
-- [ ] Spike executando no macOS ARM64.
+- [x] Pin a version with verifiable checksums.
+- [x] `Findlibwebrtc.cmake` with download, verification and an imported target.
+- [x] Spike compiling, linking and running on Linux.
+- [x] Decide how to resolve the standard library conflict: build from source, option 1 of section 5.
+- [x] `scripts/build_webrtc.sh` automating that build.
+- [x] A spike able to detect the conflict by itself, by linking `dv::shared`.
+- [x] Run the source build to completion and revalidate the spike over it.
+- [x] Validate screen capture on X11, with a graphics server attached.
+      One monitor enumerated and a 1920x1080 frame genuinely captured.
+- [ ] Validate screen capture on Wayland, through the XDG portal.
+      The development machine runs X11, so this depends on another session.
+- [ ] Spike running on Windows x64, see [webrtc-validation.md](webrtc-validation.md).
+- [ ] Spike running on macOS ARM64.
 
-O macOS x64 continua fora: a distribuição não publica esse build.
-A SPEC o lista como desejável, não obrigatório, e ele volta ao radar no M9.
+macOS x64 stays out: the distribution publishes no such build.
+The SPEC lists it as desirable rather than mandatory, and it comes back into view in M9.

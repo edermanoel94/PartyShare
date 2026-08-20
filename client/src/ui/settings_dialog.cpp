@@ -22,19 +22,19 @@ constexpr int kBitrateStepKbps = 100;
 
 SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* parent)
     : QDialog(parent), session_(session) {
-  setWindowTitle(QStringLiteral("Configurações"));
+  setWindowTitle(QStringLiteral("Settings"));
   setMinimumWidth(520);
 
   auto* layout = new QVBoxLayout(this);
 
-  auto* audio = new QGroupBox(QStringLiteral("Áudio"), this);
+  auto* audio = new QGroupBox(QStringLiteral("Audio"), this);
   auto* audio_form = new QFormLayout(audio);
   input_ = new QComboBox(audio);
   output_ = new QComboBox(audio);
-  audio_form->addRow(QStringLiteral("Microfone"), input_);
-  audio_form->addRow(QStringLiteral("Saída"), output_);
+  audio_form->addRow(QStringLiteral("Microphone"), input_);
+  audio_form->addRow(QStringLiteral("Output"), output_);
 
-  auto* video = new QGroupBox(QStringLiteral("Tela"), this);
+  auto* video = new QGroupBox(QStringLiteral("Screen"), this);
   auto* video_form = new QFormLayout(video);
   monitor_ = new QComboBox(video);
 
@@ -49,18 +49,18 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   max_bitrate_->setSuffix(QStringLiteral(" kbps"));
 
   video_form->addRow(QStringLiteral("Monitor"), monitor_);
-  video_form->addRow(QStringLiteral("Bitrate mínimo"), min_bitrate_);
-  video_form->addRow(QStringLiteral("Bitrate máximo"), max_bitrate_);
+  video_form->addRow(QStringLiteral("Minimum bitrate"), min_bitrate_);
+  video_form->addRow(QStringLiteral("Maximum bitrate"), max_bitrate_);
 
   auto* note =
-      new QLabel(QStringLiteral("As mudanças valem na hora, inclusive durante uma chamada."), this);
+      new QLabel(QStringLiteral("Changes take effect immediately, including during a call."), this);
   note->setStyleSheet(QStringLiteral("color: palette(mid);"));
 
   // Named here rather than taken from QDialogButtonBox::Close, whose label
   // comes from Qt's own translations. Without a translation file loaded that
   // is the English word, sitting in the middle of an interface that is not.
   auto* buttons = new QDialogButtonBox(this);
-  buttons->addButton(QStringLiteral("Fechar"), QDialogButtonBox::AcceptRole);
+  buttons->addButton(QStringLiteral("Close"), QDialogButtonBox::AcceptRole);
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
 
   layout->addWidget(audio);
@@ -91,7 +91,7 @@ void SettingsDialog::load_devices() {
     }
   }
   if (input_->count() == 0) {
-    input_->addItem(QStringLiteral("nenhum microfone disponível"), QString{});
+    input_->addItem(QStringLiteral("no microphone available"), QString{});
     input_->setEnabled(false);
   }
 
@@ -102,7 +102,7 @@ void SettingsDialog::load_devices() {
     }
   }
   if (output_->count() == 0) {
-    output_->addItem(QStringLiteral("nenhuma saída disponível"), QString{});
+    output_->addItem(QStringLiteral("no output available"), QString{});
     output_->setEnabled(false);
   }
 }
@@ -115,7 +115,7 @@ void SettingsDialog::load_monitors() {
     }
   }
   if (monitor_->count() == 0) {
-    monitor_->addItem(QStringLiteral("nenhum monitor disponível"), QString{});
+    monitor_->addItem(QStringLiteral("no monitor available"), QString{});
     monitor_->setEnabled(false);
   }
 }

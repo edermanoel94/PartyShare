@@ -1,65 +1,65 @@
-# Protocolo de signaling
+# Signaling protocol
 
-Este documento é a definição normativa do protocolo.
-A implementação em C++ em `shared/include/dv/protocol/message.hpp` segue este documento, e não o contrário.
-Isso permite reimplementar o servidor em outra linguagem sem alterar os clientes, como previsto na seção 14 da SPEC.
+This document is the normative definition of the protocol.
+The C++ implementation in `shared/include/dv/protocol/message.hpp` follows this document, not the other way around.
+That makes it possible to reimplement the server in another language without changing the clients, as anticipated in section 14 of the SPEC.
 
-## 1. Transporte
+## 1. Transport
 
-O transporte é WebSocket, com uma mensagem JSON por frame de texto.
-Frames binários não são usados nesta versão.
+The transport is WebSocket, with one JSON message per text frame.
+Binary frames are not used in this version.
 
-O cliente conecta em `ws://` ou `wss://`.
-Fora de desenvolvimento local, apenas `wss://` deve ser aceito, porque o token de sessão trafega no canal.
+The client connects over `ws://` or `wss://`.
+Outside local development, only `wss://` should be accepted, because the session token travels on the channel.
 
 ## 2. Envelope
 
-Toda mensagem é um objeto JSON plano com um campo discriminador `type`.
+Every message is a flat JSON object with a `type` discriminator field.
 
 ```json
 { "type": "join_room", "room_id": "8F42A1", "user_id": "user123" }
 ```
 
-Regras:
+Rules:
 
-- `type` é obrigatório e precisa ser uma string conhecida.
-- Campos desconhecidos são ignorados pelo receptor.
-  Isso é intencional: permite acrescentar campos opcionais sem quebrar clientes antigos.
-- Um campo presente com valor `null` é tratado como ausente.
-- Campos obrigatórios ausentes são erro.
+- `type` is mandatory and has to be a known string.
+- Unknown fields are ignored by the receiver.
+  This is intentional: it allows optional fields to be added without breaking older clients.
+- A field present with a `null` value is treated as absent.
+- Missing mandatory fields are an error.
 
-## 3. Identificadores
+## 3. Identifiers
 
-`room_id` tem exatamente 6 caracteres hexadecimais maiúsculos, por exemplo `8F42A1`.
-Isso dá 16.777.216 combinações, suficiente para o MVP, e é curto o bastante para ser ditado por voz.
+`room_id` is exactly 6 uppercase hexadecimal characters, for example `8F42A1`.
+That gives 16,777,216 combinations, enough for the MVP, and it is short enough to read out loud.
 
-`user_id` é uma string opaca atribuída pelo servidor na autenticação.
-Clientes nunca devem inferir significado a partir dela.
+`user_id` is an opaque string assigned by the server at authentication.
+Clients must never infer meaning from it.
 
-O identificador `sfu` é reservado e não pertence a nenhuma pessoa.
-Ele representa o ponto de mídia do próprio servidor, descrito na seção 4.3.
-Como os identificadores atribuídos pelo servidor têm 16 caracteres hexadecimais, não há como um participante recebê-lo por acidente.
+The identifier `sfu` is reserved and belongs to no person.
+It represents the server's own media endpoint, described in section 4.3.
+Since server assigned identifiers are 16 hexadecimal characters, there is no way for a participant to receive it by accident.
 
-## 4. Mensagens
+## 4. Messages
 
-### 4.1 Cliente para servidor
+### 4.1 Client to server
 
-| Tipo | Campos obrigatórios | Campos opcionais |
+| Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `authenticate` | `username`, `password` | |
 | `create_room` | `user_id` | `room_name` |
 | `join_room` | `room_id`, `user_id` | `display_name` |
 | `leave_room` | `room_id`, `user_id` | |
 
-`authenticate` precisa ser a primeira mensagem da conexão.
-Qualquer outra antes dela é respondida com `error` de código `unauthorized`.
+`authenticate` has to be the first message on the connection.
+Anything else before it is answered with an `error` carrying code `unauthorized`.
 
-A senha só aparece nessa mensagem.
-O servidor nunca a repete de volta e nunca a grava em log.
+The password appears only in that message.
+The server never echoes it back and never writes it to a log.
 
-### 4.2 Servidor para cliente
+### 4.2 Server to client
 
-| Tipo | Campos obrigatórios | Campos opcionais |
+| Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `authenticated` | `user`, `token`, `expires_in_seconds` | |
 | `room_created` | `room_id` | `room_name` |
@@ -67,146 +67,146 @@ O servidor nunca a repete de volta e nunca a grava em log.
 | `user_left` | `room_id`, `user_id` | |
 | `error` | `code` | `message` |
 
-O objeto `user` tem a forma:
+The `user` object has this shape:
 
 ```json
 { "id": "user123", "display_name": "Ana", "avatar": "" }
 ```
 
-`id` e `display_name` são obrigatórios, `avatar` é opcional.
+`id` and `display_name` are mandatory, `avatar` is optional.
 
-### 4.3 Negociação WebRTC
+### 4.3 WebRTC negotiation
 
-| Tipo | Campos obrigatórios |
+| Type | Mandatory fields |
 | --- | --- |
 | `offer` | `room_id`, `from_user_id`, `to_user_id`, `sdp` |
 | `answer` | `room_id`, `from_user_id`, `to_user_id`, `sdp` |
 | `ice_candidate` | `room_id`, `from_user_id`, `to_user_id`, `candidate`, `sdp_mid`, `sdp_mline_index` |
 
-`sdp_mline_index` é um inteiro.
+`sdp_mline_index` is an integer.
 
-O servidor deve validar que `from_user_id` corresponde à conexão que enviou a mensagem.
-Aceitar um `from_user_id` arbitrário permitiria a um participante se passar por outro.
+The server must validate that `from_user_id` matches the connection that sent the message.
+Accepting an arbitrary `from_user_id` would let one participant impersonate another.
 
-Essas três mensagens têm dois destinos possíveis, decididos por `to_user_id`.
+These three messages have two possible destinations, decided by `to_user_id`.
 
-**Para outro participante.**
-O servidor não interpreta SDP nem candidatos, apenas encaminha a mensagem inalterada para `to_user_id` dentro da mesma sala.
+**To another participant.**
+The server interprets neither SDP nor candidates, it only forwards the message unchanged to `to_user_id` within the same room.
 
-**Para `sfu`.**
-A mídia do MVP passa por um SFU, então a outra ponta da conexão de cada participante é o servidor, e não outro participante.
-Uma mensagem endereçada a `sfu` é consumida pelo servidor, e o que ele devolve chega com `from_user_id` igual a `sfu`.
+**To `sfu`.**
+MVP media goes through an SFU, so the far end of each participant's connection is the server rather than another participant.
+A message addressed to `sfu` is consumed by the server, and what it sends back arrives with `from_user_id` equal to `sfu`.
 
-Nesse caminho quem oferece é sempre o servidor:
-
-```text
-servidor -> participante:  offer          assim que o participante entra na sala
-participante -> servidor:  answer
-ambos os sentidos:         ice_candidate
-```
-
-O servidor reoferece sempre que o conjunto de participantes muda, acrescentando ou removendo uma linha de mídia.
-Cada linha `sendonly` de áudio que o servidor oferece traz `a=msid:<user_id>`, e é assim que o cliente sabe de quem é a voz que chega naquela track.
-
-Cada participante recebe também duas linhas de vídeo, criadas junto com a sessão e não quando alguém pede para compartilhar:
+On that path the server is always the offerer:
 
 ```text
-recvonly, H.264   a tela do próprio participante, subindo
-sendonly, H.264   a tela de quem estiver compartilhando, descendo
+server -> participant:  offer          as soon as the participant joins the room
+participant -> server:  answer
+both directions:        ice_candidate
 ```
 
-Elas existem desde a entrada na sala, vazias, porque assim começar e parar de compartilhar não renegocia nada.
+The server re-offers whenever the set of participants changes, adding or removing a media line.
+Each `sendonly` audio line the server offers carries `a=msid:<user_id>`, and that is how the client knows whose voice arrives on that track.
 
-A linha de vídeo `sendonly` não tem `a=msid:<user_id>`: ela carrega quem estiver com a palavra, e não um participante fixo.
-Quem está compartilhando é dito por `screen_share_started`, e é de lá que o cliente tira o nome.
+Each participant also receives two video lines, created together with the session rather than when someone asks to share:
 
-O participante que envia mídia precisa declarar seu SSRC no `answer`, com `a=ssrc`, em cada linha que ele envia.
-Todas as tracks compartilham um transporte, então é o SSRC que diz ao servidor a qual track pertence cada pacote que chega.
-Sem ele a mídia é descartada silenciosamente na chegada.
+```text
+recvonly, H.264   the participant's own screen, going up
+sendonly, H.264   the screen of whoever is sharing, coming down
+```
 
-Pedidos de keyframe atravessam o SFU. Um espectador que precisa de um quadro intra manda PLI na track em que recebe, e o servidor repassa o pedido para as tracks de vídeo que sobem naquela sala, porque nada no meio decodifica o vídeo para produzir um.
+They exist from the moment of joining, empty, because that way starting and stopping a share renegotiates nothing.
 
-Retransmissão vale nos dois sentidos, e as duas linhas de vídeo negociam `a=rtcp-fb:96 nack`.
-Um espectador que perdeu um pacote pede aquele pacote ao SFU, que o reenvia de um cache dos últimos.
-O SFU faz o mesmo pedido para cima quando um pacote se perde a caminho dele, em vez de deixar o buraco seguir para todos os espectadores.
-Sem essa segunda metade, um enlace com perda transforma o compartilhamento de tela em uma sequência de pedidos de keyframe que nunca chegam inteiros; a medição está em [benchmarks.md](benchmarks.md).
+The `sendonly` video line has no `a=msid:<user_id>`: it carries whoever currently has the floor, not a fixed participant.
+Who is sharing is stated by `screen_share_started`, and that is where the client takes the name from.
 
-O SFU também diz ao compartilhador quanto enviar, uma vez por segundo, como REMB (`a=rtcp-fb:96 goog-remb`).
-O número sai da perda que o servidor observa na subida, limitado pelo menor que um espectador tenha relatado, e a libwebrtc o trata como teto do próprio controlador de congestionamento.
-Sem isso o remetente não tem como saber de uma perda que ninguém lhe conta.
+A participant sending media has to declare their SSRC in the `answer`, with `a=ssrc`, on every line they send.
+All tracks share one transport, so the SSRC is what tells the server which track each arriving packet belongs to.
+Without it the media is silently dropped on arrival.
 
-Um servidor sem roteamento de mídia responde `media_unavailable` a qualquer mensagem endereçada a `sfu`.
+Keyframe requests cross the SFU. A viewer that needs an intra frame sends a PLI on the track it receives, and the server passes the request up to the video tracks going up in that room, because nothing in the middle decodes the video to produce one.
 
-### 4.3.1 Reconexão
+Retransmission works in both directions, and both video lines negotiate `a=rtcp-fb:96 nack`.
+A viewer that lost a packet asks the SFU for that packet, and the SFU resends it from a cache of the most recent ones.
+The SFU makes the same request upstream when a packet is lost on the way to it, rather than letting the hole propagate to every viewer.
+Without that second half, a lossy link turns a screen share into a sequence of keyframe requests that never arrive whole; the measurement is in [benchmarks.md](benchmarks.md).
 
-O cliente reconecta sozinho quando a conexão cai, com o intervalo dobrando a cada tentativa até um teto.
-Só um pedido explícito de desconexão encerra isso.
+The SFU also tells the sharer how much to send, once per second, as REMB (`a=rtcp-fb:96 goog-remb`).
+The number comes from the loss the server observes upstream, capped by the lowest a viewer has reported, and libwebrtc treats it as a ceiling for its own congestion controller.
+Without it the sender has no way of learning about a loss nobody tells it about.
 
-Reconectar é começar do zero do ponto de vista do protocolo: uma conexão nova, um `authenticate` novo e um `join_room` novo, na mesma sala.
-Não existe retomada de sessão, e a identidade do usuário é reemitida pelo servidor como em qualquer outro login.
-Quem já estava na sala vê o participante sair e entrar de novo.
+A server without media routing answers `media_unavailable` to any message addressed to `sfu`.
 
-### 4.4 Mudanças de estado
+### 4.3.1 Reconnection
 
-| Tipo | Campos obrigatórios |
+The client reconnects on its own when the connection drops, with the interval doubling on each attempt up to a ceiling.
+Only an explicit disconnect request ends that.
+
+Reconnecting means starting from scratch as far as the protocol is concerned: a new connection, a new `authenticate` and a new `join_room`, in the same room.
+There is no session resumption, and the user identity is reissued by the server as in any other login.
+Everyone already in the room sees the participant leave and join again.
+
+### 4.4 State changes
+
+| Type | Mandatory fields |
 | --- | --- |
 | `screen_share_started` | `room_id`, `user_id` |
 | `screen_share_stopped` | `room_id`, `user_id` |
 | `mute` | `room_id`, `user_id` |
 | `unmute` | `room_id`, `user_id` |
 
-Essas quatro mensagens trafegam nos dois sentidos.
-Do cliente para o servidor, são um pedido.
-Do servidor para os clientes, são a confirmação, retransmitida para todos os outros participantes da sala.
+These four messages travel in both directions.
+From the client to the server, they are a request.
+From the server to the clients, they are the confirmation, relayed to every other participant in the room.
 
-Um cliente só deve atualizar sua própria UI após receber a confirmação do servidor, e não ao enviar o pedido.
-Caso contrário duas pessoas podem acreditar simultaneamente que estão compartilhando a tela.
+A client should update its own UI only after receiving the server's confirmation, and not when sending the request.
+Otherwise two people can simultaneously believe they are sharing their screen.
 
-### 4.5 Nível de transporte
+### 4.5 Transport level
 
-| Tipo | Campos obrigatórios | Campos opcionais |
+| Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `ping` | | `nonce` |
 | `pong` | | `nonce` |
 
-O servidor envia `ping` a cada `heartbeat_interval_ms`.
-O cliente responde `pong` com o mesmo `nonce`.
-Um cliente que não responde dentro de `heartbeat_timeout_ms` é considerado desconectado e removido da sala.
+The server sends `ping` every `heartbeat_interval_ms`.
+The client answers `pong` with the same `nonce`.
+A client that does not answer within `heartbeat_timeout_ms` is considered disconnected and removed from the room.
 
-## 5. Códigos de erro
+## 5. Error codes
 
-Códigos são estáveis e podem ser comparados por igualdade.
-A mensagem que os acompanha é apenas para humanos e pode mudar.
+Codes are stable and can be compared by equality.
+The message alongside them is for humans only and may change.
 
-| Código | Significado |
+| Code | Meaning |
 | --- | --- |
-| `invalid_json` | O payload não é JSON válido, ou não é um objeto |
-| `missing_field` | Um campo obrigatório está ausente |
-| `invalid_type` | Um campo existe com o tipo JSON errado |
-| `unknown_message_type` | O `type` não pertence a este protocolo |
-| `room_not_found` | Não existe sala com esse `room_id` |
-| `room_full` | A sala já atingiu o limite de participantes |
-| `already_in_room` | O usuário já está na sala |
-| `not_in_room` | A operação exige que o usuário esteja na sala |
-| `screen_share_busy` | Outro participante já está compartilhando a tela |
-| `unauthorized` | Token de sessão ausente, inválido ou expirado |
-| `media_unavailable` | A mensagem foi endereçada a `sfu`, e este servidor não roteia mídia |
+| `invalid_json` | The payload is not valid JSON, or is not an object |
+| `missing_field` | A mandatory field is absent |
+| `invalid_type` | A field exists with the wrong JSON type |
+| `unknown_message_type` | The `type` does not belong to this protocol |
+| `room_not_found` | No room exists with that `room_id` |
+| `room_full` | The room already reached its participant limit |
+| `already_in_room` | The user is already in the room |
+| `not_in_room` | The operation requires the user to be in the room |
+| `screen_share_busy` | Another participant is already sharing their screen |
+| `unauthorized` | Session token absent, invalid or expired |
+| `media_unavailable` | The message was addressed to `sfu`, and this server does not route media |
 
-Os cinco primeiros são detectados na camada de parsing e estão implementados desde o M1.
-Os seguintes dependem do servidor e chegaram no M2, e `media_unavailable` no M4.
+The first five are detected in the parsing layer and have been implemented since M1.
+The next ones depend on the server and arrived in M2, and `media_unavailable` in M4.
 
-## 6. Máquina de estados da sessão
+## 6. Session state machine
 
 ```text
         ┌──────────────┐
         │ Disconnected │
         └──────┬───────┘
-               │ conexão WebSocket estabelecida
+               │ WebSocket connection established
                ▼
         ┌──────────────┐
         │  Connected   │
         └──────┬───────┘
-               │ authenticate aceito
+               │ authenticate accepted
                ▼
         ┌──────────────┐
         │Authenticated │
@@ -216,61 +216,61 @@ Os seguintes dependem do servidor e chegaram no M2, e `media_unavailable` no M4.
         ┌──────────────┐   error (room_full, room_not_found)
         │   Joining    │ ─────────────────────────────────────┐
         └──────┬───────┘                                      │
-               │ user_joined referente a si mesmo             │
+               │ user_joined referring to itself              │
                ▼                                              │
         ┌──────────────┐                                      │
         │   InRoom     │                                      │
         └──────┬───────┘                                      │
-               │ leave_room, queda de conexão                 │
+               │ leave_room, connection drop                  │
                ▼                                              ▼
         ┌──────────────┐                              ┌──────────────┐
         │  Connected   │                              │  Connected   │
         └──────────────┘                              └──────────────┘
 ```
 
-Transições relevantes:
+Relevant transitions:
 
-- Em `Connected`, apenas `authenticate` é aceito.
-  Toda outra mensagem recebe `error` com código `unauthorized`.
-- Em `Authenticated`, apenas `create_room` e `join_room` são aceitos.
-- Em `Joining`, o cliente aguarda `user_joined` ou `error`.
-- Em `InRoom`, todas as mensagens de negociação e de estado são aceitas.
-- Uma queda de conexão em qualquer estado leva a `Disconnected`.
-  O cliente reconecta com backoff exponencial e precisa refazer `authenticate` e depois `join_room`.
-  O servidor não preserva o estado da sessão entre conexões no MVP.
+- In `Connected`, only `authenticate` is accepted.
+  Every other message receives an `error` with code `unauthorized`.
+- In `Authenticated`, only `create_room` and `join_room` are accepted.
+- In `Joining`, the client waits for `user_joined` or `error`.
+- In `InRoom`, all negotiation and state messages are accepted.
+- A connection drop in any state leads to `Disconnected`.
+  The client reconnects with exponential backoff and has to redo `authenticate` and then `join_room`.
+  The server does not preserve session state across connections in the MVP.
 
-## 7. Ordem das mensagens ao entrar em uma sala
+## 7. Message ordering when joining a room
 
-Quando o usuário C entra em uma sala que já contém A e B, o servidor envia:
-
-```text
-para C:      user_joined (A)
-para C:      user_joined (B)
-para C:      user_joined (C)      <- confirma a própria entrada, sempre por último
-para A e B:  user_joined (C)
-```
-
-O `user_joined` referente ao próprio usuário chega por último e é o sinal de que o estado inicial está completo.
-Isso evita que o cliente precise de uma mensagem de snapshot separada.
-
-Se algum participante estiver compartilhando a tela, o servidor envia `screen_share_started` para C logo após a sequência acima.
-
-Depois disso, com roteamento de mídia ligado, vem a negociação com o SFU descrita na seção 4.3:
+When user C joins a room that already contains A and B, the server sends:
 
 ```text
-para C:      offer (from_user_id sfu)
-para A e B:  offer (from_user_id sfu)     reoferta, agora com a track de C
+to C:        user_joined (A)
+to C:        user_joined (B)
+to C:        user_joined (C)      <- confirms their own arrival, always last
+to A and B:  user_joined (C)
 ```
 
-A ordem importa: o `offer` chega depois do `user_joined`, então o cliente já conhece todos os participantes quando precisa associar uma track a alguém.
+The `user_joined` referring to the user themselves arrives last and is the signal that the initial state is complete.
+That saves the client from needing a separate snapshot message.
 
-## 8. Compatibilidade
+If some participant is sharing their screen, the server sends `screen_share_started` to C right after the sequence above.
 
-Acrescentar um novo campo opcional é compatível com versões anteriores.
-Acrescentar um novo tipo de mensagem é compatível: receptores antigos respondem `unknown_message_type` e continuam funcionando.
+After that, with media routing enabled, comes the negotiation with the SFU described in section 4.3:
 
-Não são compatíveis, e exigem versionamento explícito do protocolo:
+```text
+to C:        offer (from_user_id sfu)
+to A and B:  offer (from_user_id sfu)     re-offer, now with C's track
+```
 
-- Remover ou renomear um campo obrigatório.
-- Mudar o tipo JSON de um campo.
-- Mudar o significado de um código de erro existente.
+The order matters: the `offer` arrives after the `user_joined` messages, so the client already knows every participant when it has to associate a track with someone.
+
+## 8. Compatibility
+
+Adding a new optional field is backwards compatible.
+Adding a new message type is compatible: older receivers answer `unknown_message_type` and keep working.
+
+Not compatible, and requiring an explicit protocol version bump:
+
+- Removing or renaming a mandatory field.
+- Changing the JSON type of a field.
+- Changing the meaning of an existing error code.

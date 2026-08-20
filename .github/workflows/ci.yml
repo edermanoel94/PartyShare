@@ -66,6 +66,65 @@ jobs:
         with:
           args: -color
 
+  # The database tool is a Go module of its own, so nothing in the C++ jobs
+  # above compiles it, lints it or runs its tests. It talks to MongoDB and it
+  # writes credentials the server has to be able to verify, which is the one
+  # thing here that can break silently in two places at once: a cost parameter
+  # changed in the tool locks every account out of the server, and the test
+  # that catches it needs a database to run against.
+  dbadmin:
+    name: Database tool
+    runs-on: ubuntu-24.04
+    services:
+      mongo:
+        image: mongo:7
+        ports: ['27017:27017']
+        # Without a health check the job races the container: the driver gives
+        # up after its short timeout and every database test fails against a
+        # server that was seconds away from being ready.
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: tools/dbadmin
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version the module asks for, read from the module itself, so that
+      # the toolchain here and the one on a development machine cannot drift
+      # apart without go.mod saying so.
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/dbadmin/go.mod
+          cache-dependency-path: tools/dbadmin/go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Under the race detector because the screens read the database from
+      # commands that run on their own goroutines, which is where a race would
+      # be, and it costs seconds on a suite this size.
+      - name: Tests
+        run: go test -race ./...
+        env:
+          DBADMIN_TEST_MONGO_URI: mongodb://127.0.0.1:27017
+
   # Packaging breaks quietly: an install rule that stops covering a file, or a
   # script that stops finding one, produces a green build and an artefact
   # missing something. This is the cheap half of the release pipeline, run on

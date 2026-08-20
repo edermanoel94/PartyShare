@@ -24,6 +24,18 @@ concurrency:
 jobs:
   linux:
     name: Linux x64 AppImage
+    # Off for now, and the job is kept rather than deleted because nothing in it
+    # is known to be wrong. scripts/build_webrtc.sh cannot get past the
+    # depot_tools CIPD bootstrap on a runner - curl gets a 403 one second in,
+    # before a byte of WebRTC is fetched - and without libwebrtc there is no
+    # AppImage.
+    #
+    # A repository variable rather than `if: false`, which actionlint rejects as
+    # a constant condition, and rightly: a switch that can only be flipped by
+    # editing the workflow is not a switch. RELEASE_LINUX is unset today, so this
+    # job does not run. Set it to 'true' under Settings > Secrets and variables >
+    # Actions > Variables to turn it back on, once the bootstrap is fixed.
+    if: vars.RELEASE_LINUX == 'true'
     # The oldest runner available, deliberately. glibc is the one thing an
     # AppImage cannot carry, so the build machine's glibc is the floor for every
     # machine that can run the result.
@@ -49,12 +61,32 @@ jobs:
             libxrandr-dev libxcomposite-dev libxtst-dev \
             desktop-file-utils zsync
 
+      # libdatachannel is the one dependency with no FetchContent fallback, so
+      # Dependencies.cmake stops the configure outright when it is absent. The
+      # Windows and macOS jobs below have always prepared vcpkg and this one
+      # never did, which made the tag that first exercised this pipeline the
+      # thing that found out.
+      #
+      # Before libwebrtc rather than after it. This step is a couple of minutes
+      # and the one below is a 30 GB checkout, so putting the cheap failure
+      # first is the difference between learning that vcpkg is broken now and
+      # learning it at the end of an afternoon of compiling.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-ubuntu-22.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-ubuntu-22.04-
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+
       - name: Restore the libwebrtc cache
         id: webrtc-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/partyshare/webrtc/dist
-          key: webrtc-linux-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
+          key: webrtc-ubuntu-22.04-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
 
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
@@ -232,12 +264,33 @@ jobs:
       # directory above, so the Qt runtime windeployqt just copied has to be
       # part of what gets installed. Pointing the staging directory at it is
       # what puts the DLLs inside the installer instead of beside it.
+      # pwsh rather than bash, because $PWD in a bash step on a Windows runner is
+      # an MSYS path, /d/a/PartyShare/PartyShare. MSYS rewrites those to native
+      # paths on the way into a native program, but it leaves an argument
+      # containing a semicolon alone, taking it for a Windows path list that has
+      # already been converted. CPACK_INSTALLED_DIRECTORIES is exactly such an
+      # argument, so the first MSI this repository built was handed a directory
+      # that does not exist on Windows, found nothing in it, and shipped without
+      # the Qt runtime windeployqt had just staged.
+      #
+      # CPACK_INSTALL_CMAKE_PROJECTS is emptied because CPACK_INSTALLED_DIRECTORIES
+      # adds to it rather than replacing it, and the second source is what made
+      # the first failure survive review. CPack does not fail on a staging
+      # directory it cannot find - it reports the path, packages nothing from it
+      # and exits 0 - so with the project's own install rules also running, the
+      # MSI came out carrying the executable they produce and none of the Qt
+      # runtime, which is a package that looks right until someone runs it. With
+      # the staged tree as the only source, the same mistake produces an empty
+      # package, and the install check below is what turns that into a red job.
       - name: Build the installer
-        shell: bash
+        shell: pwsh
         run: |
-          cpack --config build/windows-release/CPackConfig.cmake \
-            -B build/windows-release/package \
-            -D CPACK_INSTALLED_DIRECTORIES="$PWD/stage;."
+          $stage = "$PWD/stage".Replace('\', '/')
+          cpack --config build/windows-release/CPackConfig.cmake `
+            -B build/windows-release/package `
+            -D CPACK_INSTALLED_DIRECTORIES="$stage;." `
+            -D CPACK_INSTALL_CMAKE_PROJECTS=
+          if ($LASTEXITCODE -ne 0) { throw "cpack failed with $LASTEXITCODE" }
 
       # An installer nobody installed is a guess. This is the Windows half of
       # what the AppImage smoke test does on Linux: put the MSI through the same
@@ -329,12 +382,20 @@ jobs:
           - arch: arm64
             runner: macos-14
             preset: macos-arm64-release
-          - arch: x64
-            # The Intel runner, which is a named variant rather than an old
-            # version: macos-13 was the last plain-numbered x86_64 image and it
-            # is gone. Apple Silicon runners cannot build an x64 artefact.
-            runner: macos-15-intel
-            preset: macos-x64-release
+          # arm64 only for now. The Intel entry is left here, commented, because
+          # the job is fine and the build is not: on that runner Homebrew lives
+          # in /usr/local, which is on the default include path, so its OpenSSL
+          # headers reach the compiler ahead of the ones vcpkg passes with
+          # -isystem, and -Wold-style-cast -Werror kills the build inside
+          # safestack.h. On Apple Silicon Homebrew is in /opt/homebrew, off that
+          # path, which is the whole reason arm64 builds and x64 does not.
+          #
+          #  - arch: x64
+          #    # The Intel runner, which is a named variant rather than an old
+          #    # version: macos-13 was the last plain-numbered x86_64 image and
+          #    # it is gone. Apple Silicon runners cannot build an x64 artefact.
+          #    runner: macos-15-intel
+          #    preset: macos-x64-release
     steps:
       - uses: actions/checkout@v4
 
@@ -433,17 +494,19 @@ jobs:
   publish:
     name: Publish
     # Only the platforms that produced something. A macOS job that fails must
-    # not hold back a Linux artefact that is already built and smoke tested:
+    # not hold back a Windows artefact that is already built and installed:
     # partial is a worse release than complete and a much better one than none.
-    needs: [linux, windows, macos]
-    # always(), because a plain needs: skips this job when any of the three
+    needs: [windows, macos]
+    # always(), because a plain needs: skips this job when either of the two
     # fails, which is the opposite of what the paragraph above asks for. The
-    # Linux result is still required: it is the only artefact this repository
-    # can verify, and a release with none of those in it is not a release.
+    # floor used to be the Linux result, on the grounds that it is the only
+    # artefact this repository can verify end to end; with that job off, the
+    # floor is that at least one platform produced something, because a release
+    # with nothing in it is not a release.
     # On one line and without ${{ }}: an if: is already an expression, and a
     # folded block leaves a trailing newline that makes the whole thing a
     # non-empty string, which is true. That version published on every push.
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.linux.result == 'success'
+    if: always() && startsWith(github.ref, 'refs/tags/v') && (needs.windows.result == 'success' || needs.macos.result == 'success')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

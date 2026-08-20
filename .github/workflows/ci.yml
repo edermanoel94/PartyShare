@@ -7,7 +7,28 @@ on:
     # zero executions across the whole history. Both are listed because the one
     # thing worse than the wrong name is the wrong name again after a rename.
     branches: [master, main]
+    # Nothing in this pipeline reads a Markdown file: no install rule packages
+    # one, no test asserts on one, and the only `.md` the build mentions at all
+    # is a path inside an error message. A change that touches nothing else has
+    # nothing here that could fail, and spending three platforms, a sanitizer
+    # run and a static analysis on it is time the next real change spends
+    # queueing behind it.
+    #
+    # The filter drops the run only when every changed file matches, so a commit
+    # that edits a header and the page documenting it still runs in full. That
+    # is the property worth keeping: the risk of a filter like this is never the
+    # documentation, it is the source change that rides along with it.
+    #
+    # workflow_dispatch stays unfiltered on purpose. A manual run is somebody
+    # asking for the pipeline, and what changed is not the question.
+    #
+    # One thing to remember before any of these becomes a required check: a run
+    # that never starts reports nothing, and a required check that reports
+    # nothing blocks the pull request forever. The branch is unprotected today,
+    # which is the only reason this is a filter and not a gate job.
+    paths-ignore: ['**.md']
   pull_request:
+    paths-ignore: ['**.md']
   workflow_dispatch:
 
 concurrency:

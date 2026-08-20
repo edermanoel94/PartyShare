@@ -252,12 +252,33 @@ jobs:
       # directory above, so the Qt runtime windeployqt just copied has to be
       # part of what gets installed. Pointing the staging directory at it is
       # what puts the DLLs inside the installer instead of beside it.
+      # pwsh rather than bash, because $PWD in a bash step on a Windows runner is
+      # an MSYS path, /d/a/PartyShare/PartyShare. MSYS rewrites those to native
+      # paths on the way into a native program, but it leaves an argument
+      # containing a semicolon alone, taking it for a Windows path list that has
+      # already been converted. CPACK_INSTALLED_DIRECTORIES is exactly such an
+      # argument, so the first MSI this repository built was handed a directory
+      # that does not exist on Windows, found nothing in it, and shipped without
+      # the Qt runtime windeployqt had just staged.
+      #
+      # CPACK_INSTALL_CMAKE_PROJECTS is emptied because CPACK_INSTALLED_DIRECTORIES
+      # adds to it rather than replacing it, and the second source is what made
+      # the first failure survive review. CPack does not fail on a staging
+      # directory it cannot find - it reports the path, packages nothing from it
+      # and exits 0 - so with the project's own install rules also running, the
+      # MSI came out carrying the executable they produce and none of the Qt
+      # runtime, which is a package that looks right until someone runs it. With
+      # the staged tree as the only source, the same mistake produces an empty
+      # package, and the install check below is what turns that into a red job.
       - name: Build the installer
-        shell: bash
+        shell: pwsh
         run: |
-          cpack --config build/windows-release/CPackConfig.cmake \
-            -B build/windows-release/package \
-            -D CPACK_INSTALLED_DIRECTORIES="$PWD/stage;."
+          $stage = "$PWD/stage".Replace('\', '/')
+          cpack --config build/windows-release/CPackConfig.cmake `
+            -B build/windows-release/package `
+            -D CPACK_INSTALLED_DIRECTORIES="$stage;." `
+            -D CPACK_INSTALL_CMAKE_PROJECTS=
+          if ($LASTEXITCODE -ne 0) { throw "cpack failed with $LASTEXITCODE" }
 
       # An installer nobody installed is a guess. This is the Windows half of
       # what the AppImage smoke test does on Linux: put the MSI through the same

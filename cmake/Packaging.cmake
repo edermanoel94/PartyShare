@@ -40,7 +40,13 @@ set(CPACK_PACKAGE_FILE_NAME "partyshare-${PROJECT_VERSION}-${DV_PACKAGE_PLATFORM
 
 # A tarball that unpacks into a directory named after itself, rather than
 # spraying bin/ and share/ into whatever directory it was unpacked in.
+#
+# Right for an archive and wrong for an installer, which already installs into
+# CPACK_PACKAGE_INSTALL_DIRECTORY. Windows builds both from this one configure,
+# so the answer has to be per generator, and CPackOptions.cmake is the only file
+# CPack reads late enough to know which generator is running.
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_CURRENT_LIST_DIR}/CPackOptions.cmake")
 
 if(WIN32)
   # WiX and not NSIS: task 1 asks for an installer, and an MSI is the installer

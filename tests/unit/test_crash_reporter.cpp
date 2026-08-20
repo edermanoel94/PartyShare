@@ -15,7 +15,9 @@
 
 #include <dv/diagnostics/crash_reporter.hpp>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <csignal>
 #include <cstdlib>
 
@@ -30,11 +32,26 @@ using dv::diagnostics::CrashReporterOptions;
 using dv::diagnostics::default_crash_directory;
 using dv::diagnostics::install_crash_reporter;
 
+/// The process id, spelled the way each platform spells it. Only used to keep
+/// two test processes running at the same time out of each other's directory,
+/// which ctest -j makes a real possibility rather than a theoretical one.
+///
+/// MSVC deprecates the POSIX spelling in favour of its own, and treats using it
+/// as a warning, which -WX turns into a failed build.
+[[nodiscard]] int current_process_id() {
+#if defined(_WIN32)
+  return ::_getpid();
+#else
+  return ::getpid();
+#endif
+}
+
 class CrashReporterTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    directory_ = std::filesystem::temp_directory_path() /
-                 ("dv-crash-" + std::to_string(::getpid()) + "-" + std::to_string(++counter_));
+    directory_ =
+        std::filesystem::temp_directory_path() /
+        ("dv-crash-" + std::to_string(current_process_id()) + "-" + std::to_string(++counter_));
     std::filesystem::remove_all(directory_);
   }
 

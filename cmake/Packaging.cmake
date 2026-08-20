@@ -5,10 +5,11 @@
 # tree is wrapped, and that lives in scripts/package_*.sh and in the release
 # workflow, not here.
 #
-# CPack produces the plain archives on every platform. The Windows installer,
-# the AppImage and the .dmg are built by the platform tooling in scripts/,
+# CPack produces the plain archives on every platform, and on Windows the MSI as
+# well. The AppImage and the .dmg are built by the platform tooling in scripts/,
 # because none of the CPack generators for them can do what the platform's own
-# tool does: bundle the Qt runtime.
+# tool does: bundle the Qt runtime. Windows is the exception only because
+# windeployqt runs before CPack and the result is fed in as the install tree.
 
 # The name a person reads to know whether the file they downloaded is the one
 # for their machine. CMAKE_SYSTEM_PROCESSOR spells the same architecture three
@@ -42,27 +43,32 @@ set(CPACK_PACKAGE_FILE_NAME "partyshare-${PROJECT_VERSION}-${DV_PACKAGE_PLATFORM
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
 
 if(WIN32)
-  # NSIS and not ZIP: task 1 asks for an installer, and an archive is not one.
-  # What separates them is what a person gets afterwards - a start menu entry, a
-  # shortcut, and a way to remove the thing - and none of that comes from
-  # unpacking a folder somewhere. ZIP stays alongside for anyone who wants the
-  # files without an installer touching their machine.
-  set(CPACK_GENERATOR "NSIS;ZIP")
+  # WiX and not NSIS: task 1 asks for an installer, and an MSI is the installer
+  # Windows itself understands. A person gets it in Add/Remove Programs, a fleet
+  # gets `msiexec /i partyshare.msi /qn`, and neither needs anyone to describe
+  # what the file does first. ZIP stays alongside for anyone who wants the files
+  # without an installer touching their machine.
+  set(CPACK_GENERATOR "WIX;ZIP")
 
-  set(CPACK_NSIS_PACKAGE_NAME "PartyShare")
-  set(CPACK_NSIS_DISPLAY_NAME "PartyShare")
-  set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\partyshare.exe")
-  set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/assets/partyshare.ico")
-  set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/assets/partyshare.ico")
-  set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-  # Upgrading in place rather than stacking a second copy next to the first,
-  # which is what happens by default and is how a machine ends up running an
-  # old version from a directory nobody remembers creating.
-  set(CPACK_NSIS_UNINSTALL_NAME "Uninstall PartyShare")
-  set(CPACK_NSIS_MODIFY_PATH OFF)
+  # The identity of this product across every version it will ever have, which
+  # is what Windows matches an upgrade against. It is written down rather than
+  # generated because CPack invents a new one on each configure when it is
+  # absent, and a new GUID means the next MSI installs beside this one instead
+  # of replacing it. Never change it.
+  set(CPACK_WIX_UPGRADE_GUID "9316F1D1-ED63-4C61-9492-4DF24C637A3F")
 
-  # The shortcut is the client. The server is installed and deliberately not
-  # given one: nobody double clicks a signaling server.
+  set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/assets/partyshare.ico")
+  set(CPACK_WIX_PROGRAM_MENU_FOLDER "PartyShare")
+
+  # What Add/Remove Programs shows next to the entry. Left out, the fields are
+  # blank, which is how an installed program ends up looking like something that
+  # arrived without being asked for.
+  set(CPACK_WIX_PROPERTY_ARPCOMMENTS "${PROJECT_DESCRIPTION}")
+  set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://github.com/edermanoel94/PartyShare")
+
+  # The shortcut is the client, which on Windows is the whole artefact: the
+  # release job builds with -DDV_BUILD_SERVER=OFF, because nobody double clicks
+  # a signaling server and nobody installs one from a desktop MSI.
   set(CPACK_PACKAGE_EXECUTABLES "partyshare;PartyShare")
   set(CPACK_CREATE_DESKTOP_LINKS "partyshare")
 else()

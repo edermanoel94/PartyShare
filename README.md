@@ -88,6 +88,9 @@ The server first:
   --users-file=dev-users.json
 ```
 
+`partyshare-server --help` lists every option the server accepts.
+They all take the `--key=value` form, and a bare `--key` is ignored rather than refused.
+
 `--users-file` points at a list of development accounts:
 
 ```json

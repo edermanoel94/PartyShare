@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -72,6 +73,62 @@ int load_users(dv::server::SignalingServer& server, const std::string& path) {
   return loaded;
 }
 
+/// Whether the arguments ask for the usage text.
+///
+/// This is checked before the configuration is loaded, because --help has to
+/// work on a machine where the configuration is broken. It also cannot go
+/// through the normal parser: that one only understands --key=value, so a bare
+/// --help does not split and would be ignored in silence.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+[[nodiscard]] bool wants_help(int argc, const char* const argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view argument(argv[i]);
+    if (argument == "--help" || argument == "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Prints what the server accepts.
+///
+/// Only the options that reach the server are listed. The parser is shared with
+/// the client and understands more, but naming an option here that does nothing
+/// to a server is worse than not naming it.
+void print_usage() {
+  // Straight to stdout: help is what was asked for, not a diagnostic, and the
+  // logger is not configured yet.
+  std::fputs("partyshare-server " DV_VERSION
+             "\n"
+             "The PartyShare signaling server and SFU.\n"
+             "\n"
+             "Usage:\n"
+             "  partyshare-server [--key=value ...]\n"
+             "\n"
+             "Every option takes the --key=value form. A bare --key is ignored.\n"
+             "\n"
+             "Options:\n"
+             "  --config=PATH            Configuration file to read before anything else\n"
+             "  --bind-address=ADDRESS   Address to listen on (default 0.0.0.0)\n"
+             "  --port=PORT              Port to listen on, 1 to 65535 (default 8080)\n"
+             "  --max-participants=N     Participants allowed per room (default 5)\n"
+             "  --users-file=PATH        Development account list, see below\n"
+             "  --log-level=LEVEL        trace, debug, info, warn, error, fatal or off\n"
+             "  --log-file=PATH          Also write the log to this file\n"
+             "  -h, --help               Print this text and exit\n"
+             "\n"
+             "Configuration precedence, lowest first: built-in defaults, the file given\n"
+             "to --config, environment variables prefixed with DV_, then these options.\n"
+             "\n"
+             "The users file is a JSON array, and it exists only so the MVP has users:\n"
+             "  [{\"username\": \"ana\", \"password\": \"secret\", \"display_name\": \"Ana\"}]\n"
+             "It keeps passwords in plain text, which section 17 of SPEC.md rules out\n"
+             "for anything deployed.\n",
+             stdout);
+}
+
 /// libdatachannel takes credentials inside the URL, as turn:user:password@host.
 /// Splitting them out in the configuration keeps the password out of a field
 /// that ends up in logs.
@@ -96,6 +153,11 @@ int main(int argc, char* argv[]) {
   // std::terminate with no message, and the one thing an operator needs from
   // a server that dies is a reason.
   try {
+    if (wants_help(argc, argv)) {
+      print_usage();
+      return 0;
+    }
+
     auto config_result = dv::config::load(argc, argv);
     if (!config_result) {
       // Written straight to stderr because the logger is configured from the

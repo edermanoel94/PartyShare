@@ -36,8 +36,7 @@ void SignalingServer::start() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     server_ = std::make_unique<rtc::WebSocketServer>(configuration);
-    server_->onClient(
-        [this](std::shared_ptr<rtc::WebSocket> socket) { on_client(std::move(socket)); });
+    server_->onClient([this](const std::shared_ptr<rtc::WebSocket>& socket) { on_client(socket); });
   }
 
   running_ = true;
@@ -91,7 +90,7 @@ std::size_t SignalingServer::connection_count() {
   return hub_.connection_count();
 }
 
-void SignalingServer::on_client(std::shared_ptr<rtc::WebSocket> socket) {
+void SignalingServer::on_client(const std::shared_ptr<rtc::WebSocket>& socket) {
   ConnectionId id = 0;
   {
     const std::lock_guard<std::mutex> lock(mutex_);

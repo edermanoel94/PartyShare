@@ -64,7 +64,7 @@ class SignalingServer {
   [[nodiscard]] sfu::MediaRouter* media_router() noexcept { return router_.get(); }
 
  private:
-  void on_client(std::shared_ptr<rtc::WebSocket> socket);
+  void on_client(const std::shared_ptr<rtc::WebSocket>& socket);
   /// Sends one frame the SFU produced to the connection its user is on.
   void send_to_user(const std::string& user_id, const protocol::Message& message);
   /// Sends everything the Hub produced. Must be called with `mutex_` held.

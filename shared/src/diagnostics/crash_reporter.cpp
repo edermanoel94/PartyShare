@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -13,6 +14,11 @@
 #include <dv/diagnostics/crash_reporter.hpp>
 
 #ifdef _WIN32
+// Before windows.h and not after: the header defines min and max as macros,
+// and every `std::min(` in this file then parses as a macro invocation with a
+// qualified name in front of it, which MSVC reports as an illegal token rather
+// than as the collision it is.
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <csignal>
@@ -295,7 +301,12 @@ Result<std::filesystem::path> install_crash_reporter(const CrashReporterOptions&
     previous = std::set_terminate([] {
       static constexpr std::string_view kMessage =
           "\npartyshare: terminating on an uncaught exception\n";
-      write_all(STDERR_FILENO, kMessage.data(), kMessage.size());
+      // Through stdio rather than the raw descriptor the signal handlers use.
+      // This is not a signal handler, as the paragraph above says: the standard
+      // library is usable here, and STDERR_FILENO is a POSIX name that does not
+      // exist on Windows.
+      std::fwrite(kMessage.data(), 1, kMessage.size(), stderr);
+      std::fflush(stderr);
       if (previous != nullptr) {
         previous();
       }

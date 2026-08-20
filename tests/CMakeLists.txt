@@ -1,6 +1,10 @@
 include(GoogleTest)
 
-add_executable(dv_unit_tests
+# The client core is not built when DV_BUILD_CLIENT is off, and the tests that
+# drive it cannot be either. Keeping the two lists apart is what makes
+# -DDV_BUILD_CLIENT=OFF, which docs/build.md offers to machines without Qt,
+# configure instead of failing on a target that was never defined.
+set(dv_unit_sources
   unit/test_result.cpp
   unit/test_logging.cpp
   unit/test_config.cpp
@@ -10,18 +14,37 @@ add_executable(dv_unit_tests
   unit/test_room_manager.cpp
   unit/test_authenticator.cpp
   unit/test_hub.cpp
-  unit/test_video_pipeline.cpp
-  unit/test_reconnect_delay.cpp
-  unit/test_network_quality.cpp
-  unit/test_network_impairment.cpp
   unit/test_video_feedback.cpp
   unit/test_bandwidth_estimator.cpp
 )
 
+set(dv_integration_sources
+  integration/test_signaling_server.cpp
+)
+
+set(dv_client_test_libraries)
+
+if(TARGET dv::client_core)
+  list(APPEND dv_unit_sources
+    unit/test_video_pipeline.cpp
+    unit/test_reconnect_delay.cpp
+    unit/test_network_quality.cpp
+    unit/test_network_impairment.cpp
+  )
+  list(APPEND dv_integration_sources
+    integration/test_signaling_client.cpp
+    integration/test_sfu.cpp
+    integration/test_call_session.cpp
+  )
+  list(APPEND dv_client_test_libraries dv::client_core)
+endif()
+
+add_executable(dv_unit_tests ${dv_unit_sources})
+
 target_link_libraries(dv_unit_tests PRIVATE
   dv::shared
   dv::server_core
-  dv::client_core
+  ${dv_client_test_libraries}
   GTest::gmock
   GTest::gtest
   GTest::gtest_main
@@ -37,17 +60,12 @@ gtest_discover_tests(dv_unit_tests
 
 # Integration tests bind real sockets, so they are labelled separately from the
 # unit tests and can be excluded with `ctest -LE integration`.
-add_executable(dv_integration_tests
-  integration/test_signaling_server.cpp
-  integration/test_signaling_client.cpp
-  integration/test_sfu.cpp
-  integration/test_call_session.cpp
-)
+add_executable(dv_integration_tests ${dv_integration_sources})
 
 target_include_directories(dv_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/integration)
 
 target_link_libraries(dv_integration_tests PRIVATE
-  dv::client_core
+  ${dv_client_test_libraries}
   dv::server_core
   GTest::gtest
   GTest::gtest_main

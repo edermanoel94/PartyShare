@@ -176,11 +176,30 @@ The `linux-make` preset uses Unix Makefiles, for machines without Ninja.
 
 Binaries land in `build/<preset>/bin/`.
 
+### macOS
+
+Homebrew has CMake, Ninja and Qt, and does not have libdatachannel, so that one comes from vcpkg.
+`scripts/ci_vcpkg.sh` checks out the commit `vcpkg.json` pins and prints the toolchain file to point CMake at.
+
+```sh
+brew install cmake ninja qt
+./scripts/ci_vcpkg.sh
+cmake --preset macos-arm64-release \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
+cmake --build --preset macos-arm64-release
+ctest --preset macos-arm64-release
+```
+
+The client is a bundle, `build/macos-arm64-release/bin/partyshare.app`, and the server is a plain binary next to it.
+The first configure builds the vcpkg dependencies from source, which takes minutes; later ones reuse them.
+
 ## Options
 
 | Option | Default | Effect |
 | --- | --- | --- |
 | `DV_BUILD_CLIENT` | ON | Builds the client. Requires Qt 6. |
+| `DV_BUILD_CLIENT_UI` | ON | Builds the Qt interface. Off leaves the client core, which has no Qt in it. |
 | `DV_BUILD_SERVER` | ON | Builds the server. |
 | `DV_BUILD_TESTS` | ON | Builds the test suite. |
 | `DV_ENABLE_SANITIZERS` | OFF | AddressSanitizer and UndefinedBehaviorSanitizer. |
@@ -190,7 +209,9 @@ Binaries land in `build/<preset>/bin/`.
 Tests are labelled: `ctest -L unit` runs only the unit tests, `ctest -L integration` only the integration ones.
 The integration tests start a real server on an ephemeral port and connect real WebSocket clients.
 
-Without Qt installed, use `-DDV_BUILD_CLIENT=OFF` to build only the server and the tests.
+Without Qt installed, use `-DDV_BUILD_CLIENT_UI=OFF`.
+The client core has no Qt header in it, so it and the tests that drive it still build.
+`-DDV_BUILD_CLIENT=OFF` goes further and leaves only the server, the shared library and the tests of both.
 
 ## Runtime configuration
 

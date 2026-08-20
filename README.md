@@ -15,7 +15,8 @@ What is missing is stated plainly, because a number nobody measured is worth no 
 | --- | --- |
 | Linux x64 | Built, run and measured. Every number in the documentation comes from here. |
 | Windows x64 | Code, presets and the NSIS installer exist. Never built, never run. |
-| macOS ARM64 and x64 | Code, presets and DMG packaging exist. Never built, never run. |
+| macOS ARM64 | Built and tested on macOS 26 with Apple clang 21, Qt 6.11 and vcpkg: all 277 tests pass. The server was driven end to end over the signaling protocol, and the client starts on its login screen, which is as far as an automated check goes without a person at the keyboard. No media layer, because libwebrtc is not built there, and no DMG was produced. |
+| macOS x64 | Code, presets and DMG packaging exist. Never built, never run. |
 
 Two known gaps, both in M3:
 repeating the screen capture validation on a Wayland session,
@@ -49,7 +50,7 @@ ctest --preset linux-release
 ```
 
 Binaries land in `build/<preset>/bin/`.
-Without Qt, pass `-DDV_BUILD_CLIENT=OFF`.
+Without Qt, pass `-DDV_BUILD_CLIENT_UI=OFF`, which drops the interface and keeps the client core, or `-DDV_BUILD_CLIENT=OFF`, which drops the client entirely.
 Without libdatachannel or OpenSSL, pass `-DDV_BUILD_SERVER=OFF`.
 
 Four presets exist for Linux.

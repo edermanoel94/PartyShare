@@ -660,21 +660,30 @@ Two smaller things, in the same rule, worth writing down because both fail silen
 - The Qt directory has to be in `DIRECTORIES` even though `windeployqt` handles Qt afterwards. Excluding Qt by name leaves it *unresolved*, and an unresolved dependency stops the install rather than being skipped.
 - The pattern that drops the system libraries has no backslash in it on purpose. A backslash has to survive CMake's string parsing before it reaches the regex engine, and the version that did not matched nothing, which quietly staged every DLL in `System32` - and, through `shell32`, went looking for `HvsiFileTrust.dll`, which exists on no machine.
 
-**Smart App Control refuses the artifact, and that is not a warning.**
-The machine has Smart App Control in enforcement, which is the default on a clean Windows 11.
-It blocks an unsigned binary from loading outright, with a Code Integrity 3077 event and nothing on screen: the staged client would not start, and `msiexec /i /qn` failed at the first unsigned DLL with error 1310, "System error 0", after writing every signed file before it.
-The MSI itself is sound - `msiexec /a` extracts all thirty files - but it cannot be installed on a machine in this configuration.
-That makes task 4 of this milestone, the signing that is written and has never had a certificate, the difference between an artifact and a download nobody can run, rather than the polish it reads as.
+**Smart App Control blocks a new binary once, and the installer needed a right, not a signature.**
+This is the part of the first report that was wrong, and it is written down rather than quietly edited, because the mistake is the useful bit.
 
-And that step would not have been enough either. It signed `stage\bin\*.exe`, which is two files: the client, and the Visual C++ redistributable that Microsoft already signed and that would have had its publisher replaced by ours.
-Of the thirty files in the install tree, twenty-two arrive signed by Microsoft or by Qt and eight do not, and seven of those eight are libraries the glob never reached - including `datachannel.dll`, which is exactly where the install died.
-Smart App Control checks every binary as it is loaded, so signing the executable and shipping seven unsigned libraries next to it produces a signed program that still does not start.
+The machine has Smart App Control in enforcement, the default on a clean Windows 11, and it did block the client: the Code Integrity log carries 3033, 3077 and 3118 events naming the staged executable, and the program refused to start with nothing on screen.
+Some minutes later the same file, unchanged, started normally.
+The block is not a verdict on an unsigned binary, it is the wait while Microsoft's app intelligence service decides about a file it has never seen. What it costs is a first run, not the artefact.
+
+The installer failing was a different thing that happened at the same time, and reading them as one cost an afternoon.
+`msiexec /i /qn` was being run from a shell that was not elevated: the second attempt said so outright, error 1303, "The installer has insufficient privileges to access this directory: C:\Program Files\PartyShare", and the first had already left the same fingerprint in a subtler form - error 1310 on the first file it could not write, with the ones before it already on disk.
+Run elevated, the same MSI returns 0, installs its thirty files, writes both shortcuts, and the client it installs opens on its login screen from `C:\Program Files`.
+
+So task 1 of this milestone is done, and task 4 is worth doing for the reasons it was always worth doing - SmartScreen, that first-run wait, and the enterprise policies that do refuse unsigned code outright - rather than because the package cannot be installed. It can.
+
+The signing step would not have been enough either, and that is a separate defect found on the way to this one.
+It signed `stage\bin\*.exe`, which is two files: the client, and the Visual C++ redistributable that Microsoft already signed and that would have had its publisher replaced by ours.
+Of the thirty files in the install tree, twenty-two arrive signed by Microsoft or by Qt and eight do not, and seven of those eight - `datachannel.dll` among them - are libraries that glob never reached.
+Smart App Control checks every binary as it is loaded and not only the one that was started, so signing the executable and shipping seven unknown libraries beside it buys nothing: each of them still meets the machine as a file it has never seen.
 The step now covers every unsigned `.exe` and `.dll`, skips what already carries somebody else's signature, checks `signtool`'s exit code - a native program that fails does not stop a `pwsh` step by itself - and refuses to finish while anything in the tree is still unsigned.
 
-Two constraints of the policy, worth writing down because a certificate that satisfies neither signs without complaint and changes nothing: Smart App Control accepts only certificates issued by a CA in the Microsoft Trusted Root Program, so a self-signed one is no better than none, and its signature check does not read ECC at all, so the certificate has to be RSA.
+Two things about the policy stay true and are worth writing down, because a certificate that satisfies neither signs without complaint and changes nothing: Smart App Control accepts only certificates from a CA in the Microsoft Trusted Root Program, so a self-signed one is no better than none, and its check does not read ECC at all, so the certificate has to be RSA.
 
-Not verified here, and worth being plain about: nobody has started the client *from an installed tree* on Windows, only from the build tree.
-The media layer is absent too, as it is everywhere but Linux, because libwebrtc is not built on this machine.
+The lesson is the one this repository keeps relearning from a different direction: two failures that appear together are not one failure, and the log said which was which on the second read.
+
+Still not verified here: the media layer, absent as it is everywhere but Linux, because libwebrtc is not built on this machine.
 
 ---
 

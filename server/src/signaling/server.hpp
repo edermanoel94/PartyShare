@@ -56,7 +56,8 @@ class SignalingServer {
   /// has no signup flow, so this is how users come into existence.
   [[nodiscard]] Result<models::User> add_user(const std::string& username,
                                               const std::string& password,
-                                              const std::string& display_name);
+                                              const std::string& display_name,
+                                              models::Role role = models::Role::User);
 
   [[nodiscard]] std::size_t connection_count();
 

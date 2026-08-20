@@ -15,6 +15,13 @@ struct Room {
   std::string id;
   std::string name;
   std::vector<Participant> participants;
+  /// Who created it. Empty for a room that predates the field.
+  std::string owner_id;
+  /// A persistent room outlives its last participant, which is what makes an
+  /// identifier worth writing down and reusing. Only an administrator can
+  /// create one. An ordinary room is still deleted the moment it empties, so
+  /// nothing accumulates on its own.
+  bool persistent = false;
 
   [[nodiscard]] std::size_t size() const noexcept { return participants.size(); }
 

@@ -1,8 +1,13 @@
 #include "signaling/hub.hpp"
 
+#include <algorithm>
+#include <memory>
 #include <utility>
 
 #include <dv/logging/logger.hpp>
+
+#include "signaling/permissions.hpp"
+#include "store/memory_store.hpp"
 
 namespace dv::server {
 namespace {
@@ -11,14 +16,67 @@ Error unauthorized(std::string message) {
   return Error{.code = "unauthorized", .message = std::move(message)};
 }
 
+/// Told to everyone still in a room that an administrator is closing.
+constexpr std::string_view kRoomClosed = "the room was closed by an administrator";
+
 }  // namespace
 
 Hub::Hub() : Hub(Options{}) {}
 
 Hub::Hub(Options options)
     : options_(options),
-      rooms_(RoomManager::Options{.max_participants_per_room = options.max_participants_per_room,
-                                  .id_seed = options.room_id_seed}) {}
+      // A store the caller did not provide is created here and owned here, so
+      // that a Hub built with no options at all is the server this project had
+      // before there was a database: accounts and rooms in memory, and an
+      // audit log that goes away with the process.
+      owned_users_(options.users == nullptr ? std::make_unique<store::MemoryUserStore>() : nullptr),
+      owned_rooms_(options.rooms == nullptr ? std::make_unique<store::MemoryRoomStore>() : nullptr),
+      owned_audit_(options.audit == nullptr ? std::make_unique<store::MemoryAuditLog>() : nullptr),
+      users_(options.users != nullptr ? options.users : owned_users_.get()),
+      audit_(options.audit != nullptr ? options.audit : owned_audit_.get()),
+      rooms_(RoomManager::Options{
+          .max_participants_per_room = options.max_participants_per_room,
+          .id_seed = options.room_id_seed,
+          .store = options.rooms != nullptr ? options.rooms : owned_rooms_.get()}),
+      authenticator_(Authenticator::Options{}, *users_) {
+  // Rooms somebody wrote down have to still exist after a restart.
+  if (const std::size_t loaded = rooms_.load_persistent(); loaded > 0) {
+    DV_LOG_INFO("Loaded {} persistent room(s)", loaded);
+  }
+}
+
+models::Role Hub::current_role(const std::string& user_id) const {
+  const auto account = users_->find_by_id(user_id);
+  return account.has_value() ? account->user.role : models::Role::User;
+}
+
+void Hub::record(const models::User& actor, std::string action, std::string target_id,
+                 std::string room_id, std::string detail) {
+  models::AuditEntry entry;
+  entry.actor_id = actor.id;
+  // The username, which is unique, rather than the display name, which two
+  // accounts may share. A log that cannot say which of two people calling
+  // themselves "Ana" did something has lost what it was written for. The
+  // display name is the fallback for an account that has just been deleted and
+  // has nothing left to look up.
+  const auto account = users_->find_by_id(actor.id);
+  entry.actor_username = account.has_value() ? account->username : actor.display_name;
+  entry.action = std::move(action);
+  entry.target_id = std::move(target_id);
+  entry.room_id = std::move(room_id);
+  entry.detail = std::move(detail);
+
+  // Copied before the move, because the failure message below needs it and the
+  // entry is gone by then.
+  const std::string action_name = entry.action;
+  if (auto failure = audit_->append(std::move(entry))) {
+    // Error level and not warning: an administrative action that happened and
+    // was not recorded is the exact hole an audit log exists to close, and
+    // whoever reads the logs has to see it.
+    DV_LOG_ERROR("Audit entry for '{}' by {} was not written: {}", action_name, actor.id,
+                 failure->message);
+  }
+}
 
 void Hub::on_connect(ConnectionId connection, Clock::time_point now) {
   Connection state;
@@ -94,6 +152,39 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
     return out;
   }
 
+  // One gate for the whole protocol, from the table in permissions.hpp. Doing
+  // it here rather than in each handler is what makes a handler added later
+  // without a check impossible to write: the table covers the enum, and a type
+  // nobody classified does not compile.
+  const protocol::MessageType type = protocol::type_of(message);
+  switch (access_for(type)) {
+    case Access::ServerToClient:
+      // Messages the server only ever sends. Receiving one is a client bug.
+      reply_error(out, connection,
+                  Error{.code = "unknown_message_type",
+                        .message = "this message is server to client only"});
+      return out;
+
+    case Access::AdminOnly: {
+      // The authority on the role is the store, not what this connection was
+      // when it logged in. The cached identity is brought back into step at
+      // the same time, so the handlers and the audit entry agree with it.
+      const models::Role role = current_role(state->user->id);
+      state->user->role = role;
+      if (!is_allowed(role, type)) {
+        DV_LOG_WARN("Connection {} ({}) attempted '{}' without administrator rights", connection,
+                    state->user->id, protocol::type_name(type));
+        reply_error(out, connection,
+                    Error{.code = "forbidden", .message = "this action requires an administrator"});
+        return out;
+      }
+      break;
+    }
+
+    case Access::Authenticated:
+      break;
+  }
+
   std::visit(
       [&](const auto& value) {
         using T = std::decay_t<decltype(value)>;
@@ -133,8 +224,37 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else if constexpr (std::is_same_v<T, protocol::Pong>) {
           // last_seen was already refreshed above, which is the whole point.
 
+        } else if constexpr (std::is_same_v<T, protocol::KickUser>) {
+          handle_kick(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::ForceMute>) {
+          handle_force_mute(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::ListUsers>) {
+          handle_list_users(out, *state);
+
+        } else if constexpr (std::is_same_v<T, protocol::CreateUser>) {
+          handle_create_user(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::UpdateUser>) {
+          handle_update_user(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::DeleteUser>) {
+          handle_delete_user(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::ListRooms>) {
+          handle_list_rooms(out, *state);
+
+        } else if constexpr (std::is_same_v<T, protocol::DeleteRoom>) {
+          handle_delete_room(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::ListAudit>) {
+          handle_list_audit(out, *state, value);
+
         } else {
-          // Messages the server only ever sends. Receiving one is a client bug.
+          // Unreachable: the gate above already answered every server to
+          // client type. Kept so that adding an alternative to the variant and
+          // forgetting to dispatch it is a refusal rather than silence.
           reply_error(out, state->id,
                       Error{.code = "unknown_message_type",
                             .message = "this message is server to client only"});
@@ -202,14 +322,30 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  auto created = rooms_.create_room(message.room_name);
+  // Creating a room is open to everybody; creating one that outlives its last
+  // participant is not, because a room nobody can be bothered to close is a
+  // room that accumulates. Refused rather than downgraded to an ordinary room:
+  // a caller that asked for permanence and silently got the opposite would
+  // find out only when the identifier stopped working.
+  if (message.persistent && current_role(user->id) != models::Role::Admin) {
+    reply_error(out, connection.id,
+                Error{.code = "forbidden",
+                      .message = "only an administrator can create a persistent room"});
+    return;
+  }
+
+  auto created = rooms_.create_room(message.room_name, user->id, message.persistent);
   if (!created) {
     reply_error(out, connection.id, created.error());
     return;
   }
   const std::string room_id = std::move(created).take();
 
-  DV_LOG_INFO("Room {} created by {}", room_id, user->id);
+  if (message.persistent) {
+    record(*user, "create_room", room_id, room_id, "persistent");
+  }
+  DV_LOG_INFO("Room {} created by {}{}", room_id, user->id,
+              message.persistent ? " (persistent)" : "");
   out.push_back(Outgoing{
       .connection = connection.id,
       .message = protocol::RoomCreated{.room_id = room_id, .room_name = message.room_name}});
@@ -477,6 +613,326 @@ std::vector<Outgoing> Hub::tick(Clock::time_point now, std::vector<ConnectionId>
 
   authenticator_.expire_tokens(now);
   return out;
+}
+
+// --- administration ----------------------------------------------------------
+
+void Hub::evict(std::vector<Outgoing>& out, const std::string& room_id, const std::string& user_id,
+                const std::string& reason) {
+  // Read before the participant is gone, and announced after, exactly as the
+  // two other ways out of a room do it. Without this every remaining client
+  // keeps showing a share that ended, and refuses to start its own because it
+  // still believes the floor is taken.
+  const models::Room* room = rooms_.find(room_id);
+  const bool was_sharing =
+      room != nullptr && room->find(user_id) != nullptr && room->find(user_id)->sharing_screen;
+
+  // Announced before the room forgets them, because broadcast walks the
+  // participant list: afterwards the person being removed is no longer on it,
+  // and would be the one participant never told.
+  broadcast(out, room_id,
+            protocol::UserKicked{.room_id = room_id, .user_id = user_id, .reason = reason});
+
+  (void)rooms_.leave(room_id, user_id);
+
+  if (was_sharing) {
+    broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});
+  }
+
+  // The same two things a voluntary leave does, so a kicked participant and one
+  // who left are indistinguishable to everybody else's client and to the SFU.
+  broadcast(out, room_id, protocol::UserLeft{.room_id = room_id, .user_id = user_id});
+  if (media_signals_ != nullptr) {
+    media_signals_->on_participant_left(room_id, user_id);
+  }
+
+  if (const auto target = connection_of_user(user_id)) {
+    if (Connection* state = find_connection(*target)) {
+      state->room_id.reset();
+    }
+  }
+}
+
+void Hub::handle_kick(std::vector<Outgoing>& out, Connection& connection,
+                      const protocol::KickUser& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  const models::Room* room = rooms_.find(message.room_id);
+  if (room == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + message.room_id});
+    return;
+  }
+  if (!room->contains(message.user_id)) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "not_in_room", .message = message.user_id + " is not in " + message.room_id});
+    return;
+  }
+  // An administrator removing themselves is almost certainly a misclick on the
+  // wrong row, and leaving is what the ordinary button is for.
+  if (message.user_id == actor->id) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target",
+                      .message = "use leave_room to remove yourself from a room"});
+    return;
+  }
+
+  DV_LOG_INFO("{} kicked {} from room {}", actor->id, message.user_id, message.room_id);
+  record(*actor, "kick", message.user_id, message.room_id, message.reason);
+  evict(out, message.room_id, message.user_id, message.reason);
+}
+
+void Hub::handle_force_mute(std::vector<Outgoing>& out, Connection& connection,
+                            const protocol::ForceMute& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+  if (const auto failure =
+          rooms_.set_muted(message.room_id, message.user_id, message.muted, true)) {
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  record(*actor, message.muted ? "force_mute" : "force_unmute", message.user_id, message.room_id,
+         {});
+
+  // Announced as an ordinary mute carrying who did it. A client that knows
+  // nothing about administration still renders the microphone correctly, and
+  // one that does can say whose doing it was.
+  if (message.muted) {
+    broadcast(out, message.room_id,
+              protocol::Mute{
+                  .room_id = message.room_id, .user_id = message.user_id, .by_user_id = actor->id});
+  } else {
+    broadcast(out, message.room_id,
+              protocol::Unmute{
+                  .room_id = message.room_id, .user_id = message.user_id, .by_user_id = actor->id});
+  }
+}
+
+protocol::UserList Hub::user_list() const {
+  protocol::UserList list;
+  for (const store::Account& account : users_->list()) {
+    list.users.push_back(
+        protocol::UserSummary{.user = account.user,
+                              .username = account.username,
+                              .created_at = account.created_at,
+                              .online = user_to_connection_.contains(account.user.id)});
+  }
+  return list;
+}
+
+protocol::RoomList Hub::room_list() const {
+  protocol::RoomList list;
+  for (const models::Room& room : rooms_.list()) {
+    list.rooms.push_back(protocol::RoomSummary{.id = room.id,
+                                               .name = room.name,
+                                               .owner_id = room.owner_id,
+                                               .persistent = room.persistent,
+                                               .participant_count = static_cast<int>(room.size())});
+  }
+  // The RoomManager holds rooms in a hash map, so its order is whatever the
+  // hashing produced. Sorting here means a panel that refreshes does not
+  // reshuffle its rows under the cursor.
+  std::ranges::sort(list.rooms, {}, &protocol::RoomSummary::id);
+  return list;
+}
+
+void Hub::handle_list_users(std::vector<Outgoing>& out, Connection& connection) {
+  out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+}
+
+void Hub::handle_list_rooms(std::vector<Outgoing>& out, Connection& connection) {
+  out.push_back(Outgoing{.connection = connection.id, .message = room_list()});
+}
+
+void Hub::handle_create_user(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::CreateUser& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  auto created = authenticator_.add_user(message.username, message.password, message.display_name,
+                                         message.role);
+  if (!created) {
+    reply_error(out, connection.id, created.error());
+    return;
+  }
+
+  const models::User& user = created.value();
+  DV_LOG_INFO("{} created account {} with role {}", actor->id, message.username,
+              models::to_string(message.role));
+  record(*actor, "create_user", user.id, {},
+         "username=" + message.username + " role=" + std::string(models::to_string(message.role)));
+  out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+}
+
+void Hub::handle_update_user(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::UpdateUser& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  auto account = users_->find_by_id(message.user_id);
+  if (!account.has_value()) {
+    reply_error(out, connection.id,
+                Error{.code = "user_not_found", .message = "no account with that identifier"});
+    return;
+  }
+
+  std::string detail;
+  if (message.role.has_value() && *message.role != account->user.role) {
+    // Two ways to end up with a system nobody can administer, and both are
+    // refused here rather than explained afterwards.
+    if (account->user.id == actor->id) {
+      reply_error(out, connection.id,
+                  Error{.code = "invalid_target",
+                        .message = "an administrator cannot change their own role"});
+      return;
+    }
+    if (account->user.role == models::Role::Admin &&
+        users_->count_with_role(models::Role::Admin) <= 1) {
+      reply_error(out, connection.id,
+                  Error{.code = "last_administrator",
+                        .message = "the last administrator cannot be demoted"});
+      return;
+    }
+    account->user.role = *message.role;
+    detail = "role=" + std::string(models::to_string(*message.role));
+  }
+  if (message.display_name.has_value()) {
+    account->user.display_name = *message.display_name;
+  }
+
+  // Derived before anything is written, and applied to the same copy, so that
+  // the whole change is one store write. Two writes could half succeed and
+  // leave an account whose role moved and whose password did not, with the
+  // administrator looking at an error and a table that says otherwise.
+  if (message.password.has_value()) {
+    auto credentials = authenticator_.derive(*message.password);
+    if (!credentials) {
+      reply_error(out, connection.id, credentials.error());
+      return;
+    }
+    const auto value = std::move(credentials).take();
+    account->salt_hex = value.salt_hex;
+    account->password_hash_hex = value.password_hash_hex;
+    detail += detail.empty() ? "password" : " password";
+  }
+
+  if (auto failure = users_->update(*account)) {
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  record(*actor, "update_user", message.user_id, {}, detail);
+  out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+}
+
+void Hub::handle_delete_user(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::DeleteUser& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  const auto account = users_->find_by_id(message.user_id);
+  if (!account.has_value()) {
+    reply_error(out, connection.id,
+                Error{.code = "user_not_found", .message = "no account with that identifier"});
+    return;
+  }
+  if (account->user.id == actor->id) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target",
+                      .message = "an administrator cannot delete their own account"});
+    return;
+  }
+  if (account->user.role == models::Role::Admin &&
+      users_->count_with_role(models::Role::Admin) <= 1) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "last_administrator", .message = "the last administrator cannot be deleted"});
+    return;
+  }
+
+  // Out of the room first, so nobody is left talking to an account that no
+  // longer exists.
+  if (const auto room_id = rooms_.room_of(message.user_id)) {
+    evict(out, *room_id, message.user_id, "the account was removed");
+  }
+
+  // Tokens go with the account. Without this, a session opened a minute ago
+  // keeps working until it expires on its own, which for an account somebody
+  // just decided to remove is exactly the wrong answer.
+  authenticator_.revoke_tokens_of(message.user_id);
+  if (const auto target = connection_of_user(message.user_id)) {
+    if (Connection* state = find_connection(*target)) {
+      state->user.reset();
+      state->room_id.reset();
+    }
+    user_to_connection_.erase(message.user_id);
+  }
+
+  if (auto failure = users_->remove(message.user_id)) {
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  DV_LOG_INFO("{} deleted account {}", actor->id, account->username);
+  record(*actor, "delete_user", message.user_id, {}, "username=" + account->username);
+  out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+}
+
+void Hub::handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::DeleteRoom& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  // Everyone is removed one at a time, through the same path a kick takes, so
+  // that each of them gets told and the SFU tears each connection down. Read
+  // the identifiers out first: evict mutates the list being walked.
+  std::vector<std::string> occupants;
+  if (const models::Room* room = rooms_.find(message.room_id); room != nullptr) {
+    occupants.reserve(room->participants.size());
+    for (const models::Participant& participant : room->participants) {
+      occupants.push_back(participant.user.id);
+    }
+  }
+  for (const std::string& user_id : occupants) {
+    evict(out, message.room_id, user_id, std::string(kRoomClosed));
+  }
+
+  auto removed = rooms_.remove_room(message.room_id);
+  if (!removed) {
+    // An ordinary room is already gone: emptying it deleted it, which is the
+    // outcome that was asked for. Only a room that never existed is an error.
+    if (occupants.empty()) {
+      reply_error(out, connection.id, removed.error());
+      return;
+    }
+  }
+
+  DV_LOG_INFO("{} closed room {}", actor->id, message.room_id);
+  record(*actor, "delete_room", message.room_id, message.room_id,
+         "participants=" + std::to_string(occupants.size()));
+  out.push_back(Outgoing{.connection = connection.id, .message = room_list()});
+}
+
+void Hub::handle_list_audit(std::vector<Outgoing>& out, Connection& connection,
+                            const protocol::ListAudit& message) {
+  out.push_back(Outgoing{
+      .connection = connection.id,
+      .message = protocol::AuditList{.entries = audit_->list(message.limit, message.actor_id)}});
 }
 
 }  // namespace dv::server

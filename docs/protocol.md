@@ -47,9 +47,13 @@ Since server assigned identifiers are 16 hexadecimal characters, there is no way
 | Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `authenticate` | `username`, `password` | |
-| `create_room` | `user_id` | `room_name` |
+| `create_room` | `user_id` | `room_name`, `persistent` |
 | `join_room` | `room_id`, `user_id` | `display_name` |
 | `leave_room` | `room_id`, `user_id` | |
+
+`persistent` is a boolean, false when absent.
+A persistent room outlives its last participant, so its identifier keeps working; an ordinary room is deleted the moment it empties.
+Only an administrator may ask for one, and anyone else asking is answered with `forbidden` rather than quietly given an ordinary room.
 
 `authenticate` has to be the first message on the connection.
 Anything else before it is answered with an `error` carrying code `unauthorized`.
@@ -70,10 +74,16 @@ The server never echoes it back and never writes it to a log.
 The `user` object has this shape:
 
 ```json
-{ "id": "user123", "display_name": "Ana", "avatar": "" }
+{ "id": "user123", "display_name": "Ana", "avatar": "", "role": "user" }
 ```
 
-`id` and `display_name` are mandatory, `avatar` is optional.
+`id` and `display_name` are mandatory, `avatar` and `role` are optional.
+
+`role` is `"user"` or `"admin"`.
+Anything else, including an absent field, has to be read as `"user"`.
+A receiver that treats an unrecognised value as anything else is one that hands out privileges to whatever a future version of the protocol invents.
+
+The role appears wherever a `user` object does, so a client learns its own from `authenticated` and everyone else's from `user_joined`.
 
 ### 4.3 WebRTC negotiation
 
@@ -152,12 +162,18 @@ Everyone already in the room sees the participant leave and join again.
 | --- | --- |
 | `screen_share_started` | `room_id`, `user_id` |
 | `screen_share_stopped` | `room_id`, `user_id` |
-| `mute` | `room_id`, `user_id` |
-| `unmute` | `room_id`, `user_id` |
+| `mute` | `room_id`, `user_id`, and `by_user_id` optional |
+| `unmute` | `room_id`, `user_id`, and `by_user_id` optional |
 
 These four messages travel in both directions.
 From the client to the server, they are a request.
 From the server to the clients, they are the confirmation, relayed to every other participant in the room.
+
+In the client to server direction `user_id` has to be the sender's own.
+A participant asking to mute somebody else is answered with `unauthorized`; the way an administrator does it is `force_mute`, in section 4.6.
+
+`by_user_id` is empty or absent when somebody muted themselves, and carries the administrator's identifier when the server produced the message from a `force_mute`.
+It is ignored on the way in: a participant does not get to claim who muted them.
 
 A client should update its own UI only after receiving the server's confirmation, and not when sending the request.
 Otherwise two people can simultaneously believe they are sharing their screen.
@@ -172,6 +188,116 @@ Otherwise two people can simultaneously believe they are sharing their screen.
 The server sends `ping` every `heartbeat_interval_ms`.
 The client answers `pong` with the same `nonce`.
 A client that does not answer within `heartbeat_timeout_ms` is considered disconnected and removed from the room.
+
+### 4.6 Administration
+
+Every message in this section is refused with `forbidden` unless the connection authenticated as an account whose role is `admin`.
+
+The role is read from the account store at the moment each of these arrives, and not from what the connection was when it logged in.
+Promoting or demoting somebody therefore takes effect on their next action rather than on their next login, which is what makes revoking an administrator worth doing.
+
+**Client to server.**
+
+| Type | Mandatory fields | Optional fields |
+| --- | --- | --- |
+| `kick_user` | `room_id`, `user_id` | `reason` |
+| `force_mute` | `room_id`, `user_id`, `muted` | |
+| `list_users` | | |
+| `create_user` | `username`, `password` | `display_name`, `role` |
+| `update_user` | `user_id` | `role`, `display_name`, `password` |
+| `delete_user` | `user_id` | |
+| `list_rooms` | | |
+| `delete_room` | `room_id` | |
+| `list_audit` | | `limit`, `actor_id` |
+
+**Server to client.**
+
+| Type | Mandatory fields | Optional fields |
+| --- | --- | --- |
+| `user_kicked` | `room_id`, `user_id` | `reason` |
+| `user_list` | `users` | |
+| `room_list` | `rooms` | |
+| `audit_list` | `entries` | |
+
+`kick_user` removes one participant from one room.
+They stay connected and authenticated: only the room membership ends, so they can join another room, or the same one again unless the account was also removed.
+The room is told with `user_kicked`, the person removed included, and then with the ordinary `user_left`, so a client that knows nothing about administration still updates its participant list.
+An administrator cannot kick themselves; that is `leave_room`, and asking is answered with `invalid_target`.
+
+`force_mute` mutes or unmutes somebody else, and `muted` says which.
+It is confirmed to the room as an ordinary `mute` or `unmute` carrying `by_user_id`, and never as a `force_mute`.
+
+A forced mute holds until an administrator releases it.
+The participant sending `unmute` about themselves while one is in place is answered with `forbidden`; muting themselves further is still allowed, because it takes nothing away from anyone.
+Without that rule a forced mute is advice, undone by one click on the button that appears to have turned itself off.
+
+`update_user` changes only the fields that are present.
+An absent field means unchanged, which is why they are optional rather than empty: clearing a display name and not touching it have to be different requests.
+
+`delete_room` closes a room.
+Everyone in it is removed exactly as `kick_user` removes one person, and a persistent room stops existing rather than becoming empty.
+
+`create_user`, `update_user` and `delete_user` are each answered with the whole new `user_list`, and `delete_room` with the whole new `room_list`.
+There is no separate acknowledgement: the new state is the acknowledgement, and it leaves no window in which a panel shows something the server has already moved past.
+
+Two rules exist so that a system cannot be left with nobody able to administer it, and both are refused rather than silently ignored:
+
+- An administrator may not change or delete their own account. Code `invalid_target`.
+- The last remaining administrator may not be demoted or deleted. Code `last_administrator`.
+
+`users` is an array of:
+
+```json
+{
+  "user": { "id": "user123", "display_name": "Ana", "avatar": "", "role": "admin" },
+  "username": "ana",
+  "created_at": 1755676800,
+  "online": true
+}
+```
+
+`created_at` is seconds since the Unix epoch, UTC, and zero when the store does not know.
+`online` says whether that account has a connection right now.
+
+No password, salt or hash appears here, and none is defined for any message in this protocol.
+
+`rooms` is an array of:
+
+```json
+{ "id": "8F42A1", "name": "standup", "owner_id": "user123", "persistent": true, "participant_count": 3 }
+```
+
+`entries` is an array of:
+
+```json
+{
+  "id": "6890f2...",
+  "actor_id": "user123",
+  "actor_username": "Ana",
+  "action": "kick",
+  "target_id": "user456",
+  "room_id": "8F42A1",
+  "detail": "off topic",
+  "timestamp_seconds": 1755676800
+}
+```
+
+`action` is one of `kick`, `force_mute`, `force_unmute`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
+Entries come back newest first.
+`limit` is clamped by the server, and zero or absent asks for its default.
+An empty or absent `actor_id` means every actor.
+
+Ordinary participation is not recorded: joining, leaving, sharing a screen and muting yourself produce no entry, because a log full of them is a log nobody reads.
+
+### 4.7 Who may send what
+
+| Role | May send |
+| --- | --- |
+| `user` | `authenticate`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `ping`, `pong` |
+| `admin` | everything above, plus every message in section 4.6 |
+
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_list`, `room_list`, `audit_list` and `error`.
+A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
 
@@ -191,9 +317,21 @@ The message alongside them is for humans only and may change.
 | `screen_share_busy` | Another participant is already sharing their screen |
 | `unauthorized` | Session token absent, invalid or expired |
 | `media_unavailable` | The message was addressed to `sfu`, and this server does not route media |
+| `forbidden` | The action requires a role the account does not hold |
+| `user_exists` | The username is already taken |
+| `user_not_found` | No account exists with that `user_id` |
+| `invalid_target` | The action cannot be aimed at that user, such as an administrator kicking or deleting themselves |
+| `last_administrator` | The action would leave the system with no administrator |
+| `invalid_value` | A field is present and of the right type, but its value is not usable |
+| `database_error` | The persistence layer could not carry out the operation |
 
 The first five are detected in the parsing layer and have been implemented since M1.
 The next ones depend on the server and arrived in M2, and `media_unavailable` in M4.
+The last seven come with roles and persistence.
+
+`forbidden` and `unauthorized` are deliberately different.
+`unauthorized` means the server does not know who is asking; `forbidden` means it does, and the answer is still no.
+A client that treats them the same will try to log in again in response to a refusal that logging in cannot fix.
 
 ## 6. Session state machine
 

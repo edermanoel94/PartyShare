@@ -69,6 +69,11 @@ Two environment variables help when debugging media:
 | `DV_DISABLE_HARDWARE_ENCODER` | Forces the software encoder even on a machine with a capable card. Useful for comparing the two and for working around a problematic driver. |
 | `DV_CRASH_DIRECTORY` | Where crash reports are written. The default is the platform state directory. |
 | `DV_CRASH_REPORTS` | `0` turns crash reporting off entirely. |
+| `DV_DATABASE_ENABLED` | `1` turns MongoDB persistence on. A build without `DV_ENABLE_MONGO` refuses to start rather than falling back to memory. |
+| `DV_DATABASE_URI` | Connection string, default `mongodb://127.0.0.1:27017`. |
+| `DV_DATABASE_NAME` | Database to use, default `partyshare`. |
+| `DV_DATABASE_TIMEOUT_MS` | How long to wait for the database, default 2000. Deliberately short: the store is called with the server's lock held. |
+| `DV_TEST_MONGO_URI` | Where the `mongo` labelled tests find a database. Unset, they skip. |
 
 ### Virtual audio device
 
@@ -205,6 +210,16 @@ The first configure builds the vcpkg dependencies from source, which takes minut
 | `DV_ENABLE_SANITIZERS` | OFF | AddressSanitizer and UndefinedBehaviorSanitizer. |
 | `DV_WARNINGS_AS_ERRORS` | OFF | On in every preset. |
 | `DV_ENABLE_WEBRTC_SPIKE` | OFF | The M3 spike. See docs/webrtc-toolchain.md. |
+| `DV_ENABLE_MONGO` | OFF | Persists accounts, roles, rooms and the audit log in MongoDB. Needs the driver, see below. |
+
+`DV_ENABLE_MONGO` needs `mongo-cxx-driver`, which is a vcpkg feature rather than a plain dependency so that a build without it needs nothing installed:
+
+```sh
+cmake -S . -B build/mongo -DDV_ENABLE_MONGO=ON -DVCPKG_MANIFEST_FEATURES=mongo
+```
+
+With the option off, the server keeps accounts, rooms and the audit log in memory, which is what it did before persistence existed.
+The whole test suite builds and passes either way; the tests that need a real database carry the `mongo` label and skip themselves unless `DV_TEST_MONGO_URI` is set.
 
 Tests are labelled: `ctest -L unit` runs only the unit tests, `ctest -L integration` only the integration ones.
 The integration tests start a real server on an ephemeral port and connect real WebSocket clients.

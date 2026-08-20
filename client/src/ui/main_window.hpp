@@ -4,6 +4,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QPoint>
 #include <QString>
 
 #include "app/call_session.hpp"
@@ -19,6 +20,7 @@ class QStackedWidget;
 
 namespace dv::ui {
 
+class AdminPanel;
 class ScreenView;
 
 /// The interface of section 19 of SPEC.md: three screens and a settings
@@ -54,7 +56,10 @@ class MainWindow : public QMainWindow {
   void on_toggle_mute();
   void on_toggle_share();
   void on_open_settings();
+  void on_open_administration();
+  void on_close_administration();
   void on_participant_selected();
+  void on_participant_menu(const QPoint& where);
   void on_volume_changed(int value);
 
   // Called on the UI thread, from the session's callbacks.
@@ -65,6 +70,8 @@ class MainWindow : public QMainWindow {
   void apply_error(const QString& code, const QString& message);
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
+  void apply_kicked(const QString& reason);
+  void apply_forced_mute(const QString& name, const QString& by_name, bool muted);
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
   // needs as its own specifier, and these members are not slots.
@@ -73,6 +80,7 @@ class MainWindow : public QMainWindow {
   void build_login_page();
   void build_home_page();
   void build_room_page();
+  void build_admin_page();
   void wire_session();
   void refresh_controls();
   void update_volume_label(const QString& participant, int volume);
@@ -93,6 +101,8 @@ class MainWindow : public QMainWindow {
   QLineEdit* room_id_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
+  /// Shown only to an administrator. See on_open_administration.
+  QPushButton* admin_button_ = nullptr;
 
   // Room.
   QLabel* room_title_ = nullptr;
@@ -106,6 +116,11 @@ class MainWindow : public QMainWindow {
   QPushButton* settings_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
+
+  // Administration.
+  AdminPanel* admin_panel_ = nullptr;
+  /// Which page to go back to when the administration page is closed.
+  int previous_page_ = 0;
 
   // Status bar.
   QLabel* status_ = nullptr;

@@ -2,16 +2,21 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
+#include <dv/models/audit.hpp>
 #include <dv/protocol/message.hpp>
 
 #include "rooms/room_manager.hpp"
 #include "signaling/authenticator.hpp"
+#include "store/audit_log.hpp"
+#include "store/room_store.hpp"
+#include "store/user_store.hpp"
 
 namespace dv::server {
 
@@ -68,6 +73,13 @@ class Hub {
     std::chrono::milliseconds heartbeat_timeout{15000};
     /// Fixing this makes room identifiers reproducible in tests.
     std::optional<std::uint32_t> room_id_seed;
+
+    /// Persistence. All three are null by default, and the Hub then creates
+    /// in-memory ones and owns them, which is the server without a database.
+    /// A caller that provides one has to keep it alive longer than the Hub.
+    store::UserStore* users = nullptr;
+    store::RoomStore* rooms = nullptr;
+    store::AuditLog* audit = nullptr;
   };
 
   Hub();
@@ -86,6 +98,8 @@ class Hub {
   /// Accounts are registered through this. The MVP has no signup flow.
   [[nodiscard]] Authenticator& authenticator() noexcept { return authenticator_; }
   [[nodiscard]] const RoomManager& rooms() const noexcept { return rooms_; }
+  [[nodiscard]] RoomManager& rooms() noexcept { return rooms_; }
+  [[nodiscard]] store::AuditLog& audit() noexcept { return *audit_; }
 
   void on_connect(ConnectionId connection, Clock::time_point now);
 
@@ -134,6 +148,31 @@ class Hub {
   [[nodiscard]] static models::User* authenticated(std::vector<Outgoing>& out,
                                                    Connection& connection);
 
+  /// The role an account holds right now, read from the store rather than from
+  /// the identity cached on the connection when it logged in.
+  ///
+  /// One lookup per administrative message, and none for anything else, which
+  /// is what makes it affordable. What it buys: promoting or demoting somebody
+  /// takes effect on their next action instead of on their next login, so
+  /// revoking an administrator is not a request to please reconnect.
+  ///
+  /// An account that has been deleted answers `Role::User`, the role that can
+  /// do least.
+  [[nodiscard]] models::Role current_role(const std::string& user_id) const;
+
+  /// Writes one entry, and complains loudly if it cannot.
+  ///
+  /// The action goes ahead either way: refusing to remove a disruptive
+  /// participant because the audit database is unreachable protects the record
+  /// at the expense of the thing being recorded. See docs/security-review.md.
+  void record(const models::User& actor, std::string action, std::string target_id,
+              std::string room_id, std::string detail);
+
+  /// Takes one participant out of a room and tells everyone, which is what a
+  /// kick and a room being closed both come down to.
+  void evict(std::vector<Outgoing>& out, const std::string& room_id, const std::string& user_id,
+             const std::string& reason);
+
   void handle_create_room(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::CreateRoom& message);
   void handle_join_room(std::vector<Outgoing>& out, Connection& connection,
@@ -148,8 +187,42 @@ class Hub {
   void handle_screen_share(std::vector<Outgoing>& out, Connection& connection,
                            const std::string& room_id, const std::string& user_id, bool sharing);
 
+  // Administration. Each one starts at administrator() above.
+  void handle_kick(std::vector<Outgoing>& out, Connection& connection,
+                   const protocol::KickUser& message);
+  void handle_force_mute(std::vector<Outgoing>& out, Connection& connection,
+                         const protocol::ForceMute& message);
+  void handle_list_users(std::vector<Outgoing>& out, Connection& connection);
+  void handle_create_user(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::CreateUser& message);
+  void handle_update_user(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::UpdateUser& message);
+  void handle_delete_user(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::DeleteUser& message);
+  void handle_list_rooms(std::vector<Outgoing>& out, Connection& connection);
+  void handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::DeleteRoom& message);
+  void handle_list_audit(std::vector<Outgoing>& out, Connection& connection,
+                         const protocol::ListAudit& message);
+
+  /// The account list as an administrator sees it, with the salt and the hash
+  /// left behind. Sent as the answer to list_users and after every change, so
+  /// the panel never shows a state the server has already moved past.
+  [[nodiscard]] protocol::UserList user_list() const;
+  [[nodiscard]] protocol::RoomList room_list() const;
+
   Options options_;
   MediaSignals* media_signals_ = nullptr;
+
+  // Declared before everything that uses them, so they are destroyed last.
+  // Null when the caller supplied its own, and `users_`, `room_store_` and
+  // `audit_` are what the rest of the class talks to either way.
+  std::unique_ptr<store::UserStore> owned_users_;
+  std::unique_ptr<store::RoomStore> owned_rooms_;
+  std::unique_ptr<store::AuditLog> owned_audit_;
+  store::UserStore* users_;
+  store::AuditLog* audit_;
+
   RoomManager rooms_;
   Authenticator authenticator_;
   std::unordered_map<ConnectionId, Connection> connections_;

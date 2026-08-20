@@ -3,6 +3,7 @@ add_library(dv_shared STATIC
   src/logging/logger.cpp
   src/config/config.cpp
   src/models/room.cpp
+  src/models/user.cpp
   src/protocol/message.cpp
 )
 add_library(dv::shared ALIAS dv_shared)

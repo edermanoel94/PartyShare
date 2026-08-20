@@ -34,6 +34,14 @@ The **server** (`server/`) is two halves in one process.
 Signaling routes JSON messages over WebSocket and owns the room lifecycle.
 The SFU forwards RTP between participants without decoding anything.
 
+Accounts carry a **role**, either `user` or `admin`.
+A user joins and creates rooms and shares a screen; an administrator can also remove and mute other participants, and manage the accounts and the rooms from a panel in the client.
+Every administrative action is checked on the server, against the role read from the account store at that moment rather than the one the session logged in with, and every one of them is written to an audit log.
+Section 4.6 of [docs/protocol.md](docs/protocol.md) is the normative list.
+
+Accounts, roles, persistent rooms and the audit log are persisted in **MongoDB**, which is optional at build time.
+Without it the server keeps all four in memory and behaves as it did before persistence existed.
+
 The **shared code** (`shared/`) holds the protocol, the models and the configuration.
 The protocol is defined in [docs/protocol.md](docs/protocol.md), and the C++ implementation follows that document rather than the other way around.
 That is what makes it possible to reimplement the server in another language without touching the clients.
@@ -52,6 +60,14 @@ ctest --preset linux-release
 Binaries land in `build/<preset>/bin/`.
 Without Qt, pass `-DDV_BUILD_CLIENT_UI=OFF`, which drops the interface and keeps the client core, or `-DDV_BUILD_CLIENT=OFF`, which drops the client entirely.
 Without libdatachannel or OpenSSL, pass `-DDV_BUILD_SERVER=OFF`.
+
+MongoDB persistence is off by default and needs both a CMake option and the vcpkg feature that brings the driver:
+
+```sh
+cmake -S . -B build/mongo -DDV_ENABLE_MONGO=ON -DVCPKG_MANIFEST_FEATURES=mongo
+```
+
+Without it the whole suite still builds and runs, and the server keeps its accounts and rooms in memory.
 
 Four presets exist for Linux.
 Windows has `windows-debug`, `windows-release` and `windows-asan`; macOS has `macos-arm64-debug`, `macos-arm64-release`, `macos-arm64-asan` and `macos-x64-release`.
@@ -96,6 +112,20 @@ The server refuses an option it does not recognise, including a bare `--key` wit
 A server is started by a script nobody is watching, and a typo that is quietly ignored leaves it listening on a default nobody chose.
 The client cannot do the same, because Qt reads its own options from that command line, so it passes anything it does not recognise on to Qt.
 
+With a database, and an administrator to start from:
+
+```sh
+./build/mongo/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 --create-admin=ana:choose-a-password
+
+./build/mongo/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 --port=8080
+```
+
+`--create-admin` creates that administrator, or promotes an existing account and resets its password, and then exits.
+It is also the way back in when the only administrator password is lost.
+The password is visible in `ps` while the command runs, so it is worth changing from the client afterwards.
+
 `--users-file` points at a list of development accounts:
 
 ```json
@@ -103,6 +133,8 @@ The client cannot do the same, because Qt reads its own options from that comman
   {"username": "ana", "password": "test-password", "display_name": "Ana"}
 ]
 ```
+
+Each entry also takes an optional `"role"`, `"admin"` or `"user"`, and anything else reads as `"user"`.
 
 That file stores passwords in plain text and exists only so the MVP has users.
 Section 17 of the SPEC forbids it in production, and the server logs a warning on every startup.
@@ -124,6 +156,16 @@ ctest --preset linux-release            # everything
 ctest --test-dir build/linux-release -L unit
 ctest --test-dir build/linux-release -L integration
 ```
+
+The MongoDB tests are a label of their own and need a database to point at.
+Without `DV_TEST_MONGO_URI` each of them skips itself rather than failing, so a machine with no MongoDB still runs the whole suite:
+
+```sh
+docker run -d -p 27017:27017 --name partyshare-mongo mongo:7
+DV_TEST_MONGO_URI=mongodb://127.0.0.1:27017 ctest --test-dir build/mongo -L mongo
+```
+
+They leave behind databases named `partyshare_test_*`, one per test and per run, which are safe to drop.
 
 The integration tests start a real server on an ephemeral port and connect real WebSocket clients.
 The media tests need audio, and `scripts/virtual_audio.sh` creates a virtual sound card for machines and CI runners without one.
@@ -161,7 +203,7 @@ PartyShare/
 | [PLAN.md](PLAN.md) | The milestones, what each one delivered, and the bugs found along the way |
 | [docs/build.md](docs/build.md) | Building, presets, options and media debugging |
 | [docs/requirements.md](docs/requirements.md) | The hardware needed to run the client and the server |
-| [docs/protocol.md](docs/protocol.md) | The normative definition of the signaling protocol |
+| [docs/protocol.md](docs/protocol.md) | The normative definition of the signaling protocol, roles included |
 | [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md) | Why a custom libwebrtc build exists, and how to rebuild it |
 | [docs/webrtc-validation.md](docs/webrtc-validation.md) | How to validate the toolchain on a new platform |
 | [docs/benchmarks.md](docs/benchmarks.md) | Latency, CPU, memory, and behaviour under an impaired network |

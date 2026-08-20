@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,8 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+
+#include "store/memory_store.hpp"
 
 namespace dv::server {
 namespace {
@@ -84,21 +87,26 @@ Error unauthorized() {
 
 Authenticator::Authenticator() : Authenticator(Options{}) {}
 
-Authenticator::Authenticator(Options options) : options_(options) {}
+Authenticator::Authenticator(Options options)
+    : options_(options),
+      owned_users_(std::make_unique<store::MemoryUserStore>()),
+      users_(owned_users_.get()) {}
+
+Authenticator::Authenticator(Options options, store::UserStore& users)
+    : options_(options), users_(&users) {}
 
 Result<models::User> Authenticator::add_user(const std::string& username,
-                                             const std::string& password,
-                                             std::string display_name) {
+                                             const std::string& password, std::string display_name,
+                                             models::Role role) {
   if (username.empty() || password.empty()) {
     return Result<models::User>::failure("invalid_value",
                                          "username and password must not be empty");
   }
-  if (accounts_.contains(username)) {
-    return Result<models::User>::failure("user_exists", "username is already taken");
-  }
 
-  Account account;
+  store::Account account;
+  account.username = username;
   account.user.id = random_hex(16);
+  account.user.role = role;
   // Not a ternary with a std::move in one arm: the other arm is a reference,
   // so the whole expression is one and nothing moves.
   if (display_name.empty()) {
@@ -110,32 +118,33 @@ Result<models::User> Authenticator::add_user(const std::string& username,
   account.password_hash_hex = derive_key_hex(password, account.salt_hex);
 
   const models::User user = account.user;
-  accounts_.emplace(username, std::move(account));
+  if (auto failure = users_->create(std::move(account))) {
+    return Result<models::User>::failure(*failure);
+  }
   return user;
 }
 
 Result<Authenticator::Session> Authenticator::authenticate(const std::string& username,
                                                            const std::string& password,
                                                            Clock::time_point now) {
-  const auto it = accounts_.find(username);
-  if (it == accounts_.end()) {
+  const auto account = users_->find_by_username(username);
+  if (!account.has_value()) {
     return Result<Session>::failure(unauthorized());
   }
 
-  const Account& account = it->second;
-  if (!constant_time_equals(account.password_hash_hex,
-                            derive_key_hex(password, account.salt_hex))) {
+  if (!constant_time_equals(account->password_hash_hex,
+                            derive_key_hex(password, account->salt_hex))) {
     return Result<Session>::failure(unauthorized());
   }
 
   Session session;
-  session.user = account.user;
+  session.user = account->user;
   session.token = random_hex(32);
   session.expires_in_seconds = static_cast<int>(
       std::chrono::duration_cast<std::chrono::seconds>(options_.token_lifetime).count());
 
   tokens_.emplace(session.token,
-                  Token{.user_id = account.user.id, .expires_at = now + options_.token_lifetime});
+                  Token{.user_id = account->user.id, .expires_at = now + options_.token_lifetime});
   return session;
 }
 
@@ -149,14 +158,49 @@ Result<models::User> Authenticator::validate(const std::string& token, Clock::ti
     return Result<models::User>::failure("unauthorized", "session token has expired");
   }
 
-  const std::string& user_id = it->second.user_id;
-  const auto account = std::ranges::find_if(
-      accounts_, [&](const auto& entry) { return entry.second.user.id == user_id; });
-  if (account == accounts_.end()) {
+  const auto account = users_->find_by_id(it->second.user_id);
+  if (!account.has_value()) {
     tokens_.erase(it);
     return Result<models::User>::failure("unauthorized", "the account no longer exists");
   }
-  return account->second.user;
+  return account->user;
+}
+
+Result<Authenticator::Credentials> Authenticator::derive(const std::string& password) const {
+  if (password.empty()) {
+    return Result<Credentials>::failure("invalid_value", "password must not be empty");
+  }
+
+  // A new salt as well as a new hash. Reusing the old one would mean two
+  // passwords of the same account share a salt, which is exactly the property
+  // a salt exists to destroy.
+  Credentials credentials;
+  credentials.salt_hex = random_hex(16);
+  credentials.password_hash_hex = derive_key_hex(password, credentials.salt_hex);
+  return credentials;
+}
+
+std::optional<Error> Authenticator::set_password(const std::string& user_id,
+                                                 const std::string& password) {
+  auto credentials = derive(password);
+  if (!credentials) {
+    return credentials.error();
+  }
+
+  auto account = users_->find_by_id(user_id);
+  if (!account.has_value()) {
+    return Error{.code = "user_not_found", .message = "no such account"};
+  }
+
+  account->salt_hex = std::move(credentials).take().salt_hex;
+  account->password_hash_hex = derive_key_hex(password, account->salt_hex);
+  return users_->update(*account);
+}
+
+void Authenticator::revoke_tokens_of(const std::string& user_id) {
+  for (auto it = tokens_.begin(); it != tokens_.end();) {
+    it = (it->second.user_id == user_id) ? tokens_.erase(it) : std::next(it);
+  }
 }
 
 void Authenticator::expire_tokens(Clock::time_point now) {

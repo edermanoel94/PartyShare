@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <thread>
@@ -13,7 +14,13 @@
 #include <dv/diagnostics/crash_reporter.hpp>
 #include <dv/logging/logger.hpp>
 
+#include "signaling/authenticator.hpp"
 #include "signaling/server.hpp"
+#include "store/memory_store.hpp"
+
+#ifdef DV_HAS_MONGO
+#include "store/mongo_store.hpp"
+#endif
 
 namespace {
 
@@ -57,8 +64,13 @@ int load_users(dv::server::SignalingServer& server, const std::string& path) {
     const auto display_name = entry.contains("display_name")
                                   ? entry.at("display_name").get<std::string>()
                                   : std::string{};
+    // Absent, misspelled or of the wrong type all read as the ordinary role.
+    // A typo in a development file must not hand out administration.
+    const auto role = dv::models::role_from_string(
+        entry.contains("role") && entry.at("role").is_string() ? entry.at("role").get<std::string>()
+                                                               : std::string{});
 
-    auto user = server.add_user(username, password, display_name);
+    auto user = server.add_user(username, password, display_name, role);
     if (!user) {
       DV_LOG_WARN("Could not register '{}': {}", username, user.error().message);
       continue;
@@ -115,6 +127,14 @@ void print_usage() {
              "  --port=PORT              Port to listen on, 1 to 65535 (default 8080)\n"
              "  --max-participants=N     Participants allowed per room (default 5)\n"
              "  --users-file=PATH        Development account list, see below\n"
+             "  --database-uri=URI       MongoDB to persist accounts, rooms and the audit\n"
+             "                           log in. Giving one turns the database on.\n"
+             "  --database-name=NAME     Database to use (default partyshare)\n"
+             "  --database-enabled=BOOL  Turn the database off again, or on without a URI\n"
+             "  --create-admin=USER:PASS Create that administrator, or promote and reset\n"
+             "                           the password of an existing account, then exit.\n"
+             "                           Needs a database. The password is visible in ps\n"
+             "                           while it runs, so change it after first use.\n"
              "  --log-level=LEVEL        trace, debug, info, warn, error, fatal or off\n"
              "  --log-file=PATH          Also write the log to this file\n"
              "  -h, --help               Print this text and exit\n"
@@ -123,7 +143,9 @@ void print_usage() {
              "to --config, environment variables prefixed with DV_, then these options.\n"
              "\n"
              "The users file is a JSON array, and it exists only so the MVP has users:\n"
-             "  [{\"username\": \"ana\", \"password\": \"secret\", \"display_name\": \"Ana\"}]\n"
+             "  [{\"username\": \"ana\", \"password\": \"secret\", \"display_name\": \"Ana\",\n"
+             "    \"role\": \"admin\"}]\n"
+             "\"role\" is \"admin\" or \"user\", and anything else reads as \"user\".\n"
              "It keeps passwords in plain text, which section 17 of SPEC.md rules out\n"
              "for anything deployed.\n",
              stdout);
@@ -144,6 +166,73 @@ void print_usage() {
       scheme_end == std::string::npos ? network.turn_url : network.turn_url.substr(scheme_end + 3);
 
   return scheme + network.turn_username + ":" + network.turn_password + "@" + host;
+}
+
+/// Splits "username:password". The password may contain colons; the username
+/// may not, which is the only reading that lets a password be anything at all.
+[[nodiscard]] bool split_credentials(const std::string& text, std::string& username,
+                                     std::string& password) {
+  const std::size_t separator = text.find(':');
+  if (separator == std::string::npos || separator == 0 || separator + 1 >= text.size()) {
+    return false;
+  }
+  username = text.substr(0, separator);
+  password = text.substr(separator + 1);
+  return true;
+}
+
+/// Creates the administrator named by --create-admin, or promotes and resets
+/// the password of the account that already holds that username.
+///
+/// Promoting rather than refusing is deliberate: this is also the way back in
+/// after the only administrator password is lost, and an operator with access
+/// to the server and the database has every privilege already. Whichever it
+/// did is stated, so nobody is left guessing whether an account was created.
+///
+/// Returns the process exit code.
+int create_admin(dv::server::store::UserStore& users, const std::string& specification) {
+  std::string username;
+  std::string password;
+  if (!split_credentials(specification, username, password)) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    std::fprintf(stderr, "--create-admin takes username:password, with both halves present\n");
+    return 1;
+  }
+
+  dv::server::Authenticator authenticator(dv::server::Authenticator::Options{}, users);
+
+  if (const auto existing = users.find_by_username(username)) {
+    auto updated = *existing;
+    updated.user.role = dv::models::Role::Admin;
+    if (auto failure = users.update(updated)) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+      std::fprintf(stderr, "could not promote '%s': %s\n", username.c_str(),
+                   failure->message.c_str());
+      return 1;
+    }
+    if (auto failure = authenticator.set_password(updated.user.id, password)) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+      std::fprintf(stderr, "could not set the password for '%s': %s\n", username.c_str(),
+                   failure->message.c_str());
+      return 1;
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    std::fprintf(stdout, "'%s' is now an administrator and its password was reset\n",
+                 username.c_str());
+    return 0;
+  }
+
+  auto created = authenticator.add_user(username, password, {}, dv::models::Role::Admin);
+  if (!created) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    std::fprintf(stderr, "could not create '%s': %s\n", username.c_str(),
+                 created.error().message.c_str());
+    return 1;
+  }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  std::fprintf(stdout, "administrator '%s' created with id %s\n", username.c_str(),
+               created.value().id.c_str());
+  return 0;
 }
 
 }  // namespace
@@ -192,12 +281,60 @@ int main(int argc, char* argv[]) {
 
     DV_LOG_INFO("PartyShare signaling server starting");
 
+    // Null when there is no database, and the Hub then makes its own in-memory
+    // stores. Declared here, above the owner, because everything below talks to
+    // the interfaces and not to the implementation.
+    dv::server::store::UserStore* user_store = nullptr;
+    dv::server::store::RoomStore* room_store = nullptr;
+    dv::server::store::AuditLog* audit_log = nullptr;
+#ifdef DV_HAS_MONGO
+    // Outlives the server, which holds references into it.
+    std::unique_ptr<dv::server::store::MongoStores> database;
+#endif
+
+    if (config.database.enabled) {
+#ifdef DV_HAS_MONGO
+      auto opened = dv::server::store::MongoStores::open(config.database.uri, config.database.name,
+                                                         config.database.timeout_ms);
+      if (!opened) {
+        DV_LOG_ERROR("Could not open the database: {}", opened.error().message);
+        // Refused rather than falling back to memory. A server that was told
+        // to persist and quietly did not is one whose accounts disappear at
+        // the next restart, and nobody finds out until they do.
+        return 1;
+      }
+      database = std::move(opened).take();
+      user_store = &database->users();
+      room_store = &database->rooms();
+      audit_log = &database->audit();
+#else
+      DV_LOG_ERROR(
+          "The database is enabled in the configuration, but this build has no MongoDB support. "
+          "Rebuild with -DDV_ENABLE_MONGO=ON, or turn it off with --database-enabled=false.");
+      return 1;
+#endif
+    }
+
+    if (!config.server.create_admin.empty()) {
+      if (user_store == nullptr) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+        std::fprintf(stderr,
+                     "--create-admin needs a database: pass --database-uri=... as well.\n"
+                     "Without one the account would exist only until this process exits.\n");
+        return 1;
+      }
+      return create_admin(*user_store, config.server.create_admin);
+    }
+
     dv::server::SignalingServer::Options options;
     options.bind_address = config.server.bind_address;
     options.port = config.server.port;
     options.hub.max_participants_per_room = config.server.max_participants_per_room;
     options.hub.heartbeat_interval = std::chrono::milliseconds(config.server.heartbeat_interval_ms);
     options.hub.heartbeat_timeout = std::chrono::milliseconds(config.server.heartbeat_timeout_ms);
+    options.hub.users = user_store;
+    options.hub.rooms = room_store;
+    options.hub.audit = audit_log;
 
     // ICE for the SFU's own connections. TURN only matters once a participant is
     // behind a NAT that STUN cannot get through, which is why it is optional.
@@ -215,7 +352,7 @@ int main(int argc, char* argv[]) {
 
     if (!config.server.users_file.empty()) {
       (void)load_users(server, config.server.users_file);
-    } else {
+    } else if (user_store == nullptr) {
       DV_LOG_WARN("server.users_file is not set, nobody will be able to authenticate");
     }
 

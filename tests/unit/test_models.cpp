@@ -13,10 +13,14 @@ Room make_room() {
   Room room;
   room.id = "8F42A1";
   room.name = "dev-room";
+  // Named rather than positional. Both types gained a field in the middle
+  // while roles were added, and positional initialisers quietly shifted their
+  // meaning: what had been "sharing" became "muted by an administrator", and
+  // nothing but a failing assertion said so.
   room.participants = {
-      Participant{User{"user1", "Ana", ""}, false, false},
-      Participant{User{"user2", "Bruno", ""}, true, false},
-      Participant{User{"user3", "Carla", ""}, false, true},
+      Participant{.user = User{.id = "user1", .display_name = "Ana"}},
+      Participant{.user = User{.id = "user2", .display_name = "Bruno"}, .muted = true},
+      Participant{.user = User{.id = "user3", .display_name = "Carla"}, .sharing_screen = true},
   };
   return room;
 }

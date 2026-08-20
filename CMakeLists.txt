@@ -23,6 +23,11 @@ option(DV_BUILD_TESTS "Build the test suite" ON)
 option(DV_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(DV_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DV_ENABLE_WEBRTC_SPIKE "Build the M3 libwebrtc toolchain spike" OFF)
+# Off by default so that the whole suite builds and runs on a machine with no
+# MongoDB and no mongo-cxx-driver. With it off the server keeps its accounts,
+# rooms and audit log in memory, which is what it did before persistence
+# existed. Configure with -DVCPKG_MANIFEST_FEATURES=mongo to get the driver.
+option(DV_ENABLE_MONGO "Persist accounts, rooms and the audit log in MongoDB" OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -64,4 +69,5 @@ message(STATUS "  server          : ${DV_BUILD_SERVER}")
 message(STATUS "  tests           : ${DV_BUILD_TESTS}")
 message(STATUS "  sanitizers      : ${DV_ENABLE_SANITIZERS}")
 message(STATUS "  webrtc spike    : ${DV_ENABLE_WEBRTC_SPIKE}")
+message(STATUS "  mongodb         : ${DV_ENABLE_MONGO}")
 message(STATUS "")

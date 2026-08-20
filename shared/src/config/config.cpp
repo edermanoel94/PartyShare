@@ -76,6 +76,25 @@ void apply_env_bool(const char* name, bool& target) {
   }
 }
 
+/// Replaces the credentials in a URI with asterisks, leaving the rest intact.
+///
+/// `mongodb://ana:secret@host/db` becomes `mongodb://***@host/db`. Used when
+/// the configuration is written out, for the same reason turn_password is
+/// omitted there: dumping the configuration must not be a way to read a
+/// credential back.
+std::string redact_uri(const std::string& uri) {
+  const std::size_t scheme_end = uri.find("://");
+  if (scheme_end == std::string::npos) {
+    return uri;
+  }
+  const std::size_t host_start = scheme_end + 3;
+  const std::size_t at = uri.find('@', host_start);
+  if (at == std::string::npos) {
+    return uri;
+  }
+  return uri.substr(0, host_start) + "***" + uri.substr(at);
+}
+
 /// Splits "--key=value" into its two halves. Returns false for anything that
 /// is not in that shape.
 bool split_argument(std::string_view argument, std::string_view& key, std::string_view& value) {
@@ -143,6 +162,13 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(logging, "log_to_console", base.logging.log_to_console);
       read_field(logging, "crash_directory", base.logging.crash_directory);
       read_field(logging, "crash_reports", base.logging.crash_reports);
+    }
+    if (root.contains("database")) {
+      const json& database = root.at("database");
+      read_field(database, "enabled", base.database.enabled);
+      read_field(database, "uri", base.database.uri);
+      read_field(database, "name", base.database.name);
+      read_field(database, "timeout_ms", base.database.timeout_ms);
     }
     if (root.contains("server")) {
       const json& server = root.at("server");
@@ -219,6 +245,11 @@ void apply_environment(Config& config) {
   }
   apply_env_int("DV_SERVER_MAX_PARTICIPANTS", config.server.max_participants_per_room);
   apply_env_string("DV_SERVER_USERS_FILE", config.server.users_file);
+
+  apply_env_bool("DV_DATABASE_ENABLED", config.database.enabled);
+  apply_env_string("DV_DATABASE_URI", config.database.uri);
+  apply_env_string("DV_DATABASE_NAME", config.database.name);
+  apply_env_int("DV_DATABASE_TIMEOUT_MS", config.database.timeout_ms);
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
@@ -282,6 +313,19 @@ Result<Config> load(int argc, const char* const argv[], UnknownOptions unknown) 
       config.server.bind_address = text;
     } else if (key == "users-file") {
       config.server.users_file = text;
+    } else if (key == "database-uri") {
+      config.database.uri = text;
+      // Naming a database is asking for one. Requiring --database-enabled as
+      // well would be a second switch whose only job is to disagree with the
+      // first, and a server started with a URI and no database is a server
+      // whose operator will find out the hard way.
+      config.database.enabled = true;
+    } else if (key == "database-name") {
+      config.database.name = text;
+    } else if (key == "database-enabled") {
+      config.database.enabled = parse_bool(text, true);
+    } else if (key == "create-admin") {
+      config.server.create_admin = text;
     } else if (key == "input-device") {
       config.audio.input_device = text;
     } else if (key == "output-device") {
@@ -358,6 +402,17 @@ std::optional<Error> validate(const Config& config) {
     return invalid_value("audio.bitrate_kbps", "must be between 6 and 510");
   }
 
+  if (config.database.enabled) {
+    if (config.database.uri.empty()) {
+      return invalid_value("database.uri", "must not be empty when the database is enabled");
+    }
+    if (config.database.name.empty()) {
+      return invalid_value("database.name", "must not be empty when the database is enabled");
+    }
+    if (config.database.timeout_ms <= 0) {
+      return invalid_value("database.timeout_ms", "must be positive");
+    }
+  }
   if (config.network.signaling_url.empty()) {
     return invalid_value("network.signaling_url", "must not be empty");
   }
@@ -420,7 +475,16 @@ std::string to_json(const Config& config) {
                        {"max_participants_per_room", config.server.max_participants_per_room},
                        {"heartbeat_interval_ms", config.server.heartbeat_interval_ms},
                        {"heartbeat_timeout_ms", config.server.heartbeat_timeout_ms},
-                       {"users_file", config.server.users_file}}}};
+                       {"users_file", config.server.users_file}}},
+                     {"database",
+                      {{"enabled", config.database.enabled},
+                       // The URI is written out without its credentials, if it
+                       // carried any: mongodb://user:password@host is a
+                       // perfectly ordinary URI and dumping the configuration
+                       // must not be a way to read the password out of it.
+                       {"uri", redact_uri(config.database.uri)},
+                       {"name", config.database.name},
+                       {"timeout_ms", config.database.timeout_ms}}}};
 
   return root.dump(2);
 }

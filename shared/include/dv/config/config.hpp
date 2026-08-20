@@ -70,6 +70,29 @@ struct ServerConfig {
   int heartbeat_timeout_ms = 15000;
   /// Development only account list. See server/src/main.cpp.
   std::string users_file;
+  /// "username:password". When set, the server creates or promotes that
+  /// administrator and exits without listening. Not a configuration file
+  /// setting in practice, but it travels with the rest so that one parser
+  /// handles the whole command line.
+  std::string create_admin;
+};
+
+/// Where the server persists accounts, rooms and the audit log.
+///
+/// Off by default, and the server then keeps all three in memory, which is
+/// what it did before persistence existed. Turning it on without a reachable
+/// MongoDB is a startup failure rather than a silent fallback: a server that
+/// quietly forgets its accounts is worse than one that refuses to start.
+struct DatabaseConfig {
+  bool enabled = false;
+  std::string uri = "mongodb://127.0.0.1:27017";
+  std::string name = "partyshare";
+  /// How long to wait for the database before giving up on an operation.
+  ///
+  /// Deliberately short. The store is called with the server's lock held, so a
+  /// driver waiting on its own default of thirty seconds would not fail one
+  /// login, it would hold every call on the server for half a minute.
+  int timeout_ms = 2000;
 };
 
 struct Config {
@@ -78,6 +101,7 @@ struct Config {
   NetworkConfig network;
   LoggingConfig logging;
   ServerConfig server;
+  DatabaseConfig database;
 };
 
 /// What to do with a command line argument the parser does not recognise.

@@ -307,4 +307,14 @@ TEST(TypeOf, MatchesTheAlternativeHeld) {
   EXPECT_EQ(type_of(Message{Pong{}}), MessageType::Pong);
 }
 
+TEST(Protocol, ForceMuteRequiresADirection) {
+  // The comment in the parser used to say this was required while the code
+  // defaulted it to true, so a client that misspelled the field got a mute
+  // rather than a refusal: the opposite of guessing nothing.
+  const auto parsed =
+      dv::protocol::parse(R"({"type":"force_mute","room_id":"8F42A1","user_id":"user123"})");
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, "missing_field");
+}
+
 }  // namespace

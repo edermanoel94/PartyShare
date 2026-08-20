@@ -11,9 +11,20 @@
     {
       "name": "libdatachannel",
       "$comment": "srtp is what builds the media transport. Without it rtc/rtp.hpp is absent and the SFU, which forwards RTP, does not compile. The port ships only ws by default.",
-      "features": ["ws", "srtp"]
+      "features": [
+        "ws",
+        "srtp"
+      ]
     },
     "openssl"
   ],
-  "$comment": "Qt 6 is installed through the platform SDK, not through vcpkg. libdatachannel provides both the signaling WebSocket (M2) and the SFU (M4)."
+  "$comment": "Qt 6 is installed through the platform SDK, not through vcpkg. libdatachannel provides both the signaling WebSocket (M2) and the SFU (M4).",
+  "features": {
+    "mongo": {
+      "description": "MongoDB persistence for the server: accounts, roles, rooms and the audit log",
+      "dependencies": [
+        "mongo-cxx-driver"
+      ]
+    }
+  }
 }

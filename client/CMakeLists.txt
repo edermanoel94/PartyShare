@@ -144,6 +144,8 @@ endif()
 qt_add_executable(dv_client
   ${dv_client_resources}
   src/main.cpp
+  src/ui/admin_panel.cpp
+  src/ui/admin_panel.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
   src/ui/screen_view.cpp

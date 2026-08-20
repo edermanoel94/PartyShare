@@ -113,6 +113,16 @@ That means it spends bandwidth and almost no processor: an arriving packet is co
 | Disk | 100 MB, plus whatever the logs take |
 | System | Linux x64, no graphics server and no sound card |
 
+### MongoDB
+
+Optional. Without it the server keeps accounts, rooms and the audit log in memory, and loses all three when it restarts.
+
+It stores one document per account, one per persistent room and one per administrative action, none of which carries media.
+A deployment with a hundred accounts and a year of administrative history is measured in megabytes, so the database is not what sizes the machine; the outbound media is.
+
+It may live on the same machine or another one.
+The server holds its lock while it talks to it, so what matters is latency and not throughput: the default two second timeout is what stops an unreachable database from holding up every call on the server.
+
 ### Bandwidth per room
 
 With five participants and one sharing a screen, and video at the 3000 kbps ceiling:
@@ -131,6 +141,7 @@ A rule that works for planning: add 3.3 Mbps per screen viewer and 200 kbps per 
 | --- | --- | --- |
 | 8080 | TCP | WebSocket signaling, configurable with `--port` or `DV_SERVER_PORT` |
 | ephemeral | UDP | ICE and media, chosen by the system on each connection |
+| 27017 | TCP | MongoDB, outbound, only when persistence is on |
 
 The server has to reach the clients over UDP.
 Behind NAT it uses the configured STUN servers, plus an optional TURN for the cases STUN does not solve.

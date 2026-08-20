@@ -83,6 +83,26 @@ class CallSession {
     /// Comes from signaling rather than from the track, because the video
     /// track carries whoever holds the floor.
     std::function<void(std::string user_id)> on_screen_share;
+
+    // --- administration ---
+    //
+    // Only ever called on a session that authenticated as an administrator,
+    // because the server refuses the requests that produce them otherwise.
+
+    /// The answer to list_users, and to every change that alters that list.
+    std::function<void(std::vector<protocol::UserSummary>)> on_user_list;
+    std::function<void(std::vector<protocol::RoomSummary>)> on_room_list;
+    std::function<void(std::vector<models::AuditEntry>)> on_audit_list;
+
+    /// This session was removed from its room by an administrator, with
+    /// whatever reason they gave. The room has already been left by the time
+    /// this runs, so the interface has only to say so and go back.
+    std::function<void(std::string reason)> on_kicked;
+
+    /// Somebody in the room was muted or unmuted by an administrator, named
+    /// by `by_user_id`. A participant muting themselves does not come through
+    /// here: that is an ordinary participant update.
+    std::function<void(std::string user_id, std::string by_user_id, bool muted)> on_forced_mute;
   };
 
   /// Creates the media session. Injectable so that the tests can drive the
@@ -110,7 +130,11 @@ class CallSession {
                                                                 const std::string& password);
 
   /// Creates a room and reports its identifier through `on_room_created`.
-  [[nodiscard]] Result<std::monostate> create_room(const std::string& room_name);
+  ///
+  /// `persistent` asks for a room that outlives its last participant, which
+  /// the server accepts only from an administrator.
+  [[nodiscard]] Result<std::monostate> create_room(const std::string& room_name,
+                                                   bool persistent = false);
   void on_room_created(std::function<void(std::string room_id)> handler);
 
   [[nodiscard]] Result<std::monostate> join(const std::string& room_id,
@@ -154,8 +178,39 @@ class CallSession {
 
   void disconnect();
 
+  // --- administration --------------------------------------------------------
+  //
+  // Every one of these is refused by the server unless this session
+  // authenticated as an administrator. The interface asks `is_admin` before
+  // offering them, but that is presentation: the decision is the server's, and
+  // a client that asks anyway is answered with `forbidden`.
+  //
+  // They report through the callbacks above rather than returning an answer,
+  // because the reply arrives on the signaling thread like everything else.
+
+  [[nodiscard]] Result<std::monostate> kick(const std::string& user_id,
+                                            const std::string& reason = {});
+  [[nodiscard]] Result<std::monostate> force_mute(const std::string& user_id, bool muted);
+
+  [[nodiscard]] Result<std::monostate> list_users();
+  [[nodiscard]] Result<std::monostate> create_user(const std::string& username,
+                                                   const std::string& password,
+                                                   const std::string& display_name,
+                                                   models::Role role);
+  /// Absent fields are left as they are, see protocol::UpdateUser.
+  [[nodiscard]] Result<std::monostate> update_user(const protocol::UpdateUser& change);
+  [[nodiscard]] Result<std::monostate> delete_user(const std::string& user_id);
+
+  [[nodiscard]] Result<std::monostate> list_rooms();
+  [[nodiscard]] Result<std::monostate> delete_room(const std::string& room_id);
+
+  [[nodiscard]] Result<std::monostate> list_audit(int limit = 0, const std::string& actor_id = {});
+
   [[nodiscard]] State state() const;
   [[nodiscard]] models::User local_user() const;
+  /// The role this session authenticated as, as the server reported it.
+  [[nodiscard]] models::Role role() const;
+  [[nodiscard]] bool is_admin() const;
   [[nodiscard]] std::string room_id() const;
   [[nodiscard]] std::vector<Participant> participants() const;
   [[nodiscard]] media::AudioStats stats() const;

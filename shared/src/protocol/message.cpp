@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/protocol.md must match.
-constexpr std::array<TypeMapping, 18> kTypeMappings{{
+constexpr std::array<TypeMapping, 31> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -35,6 +35,19 @@ constexpr std::array<TypeMapping, 18> kTypeMappings{{
     {.type = MessageType::Error, .name = "error"},
     {.type = MessageType::Ping, .name = "ping"},
     {.type = MessageType::Pong, .name = "pong"},
+    {.type = MessageType::KickUser, .name = "kick_user"},
+    {.type = MessageType::UserKicked, .name = "user_kicked"},
+    {.type = MessageType::ForceMute, .name = "force_mute"},
+    {.type = MessageType::ListUsers, .name = "list_users"},
+    {.type = MessageType::UserList, .name = "user_list"},
+    {.type = MessageType::CreateUser, .name = "create_user"},
+    {.type = MessageType::UpdateUser, .name = "update_user"},
+    {.type = MessageType::DeleteUser, .name = "delete_user"},
+    {.type = MessageType::ListRooms, .name = "list_rooms"},
+    {.type = MessageType::RoomList, .name = "room_list"},
+    {.type = MessageType::DeleteRoom, .name = "delete_room"},
+    {.type = MessageType::ListAudit, .name = "list_audit"},
+    {.type = MessageType::AuditList, .name = "audit_list"},
 }};
 
 /// Reads fields out of a JSON object, remembering the first failure instead of
@@ -68,6 +81,59 @@ class FieldReader {
     return field->get<std::string>();
   }
 
+  /// Absent and present-but-null both answer nothing, which is what lets
+  /// `update_user` tell "leave this alone" apart from "set it to empty".
+  std::optional<std::string> maybe_string(std::string_view key) {
+    const json* field = find(key);
+    if (field == nullptr || field->is_null()) {
+      return std::nullopt;
+    }
+    if (!field->is_string()) {
+      fail("invalid_type", key, "expected a string");
+      return std::nullopt;
+    }
+    return field->get<std::string>();
+  }
+
+  /// A boolean that has to be there. Used where absence has no safe reading:
+  /// a force_mute without `muted` is a request whose direction the server
+  /// would have to guess, and guessing "mute" is the wrong way to be wrong.
+  bool require_boolean(std::string_view key) {
+    const json* field = require(key);
+    if (field == nullptr) {
+      return false;
+    }
+    if (!field->is_boolean()) {
+      fail("invalid_type", key, "expected a boolean");
+      return false;
+    }
+    return field->get<bool>();
+  }
+
+  bool boolean(std::string_view key, bool fallback = false) {
+    const json* field = find(key);
+    if (field == nullptr || field->is_null()) {
+      return fallback;
+    }
+    if (!field->is_boolean()) {
+      fail("invalid_type", key, "expected a boolean");
+      return fallback;
+    }
+    return field->get<bool>();
+  }
+
+  std::int64_t optional_integer(std::string_view key, std::int64_t fallback = 0) {
+    const json* field = find(key);
+    if (field == nullptr || field->is_null()) {
+      return fallback;
+    }
+    if (!field->is_number_integer()) {
+      fail("invalid_type", key, "expected an integer");
+      return fallback;
+    }
+    return field->get<std::int64_t>();
+  }
+
   int integer(std::string_view key) {
     const json* field = require(key);
     if (field == nullptr) {
@@ -94,10 +160,48 @@ class FieldReader {
     value.id = nested.string("id");
     value.display_name = nested.string("display_name");
     value.avatar = nested.optional_string("avatar");
+    // Optional, and anything unrecognised reads as the plain role. A client
+    // from before roles existed sends no field, and must not become an
+    // administrator by omission.
+    value.role = models::role_from_string(nested.optional_string("role"));
     if (!nested.ok()) {
       fail(nested.error().code, key, nested.error().message);
     }
     return value;
+  }
+
+  /// Reads an array of objects, building one `T` per element through `read`,
+  /// which is handed a reader over that element.
+  ///
+  /// A failure inside an element is reported against the array's own key. The
+  /// index is not in the message because the caller cannot act on it: a
+  /// malformed list is refused whole either way.
+  template <typename T, typename Read>
+  std::vector<T> array(std::string_view key, Read read) {
+    std::vector<T> values;
+    const json* field = require(key);
+    if (field == nullptr) {
+      return values;
+    }
+    if (!field->is_array()) {
+      fail("invalid_type", key, "expected an array");
+      return values;
+    }
+    values.reserve(field->size());
+    for (const json& element : *field) {
+      if (!element.is_object()) {
+        fail("invalid_type", key, "expected an array of objects");
+        return values;
+      }
+      FieldReader nested(element);
+      T value = read(nested);
+      if (!nested.ok()) {
+        fail(nested.error().code, key, nested.error().message);
+        return values;
+      }
+      values.push_back(std::move(value));
+    }
+    return values;
   }
 
   [[nodiscard]] bool ok() const noexcept { return !error_.has_value(); }
@@ -138,7 +242,68 @@ class FieldReader {
 };
 
 json user_to_json(const models::User& user) {
-  return json{{"id", user.id}, {"display_name", user.display_name}, {"avatar", user.avatar}};
+  return json{{"id", user.id},
+              {"display_name", user.display_name},
+              {"avatar", user.avatar},
+              {"role", models::to_string(user.role)}};
+}
+
+json user_summary_to_json(const UserSummary& summary) {
+  return json{{"user", user_to_json(summary.user)},
+              {"username", summary.username},
+              {"created_at", summary.created_at},
+              {"online", summary.online}};
+}
+
+UserSummary user_summary_from(FieldReader& reader) {
+  UserSummary value;
+  value.user = reader.user("user");
+  value.username = reader.string("username");
+  value.created_at = reader.optional_integer("created_at");
+  value.online = reader.boolean("online");
+  return value;
+}
+
+json room_summary_to_json(const RoomSummary& summary) {
+  return json{{"id", summary.id},
+              {"name", summary.name},
+              {"owner_id", summary.owner_id},
+              {"persistent", summary.persistent},
+              {"participant_count", summary.participant_count}};
+}
+
+RoomSummary room_summary_from(FieldReader& reader) {
+  RoomSummary value;
+  value.id = reader.string("id");
+  value.name = reader.optional_string("name");
+  value.owner_id = reader.optional_string("owner_id");
+  value.persistent = reader.boolean("persistent");
+  value.participant_count = static_cast<int>(reader.optional_integer("participant_count"));
+  return value;
+}
+
+json audit_entry_to_json(const models::AuditEntry& entry) {
+  return json{{"id", entry.id},
+              {"actor_id", entry.actor_id},
+              {"actor_username", entry.actor_username},
+              {"action", entry.action},
+              {"target_id", entry.target_id},
+              {"room_id", entry.room_id},
+              {"detail", entry.detail},
+              {"timestamp_seconds", entry.timestamp_seconds}};
+}
+
+models::AuditEntry audit_entry_from(FieldReader& reader) {
+  models::AuditEntry value;
+  value.id = reader.optional_string("id");
+  value.actor_id = reader.optional_string("actor_id");
+  value.actor_username = reader.optional_string("actor_username");
+  value.action = reader.string("action");
+  value.target_id = reader.optional_string("target_id");
+  value.room_id = reader.optional_string("room_id");
+  value.detail = reader.optional_string("detail");
+  value.timestamp_seconds = reader.optional_integer("timestamp_seconds");
+  return value;
 }
 
 Result<Message> finish(FieldReader& reader, Message message) {
@@ -227,7 +392,46 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, Ping>) {
           return MessageType::Ping;
         }
-        return MessageType::Pong;
+        if constexpr (std::is_same_v<T, Pong>) {
+          return MessageType::Pong;
+        }
+        if constexpr (std::is_same_v<T, KickUser>) {
+          return MessageType::KickUser;
+        }
+        if constexpr (std::is_same_v<T, UserKicked>) {
+          return MessageType::UserKicked;
+        }
+        if constexpr (std::is_same_v<T, ForceMute>) {
+          return MessageType::ForceMute;
+        }
+        if constexpr (std::is_same_v<T, ListUsers>) {
+          return MessageType::ListUsers;
+        }
+        if constexpr (std::is_same_v<T, UserList>) {
+          return MessageType::UserList;
+        }
+        if constexpr (std::is_same_v<T, CreateUser>) {
+          return MessageType::CreateUser;
+        }
+        if constexpr (std::is_same_v<T, UpdateUser>) {
+          return MessageType::UpdateUser;
+        }
+        if constexpr (std::is_same_v<T, DeleteUser>) {
+          return MessageType::DeleteUser;
+        }
+        if constexpr (std::is_same_v<T, ListRooms>) {
+          return MessageType::ListRooms;
+        }
+        if constexpr (std::is_same_v<T, RoomList>) {
+          return MessageType::RoomList;
+        }
+        if constexpr (std::is_same_v<T, DeleteRoom>) {
+          return MessageType::DeleteRoom;
+        }
+        if constexpr (std::is_same_v<T, ListAudit>) {
+          return MessageType::ListAudit;
+        }
+        return MessageType::AuditList;
       },
       message);
 }
@@ -249,6 +453,7 @@ std::string serialize(const Message& message) {
         } else if constexpr (std::is_same_v<T, CreateRoom>) {
           root["user_id"] = value.user_id;
           root["room_name"] = value.room_name;
+          root["persistent"] = value.persistent;
         } else if constexpr (std::is_same_v<T, RoomCreated>) {
           root["room_id"] = value.room_id;
           root["room_name"] = value.room_name;
@@ -273,14 +478,70 @@ std::string serialize(const Message& message) {
           root["sdp_mline_index"] = value.sdp_mline_index;
         } else if constexpr (std::is_same_v<T, LeaveRoom> || std::is_same_v<T, UserLeft> ||
                              std::is_same_v<T, ScreenShareStarted> ||
-                             std::is_same_v<T, ScreenShareStopped> || std::is_same_v<T, Mute> ||
-                             std::is_same_v<T, Unmute>) {
+                             std::is_same_v<T, ScreenShareStopped>) {
           // Everything whose payload is exactly a room and a user.
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
+        } else if constexpr (std::is_same_v<T, Mute> || std::is_same_v<T, Unmute>) {
+          root["room_id"] = value.room_id;
+          root["user_id"] = value.user_id;
+          root["by_user_id"] = value.by_user_id;
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {
           root["code"] = value.code;
           root["message"] = value.message;
+        } else if constexpr (std::is_same_v<T, KickUser> || std::is_same_v<T, UserKicked>) {
+          root["room_id"] = value.room_id;
+          root["user_id"] = value.user_id;
+          root["reason"] = value.reason;
+        } else if constexpr (std::is_same_v<T, ForceMute>) {
+          root["room_id"] = value.room_id;
+          root["user_id"] = value.user_id;
+          root["muted"] = value.muted;
+        } else if constexpr (std::is_same_v<T, ListUsers> || std::is_same_v<T, ListRooms>) {
+          // No payload at all. The type is the whole message.
+        } else if constexpr (std::is_same_v<T, UserList>) {
+          json users = json::array();
+          for (const UserSummary& summary : value.users) {
+            users.push_back(user_summary_to_json(summary));
+          }
+          root["users"] = std::move(users);
+        } else if constexpr (std::is_same_v<T, CreateUser>) {
+          root["username"] = value.username;
+          root["password"] = value.password;
+          root["display_name"] = value.display_name;
+          root["role"] = models::to_string(value.role);
+        } else if constexpr (std::is_same_v<T, UpdateUser>) {
+          root["user_id"] = value.user_id;
+          // An absent field means "leave this alone", so an unset optional has
+          // to be left out rather than written as null or as an empty string.
+          if (value.role.has_value()) {
+            root["role"] = models::to_string(*value.role);
+          }
+          if (value.display_name.has_value()) {
+            root["display_name"] = *value.display_name;
+          }
+          if (value.password.has_value()) {
+            root["password"] = *value.password;
+          }
+        } else if constexpr (std::is_same_v<T, DeleteUser>) {
+          root["user_id"] = value.user_id;
+        } else if constexpr (std::is_same_v<T, RoomList>) {
+          json rooms = json::array();
+          for (const RoomSummary& summary : value.rooms) {
+            rooms.push_back(room_summary_to_json(summary));
+          }
+          root["rooms"] = std::move(rooms);
+        } else if constexpr (std::is_same_v<T, DeleteRoom>) {
+          root["room_id"] = value.room_id;
+        } else if constexpr (std::is_same_v<T, ListAudit>) {
+          root["limit"] = value.limit;
+          root["actor_id"] = value.actor_id;
+        } else if constexpr (std::is_same_v<T, AuditList>) {
+          json entries = json::array();
+          for (const models::AuditEntry& entry : value.entries) {
+            entries.push_back(audit_entry_to_json(entry));
+          }
+          root["entries"] = std::move(entries);
         } else {
           root["nonce"] = value.nonce;
         }
@@ -333,6 +594,7 @@ Result<Message> parse(std::string_view json_text) {
       CreateRoom value;
       value.user_id = reader.string("user_id");
       value.room_name = reader.optional_string("room_name");
+      value.persistent = reader.boolean("persistent");
       return finish(reader, value);
     }
     case MessageType::RoomCreated: {
@@ -408,12 +670,14 @@ Result<Message> parse(std::string_view json_text) {
       Mute value;
       value.room_id = reader.string("room_id");
       value.user_id = reader.string("user_id");
+      value.by_user_id = reader.optional_string("by_user_id");
       return finish(reader, value);
     }
     case MessageType::Unmute: {
       Unmute value;
       value.room_id = reader.string("room_id");
       value.user_id = reader.string("user_id");
+      value.by_user_id = reader.optional_string("by_user_id");
       return finish(reader, value);
     }
     case MessageType::Error: {
@@ -430,6 +694,80 @@ Result<Message> parse(std::string_view json_text) {
     case MessageType::Pong: {
       Pong value;
       value.nonce = reader.optional_string("nonce");
+      return finish(reader, value);
+    }
+    case MessageType::KickUser: {
+      KickUser value;
+      value.room_id = reader.string("room_id");
+      value.user_id = reader.string("user_id");
+      value.reason = reader.optional_string("reason");
+      return finish(reader, value);
+    }
+    case MessageType::UserKicked: {
+      UserKicked value;
+      value.room_id = reader.string("room_id");
+      value.user_id = reader.string("user_id");
+      value.reason = reader.optional_string("reason");
+      return finish(reader, value);
+    }
+    case MessageType::ForceMute: {
+      ForceMute value;
+      value.room_id = reader.string("room_id");
+      value.user_id = reader.string("user_id");
+      value.muted = reader.require_boolean("muted");
+      return finish(reader, value);
+    }
+    case MessageType::ListUsers:
+      return finish(reader, ListUsers{});
+    case MessageType::UserList: {
+      UserList value;
+      value.users = reader.array<UserSummary>("users", user_summary_from);
+      return finish(reader, value);
+    }
+    case MessageType::CreateUser: {
+      CreateUser value;
+      value.username = reader.string("username");
+      value.password = reader.string("password");
+      value.display_name = reader.optional_string("display_name");
+      value.role = models::role_from_string(reader.optional_string("role"));
+      return finish(reader, value);
+    }
+    case MessageType::UpdateUser: {
+      UpdateUser value;
+      value.user_id = reader.string("user_id");
+      if (const auto role = reader.maybe_string("role")) {
+        value.role = models::role_from_string(*role);
+      }
+      value.display_name = reader.maybe_string("display_name");
+      value.password = reader.maybe_string("password");
+      return finish(reader, value);
+    }
+    case MessageType::DeleteUser: {
+      DeleteUser value;
+      value.user_id = reader.string("user_id");
+      return finish(reader, value);
+    }
+    case MessageType::ListRooms:
+      return finish(reader, ListRooms{});
+    case MessageType::RoomList: {
+      RoomList value;
+      value.rooms = reader.array<RoomSummary>("rooms", room_summary_from);
+      return finish(reader, value);
+    }
+    case MessageType::DeleteRoom: {
+      DeleteRoom value;
+      value.room_id = reader.string("room_id");
+      return finish(reader, value);
+    }
+    case MessageType::ListAudit: {
+      ListAudit value;
+      value.limit = static_cast<int>(reader.optional_integer("limit"));
+      value.actor_id = reader.optional_string("actor_id");
+      return finish(reader, value);
+    }
+    case MessageType::AuditList: {
+      AuditList value;
+      value.entries = reader.array<models::AuditEntry>("entries", audit_entry_from);
       return finish(reader, value);
     }
   }

@@ -14,12 +14,16 @@ set(dv_unit_sources
   unit/test_room_manager.cpp
   unit/test_authenticator.cpp
   unit/test_hub.cpp
+  unit/test_permissions.cpp
+  unit/test_hub_admin.cpp
+  unit/test_user_store.cpp
   unit/test_video_feedback.cpp
   unit/test_bandwidth_estimator.cpp
 )
 
 set(dv_integration_sources
   integration/test_signaling_server.cpp
+  integration/test_admin_flow.cpp
 )
 
 set(dv_client_test_libraries)
@@ -78,6 +82,30 @@ gtest_discover_tests(dv_integration_tests
   PROPERTIES LABELS integration TIMEOUT 60
   DISCOVERY_TIMEOUT 30
 )
+
+# The MongoDB tests need the driver at build time and a database at run time.
+# The driver is the compile time half, and the database is the run time one:
+# without DV_TEST_MONGO_URI each test skips itself rather than failing, so a
+# developer with no MongoDB still runs the whole suite. Their own label, so
+# `ctest -L mongo` is the way to ask for them and `ctest -LE mongo` the way to
+# leave them out.
+if(DV_ENABLE_MONGO)
+  add_executable(dv_mongo_tests integration/test_mongo_store.cpp)
+
+  target_link_libraries(dv_mongo_tests PRIVATE
+    dv::server_core
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  dv_set_target_warnings(dv_mongo_tests)
+  dv_enable_sanitizers(dv_mongo_tests)
+
+  gtest_discover_tests(dv_mongo_tests
+    PROPERTIES LABELS mongo TIMEOUT 60
+    DISCOVERY_TIMEOUT 30
+  )
+endif()
 
 # The media tests need libwebrtc, so they are a target of their own, built only
 # when the client media layer is. They are slower than the rest, because ICE and

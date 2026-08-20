@@ -513,6 +513,60 @@ TEST_F(CallSessionTest, ParticipantsAppearAndDisappear) {
   EXPECT_EQ(ana.participants().front().user.display_name, "ana");
 }
 
+TEST_F(CallSessionTest, AForcedMuteActuallyStopsTheMicrophone) {
+  // The whole point of the feature, and the one thing that cannot be checked by
+  // looking at the flag the interface reads: the capture itself has to stop.
+  // Setting muted_ without telling the media session would leave the button
+  // saying "unmute", every other client showing a silent participant, and that
+  // participant's voice still going into the room.
+  ASSERT_TRUE(server_->add_user("carla", "password", "Carla", dv::models::Role::Admin).ok());
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(wait_until([&] { return carla.participants().size() == 2; }));
+
+  ASSERT_FALSE(ana.audio().muted.load());
+  ASSERT_TRUE(carla.session().force_mute(ana.session().local_user().id, true).ok());
+
+  EXPECT_TRUE(wait_until([&] { return ana.audio().muted.load(); }));
+  EXPECT_TRUE(wait_until([&] { return ana.session().muted(); }));
+
+  // And releasing it gives the microphone back, rather than only saying so.
+  ASSERT_TRUE(carla.session().force_mute(ana.session().local_user().id, false).ok());
+  EXPECT_TRUE(wait_until([&] { return !ana.audio().muted.load(); }));
+  EXPECT_TRUE(wait_until([&] { return !ana.session().muted(); }));
+}
+
+TEST_F(CallSessionTest, BeingKickedEndsTheCallForWhoeverWasRemoved) {
+  ASSERT_TRUE(server_->add_user("carla", "password", "Carla", dv::models::Role::Admin).ok());
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(wait_until([&] { return carla.participants().size() == 2; }));
+
+  ASSERT_TRUE(carla.session().kick(ana.session().local_user().id, "off topic").ok());
+
+  // Out of the room and back to being merely signed in, without the connection
+  // dropping: the account is still good and another room is still available.
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Authenticated; }));
+  EXPECT_TRUE(wait_until([&] { return ana.session().room_id().empty(); }));
+  EXPECT_TRUE(wait_until([&] { return carla.participants().size() == 1; }));
+}
+
 TEST_F(CallSessionTest, MuteIsConfirmedByTheServerBeforeItShows) {
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());

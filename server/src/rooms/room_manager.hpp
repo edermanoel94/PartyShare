@@ -12,6 +12,8 @@
 #include <dv/models/room.hpp>
 #include <dv/models/user.hpp>
 
+#include "store/room_store.hpp"
+
 namespace dv::server {
 
 /// Owns the set of live rooms and enforces the rules from section 5.1 of
@@ -28,6 +30,10 @@ class RoomManager {
     int max_participants_per_room = 5;
     /// Fixing the seed makes room identifiers reproducible in tests.
     std::optional<std::uint32_t> id_seed;
+    /// Where persistent rooms are written. Null means rooms live and die with
+    /// the process, which is what the server did before there was a database
+    /// and what it still does without one.
+    store::RoomStore* store = nullptr;
   };
 
   /// Defined out of line: the default member initializers of Options are
@@ -37,7 +43,24 @@ class RoomManager {
 
   /// Creates a room with a fresh identifier. Fails only if no free identifier
   /// could be found, which needs the identifier space to be nearly exhausted.
-  [[nodiscard]] Result<std::string> create_room(std::string name);
+  ///
+  /// A persistent room outlives its last participant and is written to the
+  /// store; an ordinary one is forgotten when it empties, as before.
+  [[nodiscard]] Result<std::string> create_room(std::string name, std::string owner_id = {},
+                                                bool persistent = false);
+
+  /// Reads the persistent rooms back from the store, so that an identifier
+  /// somebody wrote down still works after a restart. Rooms come back empty:
+  /// who was inside did not survive the process and pretending otherwise would
+  /// be a participant list nobody is connected to.
+  ///
+  /// Returns how many were loaded. Does nothing without a store.
+  std::size_t load_persistent();
+
+  /// Deletes a room whatever its state, persistent or not, and reports who was
+  /// in it so the caller can tell them. This is the administrative close, and
+  /// the one path that removes a persistent room.
+  [[nodiscard]] Result<std::vector<std::string>> remove_room(const std::string& room_id);
 
   /// Adds a participant. Fails with room_not_found, room_full or
   /// already_in_room.
@@ -51,8 +74,14 @@ class RoomManager {
   /// Returns the room the user was removed from, if any.
   [[nodiscard]] std::optional<std::string> remove_from_any_room(const std::string& user_id);
 
+  /// Mutes or unmutes a participant.
+  ///
+  /// `by_admin` records who did it, and is what makes a forced mute hold: a
+  /// participant unmuting themselves is refused while it is set, and only a
+  /// forced unmute clears it. Fails with `forbidden` in that case.
   [[nodiscard]] std::optional<Error> set_muted(const std::string& room_id,
-                                               const std::string& user_id, bool muted);
+                                               const std::string& user_id, bool muted,
+                                               bool by_admin = false);
 
   /// Fails with screen_share_busy when someone else is already sharing.
   /// Starting a share the user already owns succeeds and changes nothing.
@@ -63,6 +92,10 @@ class RoomManager {
                                                        const std::string& user_id);
 
   [[nodiscard]] const models::Room* find(const std::string& room_id) const;
+
+  /// Every live room. Unordered, because the underlying map is; the caller
+  /// sorts if it cares, and the only caller is an administrative listing.
+  [[nodiscard]] std::vector<models::Room> list() const;
 
   [[nodiscard]] std::optional<std::string> room_of(const std::string& user_id) const;
 

@@ -80,9 +80,9 @@ std::uint16_t SignalingServer::port() const {
 
 Result<models::User> SignalingServer::add_user(const std::string& username,
                                                const std::string& password,
-                                               const std::string& display_name) {
+                                               const std::string& display_name, models::Role role) {
   const std::lock_guard<std::mutex> lock(mutex_);
-  return hub_.authenticator().add_user(username, password, display_name);
+  return hub_.authenticator().add_user(username, password, display_name, role);
 }
 
 std::size_t SignalingServer::connection_count() {

@@ -9,6 +9,7 @@ add_library(dv_server_core STATIC
   src/signaling/authenticator.cpp
   src/signaling/hub.cpp
   src/signaling/server.cpp
+  src/store/memory_store.cpp
 )
 add_library(dv::server_core ALIAS dv_server_core)
 
@@ -18,6 +19,17 @@ target_link_libraries(dv_server_core
   PUBLIC dv::shared LibDataChannel::LibDataChannel
   PRIVATE OpenSSL::Crypto
 )
+
+if(DV_ENABLE_MONGO)
+  find_package(mongocxx CONFIG REQUIRED)
+
+  target_sources(dv_server_core PRIVATE src/store/mongo_store.cpp)
+  target_compile_definitions(dv_server_core PUBLIC DV_HAS_MONGO=1)
+  # PRIVATE: no public header of this library mentions the driver, which is
+  # what store/mongo_store.hpp hiding its Impl behind a pointer is for. The
+  # tests and the executable link the library without seeing bsoncxx at all.
+  target_link_libraries(dv_server_core PRIVATE mongo::mongocxx_static)
+endif()
 
 dv_set_target_warnings(dv_server_core)
 dv_enable_sanitizers(dv_server_core)

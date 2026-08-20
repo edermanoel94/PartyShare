@@ -95,7 +95,7 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
   return std::monostate{};
 }
 
-Result<std::monostate> CallSession::create_room(const std::string& room_name) {
+Result<std::monostate> CallSession::create_room(const std::string& room_name, bool persistent) {
   std::string user_id;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -104,7 +104,8 @@ Result<std::monostate> CallSession::create_room(const std::string& room_name) {
   if (user_id.empty()) {
     return Result<std::monostate>::failure("unauthorized", "authenticate before creating a room");
   }
-  return signaling_.send(protocol::CreateRoom{.user_id = user_id, .room_name = room_name});
+  return signaling_.send(
+      protocol::CreateRoom{.user_id = user_id, .room_name = room_name, .persistent = persistent});
 }
 
 Result<std::monostate> CallSession::join(const std::string& room_id,
@@ -426,6 +427,78 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
   }
 }
 
+// --- administration ----------------------------------------------------------
+//
+// Each one is a message and nothing more. The server decides whether it is
+// allowed, performs it, and announces the result, which arrives through
+// handle_signal like everything else. That is why none of them returns an
+// answer: there is nothing to return yet when they come back.
+
+Result<std::monostate> CallSession::kick(const std::string& user_id, const std::string& reason) {
+  std::string room;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    room = room_id_;
+  }
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room", "this session is not in a room");
+  }
+  return signaling_.send(protocol::KickUser{.room_id = room, .user_id = user_id, .reason = reason});
+}
+
+Result<std::monostate> CallSession::force_mute(const std::string& user_id, bool muted) {
+  std::string room;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    room = room_id_;
+  }
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room", "this session is not in a room");
+  }
+  return signaling_.send(protocol::ForceMute{.room_id = room, .user_id = user_id, .muted = muted});
+}
+
+Result<std::monostate> CallSession::list_users() {
+  return signaling_.send(protocol::ListUsers{});
+}
+
+Result<std::monostate> CallSession::create_user(const std::string& username,
+                                                const std::string& password,
+                                                const std::string& display_name,
+                                                models::Role role) {
+  return signaling_.send(protocol::CreateUser{
+      .username = username, .password = password, .display_name = display_name, .role = role});
+}
+
+Result<std::monostate> CallSession::update_user(const protocol::UpdateUser& change) {
+  return signaling_.send(change);
+}
+
+Result<std::monostate> CallSession::delete_user(const std::string& user_id) {
+  return signaling_.send(protocol::DeleteUser{.user_id = user_id});
+}
+
+Result<std::monostate> CallSession::list_rooms() {
+  return signaling_.send(protocol::ListRooms{});
+}
+
+Result<std::monostate> CallSession::delete_room(const std::string& room_id) {
+  return signaling_.send(protocol::DeleteRoom{.room_id = room_id});
+}
+
+Result<std::monostate> CallSession::list_audit(int limit, const std::string& actor_id) {
+  return signaling_.send(protocol::ListAudit{.limit = limit, .actor_id = actor_id});
+}
+
+models::Role CallSession::role() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return local_user_.role;
+}
+
+bool CallSession::is_admin() const {
+  return role() == models::Role::Admin;
+}
+
 void CallSession::handle_signal(protocol::Message message) {
   if (const auto* authenticated = std::get_if<protocol::Authenticated>(&message)) {
     std::string rejoin_room;
@@ -494,30 +567,153 @@ void CallSession::handle_signal(protocol::Message message) {
   }
 
   if (const auto* muted = std::get_if<protocol::Mute>(&message)) {
+    Callbacks handlers;
+    std::shared_ptr<media::MediaSession> session;
+    bool is_us = false;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(muted->user_id); it != participants_.end()) {
         it->second.muted = true;
       }
-      if (muted->user_id == local_user_.id) {
+      is_us = muted->user_id == local_user_.id;
+      if (is_us) {
         muted_ = true;
+        session = audio_;
       }
+      handlers = callbacks_;
+    }
+
+    // The microphone itself, and not only the flag the interface reads. When
+    // this message is the echo of our own set_muted the capture is already
+    // stopped and this changes nothing; when it came from an administrator's
+    // force_mute it is the whole point, and without it a muted participant
+    // keeps talking into the room while every client shows them silent.
+    //
+    // Outside the lock: the media session takes its own.
+    if (session) {
+      session->set_microphone_muted(true);
+    }
+    // Only when somebody else did it. A microphone that turned itself off
+    // needs no explanation; one that was turned off for you does.
+    if (!muted->by_user_id.empty() && handlers.on_forced_mute) {
+      handlers.on_forced_mute(muted->user_id, muted->by_user_id, true);
     }
     publish_participants();
     return;
   }
 
   if (const auto* unmuted = std::get_if<protocol::Unmute>(&message)) {
+    Callbacks handlers;
+    std::shared_ptr<media::MediaSession> session;
+    bool is_us = false;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(unmuted->user_id); it != participants_.end()) {
         it->second.muted = false;
       }
-      if (unmuted->user_id == local_user_.id) {
+      is_us = unmuted->user_id == local_user_.id;
+      if (is_us) {
         muted_ = false;
+        session = audio_;
+      }
+      handlers = callbacks_;
+    }
+
+    // The same in reverse: an administrator releasing a forced mute has to
+    // give the microphone back, not merely say that it was given back.
+    if (session) {
+      session->set_microphone_muted(false);
+    }
+    if (!unmuted->by_user_id.empty() && handlers.on_forced_mute) {
+      handlers.on_forced_mute(unmuted->user_id, unmuted->by_user_id, false);
+    }
+    publish_participants();
+    return;
+  }
+
+  if (const auto* kicked = std::get_if<protocol::UserKicked>(&message)) {
+    Callbacks handlers;
+    bool is_us = false;
+    bool floor_freed = false;
+    std::shared_ptr<media::MediaSession> session;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      participants_.erase(kicked->user_id);
+      is_us = kicked->user_id == local_user_.id;
+      handlers = callbacks_;
+
+      // Somebody removed while holding the screen share floor releases it.
+      // The server says so too, with screen_share_stopped, but not when the
+      // room empties in the same breath: the last participant out has nobody
+      // left to be told by. Without this, that client would go on believing
+      // the floor is taken and refuse its own next share.
+      if (kicked->user_id == screen_sharer_) {
+        screen_sharer_.clear();
+        floor_freed = true;
+      }
+      if (is_us) {
+        // The same teardown leave() does, minus the message to the server:
+        // the server has already removed us, and sending leave_room now would
+        // only be answered with not_in_room.
+        room_id_.clear();
+        display_name_.clear();
+        participants_.clear();
+        screen_sharer_.clear();
+        session.swap(audio_);
+      }
+    }
+
+    if (session) {
+      // Closed outside the lock: it waits for media callbacks, and those take
+      // it.
+      session->close();
+    }
+    if (floor_freed && handlers.on_screen_share) {
+      handlers.on_screen_share({});
+    }
+    if (is_us) {
+      set_state(State::Authenticated, "removed from the room");
+      if (handlers.on_kicked) {
+        handlers.on_kicked(kicked->reason);
       }
     }
     publish_participants();
+    return;
+  }
+
+  if (const auto* users = std::get_if<protocol::UserList>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_user_list) {
+      handlers.on_user_list(users->users);
+    }
+    return;
+  }
+
+  if (const auto* rooms = std::get_if<protocol::RoomList>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_room_list) {
+      handlers.on_room_list(rooms->rooms);
+    }
+    return;
+  }
+
+  if (const auto* entries = std::get_if<protocol::AuditList>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_audit_list) {
+      handlers.on_audit_list(entries->entries);
+    }
     return;
   }
 

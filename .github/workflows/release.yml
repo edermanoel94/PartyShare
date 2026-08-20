@@ -247,18 +247,55 @@ jobs:
         shell: bash
         run: windeployqt --release --no-translations stage/bin/partyshare.exe
 
+      # Every binary, not only the executables. Smart App Control checks each
+      # file as it is loaded, so one unsigned DLL beside a signed program is
+      # still a program that does not start. The first install of this MSI on a
+      # machine with Smart App Control on failed at datachannel.dll, with the
+      # executable already written: of the thirty files in the install tree,
+      # twenty-two arrive signed by Microsoft or by Qt and eight do not, and
+      # seven of those eight are libraries this glob never reached.
+      #
+      # The ones that already carry a signature are skipped rather than
+      # re-signed, because replacing a publisher's identity with ours says
+      # something untrue about who built them.
+      #
+      # Smart App Control also only accepts a certificate from a CA in the
+      # Microsoft Trusted Root Program, and only RSA - it does not read ECC
+      # signatures at all. A self-signed certificate here produces artefacts
+      # that are signed and still blocked.
       - name: Sign the executables
         if: env.WINDOWS_CERTIFICATE != ''
         shell: pwsh
         run: |
           $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $bytes)
-          Get-ChildItem stage\bin\*.exe | ForEach-Object {
-            signtool sign /f "$env:RUNNER_TEMP\cert.pfx" `
-              /p $env:WINDOWS_CERTIFICATE_PASSWORD `
-              /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
+          try {
+            $unsigned = Get-ChildItem stage\bin -Recurse -Include *.exe, *.dll |
+              Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+            foreach ($file in $unsigned) {
+              signtool sign /f "$env:RUNNER_TEMP\cert.pfx" `
+                /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+                /tr http://timestamp.digicert.com /td sha256 /fd sha256 $file.FullName
+              # A native program that fails does not stop a pwsh step on its
+              # own, and the last statement here used to be the one deleting
+              # the certificate. A signing run that signed nothing would have
+              # published exactly like one that worked.
+              if ($LASTEXITCODE -ne 0) {
+                throw "signtool failed on $($file.Name), exit code $LASTEXITCODE"
+              }
+            }
+            Write-Host "signed $($unsigned.Count) file(s)"
+
+            # The invariant, checked rather than assumed: nothing leaves this
+            # job unsigned.
+            $left = Get-ChildItem stage\bin -Recurse -Include *.exe, *.dll |
+              Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+            if ($left) {
+              throw "still unsigned after signing: $($left.Name -join ', ')"
+            }
+          } finally {
+            Remove-Item "$env:RUNNER_TEMP\cert.pfx" -ErrorAction SilentlyContinue
           }
-          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
 
       # CPack packages the install tree that CMake describes, not the staged
       # directory above, so the Qt runtime windeployqt just copied has to be

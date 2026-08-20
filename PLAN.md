@@ -636,6 +636,39 @@ Two things only appeared when a real artifact was built, and neither would have 
   A clean clone did not compile NVENC, which means task 4 of M8 worked on this machine and on no other.
   The header is vendored source with its provenance and licence recorded alongside, not a downloaded dependency.
 
+### The first Windows build, and what it found
+
+The Windows presets, the CI job and the MSI job were written from the documentation of the tools rather than from a build, and this is the record of the first machine to run them.
+What was expected to hurt did not: the code compiles under MSVC 19.44 with `/W4 /permissive- /WX` without a single warning, and nothing in it needed a `#ifdef`.
+The two defects are both in the parts nobody was compiling, and both had the same shape - a check that reported success while measuring nothing.
+
+**The unit tests never ran, and the suite reported green.**
+vcpkg's dynamic triplet builds `gmock.dll` with its own copy of GoogleTest linked in: it does not depend on `gtest.dll` and exports `MakeAndRegisterTestInfo` itself, while `gtest_main.dll` does depend on `gtest.dll`.
+`dv_unit_tests` linked both, so every `TEST()` registered into the registry inside `gmock.dll` and `main()` read the one inside `gtest.dll`.
+The result is not a link error and not a crash. It is an executable that starts, prints "this test program does NOT link in any test case", and exits 0.
+The first run of the suite here reported **63 tests passed out of 63** and meant it, because `ctest` treats only *no tests at all* as a failure and the integration binary, which never linked gmock, kept the count above zero.
+The 272 unit tests were absent, and a green Windows CI job would have covered nothing but integration for as long as anyone cared to look.
+gmock was there for one `EXPECT_THAT` in `unit/test_video_feedback.cpp`, which now sorts and compares like the two assertions above it. The suite runs 335 tests.
+
+**The installer shipped a program that could not start.**
+`cmake --install` installs the target and nothing else, and `windeployqt` knows only about Qt, so the staged tree held `partyshare.exe`, the Qt runtime, and none of `spdlog.dll`, `fmt.dll` or `datachannel.dll`.
+On Windows there is no rpath and no package manager: those files sit next to the executable or the program does not start.
+The check in the release job did not notice, because it looks for the executable and the Qt platform plugin and both of those were there - the same failure the job's own comment warns about two steps earlier, in the shape it did not anticipate.
+`client/CMakeLists.txt` now installs a `RUNTIME_DEPENDENCY_SET`, which resolves the transitive half as well; the MSI went from 23 files to 30.
+
+Two smaller things, in the same rule, worth writing down because both fail silently:
+- The Qt directory has to be in `DIRECTORIES` even though `windeployqt` handles Qt afterwards. Excluding Qt by name leaves it *unresolved*, and an unresolved dependency stops the install rather than being skipped.
+- The pattern that drops the system libraries has no backslash in it on purpose. A backslash has to survive CMake's string parsing before it reaches the regex engine, and the version that did not matched nothing, which quietly staged every DLL in `System32` - and, through `shell32`, went looking for `HvsiFileTrust.dll`, which exists on no machine.
+
+**Smart App Control refuses the artifact, and that is not a warning.**
+The machine has Smart App Control in enforcement, which is the default on a clean Windows 11.
+It blocks an unsigned binary from loading outright, with a Code Integrity 3077 event and nothing on screen: the staged client would not start, and `msiexec /i /qn` failed at the first unsigned DLL with error 1310, "System error 0", after writing every signed file before it.
+The MSI itself is sound - `msiexec /a` extracts all thirty files - but it cannot be installed on a machine in this configuration.
+That makes task 4 of this milestone, the signing that is written and has never had a certificate, the difference between an artifact and a download nobody can run, rather than the polish it reads as.
+
+Not verified here, and worth being plain about: nobody has started the client *from an installed tree* on Windows, only from the build tree.
+The media layer is absent too, as it is everywhere but Linux, because libwebrtc is not built on this machine.
+
 ---
 
 ## 4. Tracking the MVP acceptance criteria

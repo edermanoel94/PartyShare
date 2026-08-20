@@ -115,6 +115,52 @@ TEST(Config, IgnoresArgumentsThatAreNotInKeyValueForm) {
   EXPECT_TRUE(result.ok()) << result.error().message;
 }
 
+TEST(Config, RejectingRefusesAnOptionNobodyDefined) {
+  const char* argv[] = {"partyshare-server", "--prot=8080"};
+  const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "unknown_option");
+}
+
+TEST(Config, RejectingRefusesAnOptionWithTheValueDetached) {
+  // The shape that let --help start a server instead of describing it.
+  const char* argv[] = {"partyshare-server", "--port", "8080"};
+  const auto result = dv::config::load(3, argv, dv::config::UnknownOptions::Reject);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "invalid_argument");
+}
+
+TEST(Config, RejectingStillLetsHelpThrough) {
+  // main answers these before loading, so the parser must not refuse them.
+  for (const char* flag : {"--help", "-h"}) {
+    const char* argv[] = {"partyshare-server", flag};
+    const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+    EXPECT_TRUE(result.ok()) << flag << ": " << result.error().message;
+  }
+}
+
+TEST(Config, RejectingLeavesPositionalArgumentsAlone) {
+  // Only a dash marks something as a mistyped option.
+  const char* argv[] = {"partyshare-server", "positional"};
+  const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+  EXPECT_TRUE(result.ok()) << result.error().message;
+}
+
+TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
+  const char* argv[] = {"partyshare-server", "--port=9000"};
+  const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().server.port, 9000);
+}
+
+TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
+  // The client cannot reject: Qt takes its own options from this command line.
+  const char* argv[] = {"partyshare", "--platform=offscreen", "--fps=15"};
+  const auto result = dv::config::load(3, argv, dv::config::UnknownOptions::Ignore);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().video.fps, 15);
+}
+
 TEST(Config, ReportsAMissingConfigFile) {
   const char* argv[] = {"dv_client", "--config=/nonexistent/path/config.json"};
   const auto result = dv::config::load(2, argv);

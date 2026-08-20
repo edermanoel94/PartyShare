@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <string_view>
 
 #include <dv/config/config.hpp>
 #include <dv/diagnostics/crash_reporter.hpp>
@@ -11,13 +12,79 @@
 #include "media/media_session.hpp"
 #include "ui/main_window.hpp"
 
+namespace {
+
+/// Whether the arguments ask for the usage text.
+///
+/// Checked before the configuration is loaded, so that --help works on a
+/// machine where the configuration is broken. It cannot go through the normal
+/// parser either: that one only understands --key=value, and a bare --help
+/// would be dropped without a word.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+[[nodiscard]] bool wants_help(int argc, const char* const argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view argument(argv[i]);
+    if (argument == "--help" || argument == "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Prints what the client accepts.
+///
+/// Only the options that reach the client are listed. The parser is shared with
+/// the server and understands more, but naming an option here that does nothing
+/// to a client is worse than not naming it.
+void print_usage() {
+  // Straight to stdout: help is what was asked for, not a diagnostic, and the
+  // logger is not configured yet.
+  std::fputs("partyshare " DV_VERSION
+             "\n"
+             "The PartyShare desktop client.\n"
+             "\n"
+             "Usage:\n"
+             "  partyshare [--key=value ...]\n"
+             "\n"
+             "Every option takes the --key=value form. A bare --key is ignored.\n"
+             "\n"
+             "Options:\n"
+             "  --config=PATH            Configuration file to read before anything else\n"
+             "  --signaling-url=URL      Signaling server to connect to\n"
+             "  --input-device=NAME      Microphone to capture from\n"
+             "  --output-device=NAME     Speakers to play through\n"
+             "  --codec=NAME             Video codec for the screen share\n"
+             "  --fps=N                  Screen capture rate, 1 to 120\n"
+             "  --log-level=LEVEL        trace, debug, info, warn, error, fatal or off\n"
+             "  --log-file=PATH          Also write the log to this file\n"
+             "  -h, --help               Print this text and exit\n"
+             "\n"
+             "Qt reads its own options from this same command line, so anything not\n"
+             "listed here is passed on to Qt rather than refused.\n"
+             "\n"
+             "Configuration precedence, lowest first: built-in defaults, the file given\n"
+             "to --config, environment variables prefixed with DV_, then these options.\n",
+             stdout);
+}
+
+}  // namespace
+
 int main(int argc, char* argv[]) {
   // Section 22 of SPEC.md asks for a startup under three seconds. Measuring it
   // from the first line of main is the closest this can get to what a person
   // experiences: everything before it belongs to the loader.
   const auto started_at = std::chrono::steady_clock::now();
 
-  auto config_result = dv::config::load(argc, argv);
+  if (wants_help(argc, argv)) {
+    print_usage();
+    return 0;
+  }
+
+  // Ignore, not Reject: Qt takes its own options from this command line, so an
+  // argument this parser does not know is not an argument nobody knows.
+  auto config_result = dv::config::load(argc, argv, dv::config::UnknownOptions::Ignore);
   if (!config_result) {
     // Logging is not up yet, so this is the one place that writes to stderr
     // directly.

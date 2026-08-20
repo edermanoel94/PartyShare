@@ -222,7 +222,7 @@ void apply_environment(Config& config) {
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-Result<Config> load(int argc, const char* const argv[]) {
+Result<Config> load(int argc, const char* const argv[], UnknownOptions unknown) {
   // The configuration file path is the one setting that has to be read from
   // the command line before anything else can be loaded.
   std::string config_path = env("DV_CONFIG_FILE").value_or("");
@@ -253,59 +253,62 @@ Result<Config> load(int argc, const char* const argv[]) {
   apply_environment(config);
 
   for (int i = 1; i < argc; ++i) {
+    const std::string_view argument(argv[i]);
     std::string_view key;
     std::string_view value;
-    if (!split_argument(argv[i], key, value)) {
+    if (!split_argument(argument, key, value)) {
+      // Anything that is not --key=value. Under Reject only a dash makes it an
+      // error: a bare word is a positional argument, not a mistyped option.
+      // --help and -h are let through because main answers them before the
+      // configuration is loaded at all.
+      if (unknown == UnknownOptions::Reject && argument.starts_with("-") && argument != "--help" &&
+          argument != "-h") {
+        return Result<Config>::failure(
+            "invalid_argument",
+            std::string(argument) + ": options take the --key=value form, with the value attached");
+      }
       continue;
     }
     const std::string text(value);
     if (key == "config") {
-      continue;
-    }
-    if (key == "log-level") {
+      // Already read, before the file it names was loaded.
+    } else if (key == "log-level") {
       config.logging.level = text;
-    }
-    if (key == "log-file") {
+    } else if (key == "log-file") {
       config.logging.file_path = text;
-    }
-    if (key == "signaling-url") {
+    } else if (key == "signaling-url") {
       config.network.signaling_url = text;
-    }
-    if (key == "bind-address") {
+    } else if (key == "bind-address") {
       config.server.bind_address = text;
-    }
-    if (key == "users-file") {
+    } else if (key == "users-file") {
       config.server.users_file = text;
-    }
-    if (key == "input-device") {
+    } else if (key == "input-device") {
       config.audio.input_device = text;
-    }
-    if (key == "output-device") {
+    } else if (key == "output-device") {
       config.audio.output_device = text;
-    }
-    if (key == "codec") {
+    } else if (key == "codec") {
       config.video.codec = text;
-    }
-    if (key == "port") {
+    } else if (key == "port") {
       if (const auto parsed = parse_int(text); parsed && *parsed > 0 && *parsed <= 65535) {
         config.server.port = static_cast<std::uint16_t>(*parsed);
       } else {
         return Result<Config>::failure(invalid_value("--port", "must be between 1 and 65535"));
       }
-    }
-    if (key == "fps") {
+    } else if (key == "fps") {
       if (const auto parsed = parse_int(text)) {
         config.video.fps = *parsed;
       } else {
         return Result<Config>::failure(invalid_value("--fps", "must be an integer"));
       }
-    }
-    if (key == "max-participants") {
+    } else if (key == "max-participants") {
       if (const auto parsed = parse_int(text)) {
         config.server.max_participants_per_room = *parsed;
       } else {
         return Result<Config>::failure(invalid_value("--max-participants", "must be an integer"));
       }
+    } else if (unknown == UnknownOptions::Reject) {
+      return Result<Config>::failure("unknown_option",
+                                     "--" + std::string(key) + " is not an option");
     }
   }
 

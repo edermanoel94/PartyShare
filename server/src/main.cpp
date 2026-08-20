@@ -158,7 +158,9 @@ int main(int argc, char* argv[]) {
       return 0;
     }
 
-    auto config_result = dv::config::load(argc, argv);
+    // Reject: a server is started by a script nobody watches, and a typo that
+    // is ignored leaves it listening on a default that was never chosen.
+    auto config_result = dv::config::load(argc, argv, dv::config::UnknownOptions::Reject);
     if (!config_result) {
       // Written straight to stderr because the logger is configured from the
       // configuration that just failed to load.

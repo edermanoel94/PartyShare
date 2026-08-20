@@ -80,15 +80,31 @@ struct Config {
   ServerConfig server;
 };
 
+/// What to do with a command line argument the parser does not recognise.
+enum class UnknownOptions : std::uint8_t {
+  /// Leave it alone. The client needs this: Qt reads its own options from the
+  /// same command line, so an argument this parser does not know is not
+  /// necessarily an argument nobody knows.
+  Ignore,
+  /// Refuse to start. A mistyped option is otherwise indistinguishable from a
+  /// correct one, and the program runs on a default the operator never chose.
+  Reject,
+};
+
 /// Precedence, from weakest to strongest: built-in defaults, configuration
 /// file, environment variables, command line arguments.
 ///
 /// The file is optional. A missing file is not an error, but a file that
 /// exists and cannot be parsed is.
 ///
+/// Options take the --key=value form. Under Reject, anything else that begins
+/// with a dash is an error, including a bare --key: silently dropping one is
+/// how --help came to start a server rather than describe it.
+///
 /// The array is what main() is handed, and there is no other shape for it.
 /// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-[[nodiscard]] Result<Config> load(int argc, const char* const argv[]);
+[[nodiscard]] Result<Config> load(int argc, const char* const argv[],
+                                  UnknownOptions unknown = UnknownOptions::Ignore);
 
 /// Same precedence, minus the command line. Useful in tests.
 [[nodiscard]] Result<Config> load_from_file(const std::string& path);

@@ -88,8 +88,12 @@ The server first:
   --users-file=dev-users.json
 ```
 
-`partyshare-server --help` lists every option the server accepts.
-They all take the `--key=value` form, and a bare `--key` is ignored rather than refused.
+`partyshare-server --help` lists every option the server accepts, and `partyshare --help` does the same for the client.
+Options take the `--key=value` form, with the value attached.
+
+The server refuses an option it does not recognise, including a bare `--key` with the value detached.
+A server is started by a script nobody is watching, and a typo that is quietly ignored leaves it listening on a default nobody chose.
+The client cannot do the same, because Qt reads its own options from that command line, so it passes anything it does not recognise on to Qt.
 
 `--users-file` points at a list of development accounts:
 

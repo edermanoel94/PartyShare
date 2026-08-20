@@ -338,6 +338,21 @@ jobs:
             throw 'windeployqt output did not reach the installer'
           }
 
+          # And the libraries that are neither Qt nor ours. windeployqt does not
+          # know about them and, until the install rule in client/CMakeLists.txt
+          # learned to carry a runtime dependency set, nothing did: the first MSI
+          # this repository built held the executable and the whole Qt runtime
+          # and none of these, which is a package that passes both checks above
+          # and installs a program that cannot start. Named one by one rather
+          # than counted, for the same reason the Linux tree is.
+          foreach ($dll in 'spdlog.dll', 'fmt.dll', 'datachannel.dll',
+                           'libcrypto-3-x64.dll', 'libssl-3-x64.dll',
+                           'srtp2.dll', 'juice.dll') {
+            if (-not (Test-Path "$root\bin\$dll")) {
+              throw "$dll is missing from the install tree, so the client cannot start"
+            }
+          }
+
           Start-Process msiexec -Wait -ArgumentList `
             '/x', "`"$($msi.FullName)`"", '/qn', '/norestart'
 

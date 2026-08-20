@@ -173,10 +173,65 @@ set_target_properties(dv_client PROPERTIES
 dv_set_target_warnings(dv_client)
 dv_enable_sanitizers(dv_client)
 
+# Windows has no rpath and no package manager: a program finds its libraries
+# beside its own executable or it does not start. CMake installs the target and
+# nothing else, and windeployqt knows only about Qt, so the first staged tree
+# this repository ever produced held partyshare.exe, the Qt runtime, and none of
+# spdlog.dll, fmt.dll or datachannel.dll. That is an installer that puts a
+# program on a machine where it cannot run, and the release job's own check did
+# not notice, because it looks for the executable and the Qt platform plugin and
+# both of those were there.
+#
+# Only Windows, because the other two already solve this: the AppImage is built
+# by linuxdeploy from the installed tree, and the macOS bundle by its own
+# tooling. Declaring the set on those platforms would hand CMake a second
+# opinion about libraries it already handles.
+set(dv_client_runtime_dependencies)
+if(WIN32)
+  set(dv_client_runtime_dependencies RUNTIME_DEPENDENCY_SET dv_client_runtime)
+endif()
+
 install(TARGETS dv_client
+  ${dv_client_runtime_dependencies}
   BUNDLE DESTINATION .
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+if(WIN32)
+  # CMake 4 normalises the paths this reads before matching them; older CMake
+  # hands them over exactly as the loader recorded them, which on Windows means
+  # a single path with both separators in it, "C:\WINDOWS\system32/shell32.dll".
+  # Asking for the new behaviour is what lets the expression below stay readable
+  # instead of having to match either spelling.
+  if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+  endif()
+
+  # Two directories, because the runtime arrives from two places: vcpkg's
+  # z-applocal step has already put spdlog, fmt, libdatachannel and everything
+  # under them next to the executable in the build tree, and Qt lives wherever
+  # CMAKE_PREFIX_PATH pointed. The Qt directory is read off the imported target
+  # rather than written down, so a machine with Qt somewhere else still resolves.
+  #
+  # Qt is included rather than left to windeployqt because a dependency that
+  # cannot be resolved is an error, not a shrug: excluding Qt by name still
+  # leaves it unresolved and stops the install. windeployqt runs afterwards
+  # regardless, and it is the only one of the two that knows about the platform
+  # plugin, which is not a dependency of anything and is required all the same.
+  #
+  # The system libraries are dropped by a pattern with no backslash in it on
+  # purpose. A backslash here has to survive CMake's string parsing before it
+  # reaches the regex engine, and the version that did not silently matched
+  # nothing, which shipped every DLL in System32 into the install tree.
+  install(RUNTIME_DEPENDENCY_SET dv_client_runtime
+    PRE_EXCLUDE_REGEXES "api-ms-win-.*" "ext-ms-.*"
+    POST_EXCLUDE_REGEXES ".*[Ss]ystem32.*"
+    DIRECTORIES
+      "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+      "$<TARGET_FILE_DIR:Qt6::Core>"
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+endif()
 
 # Desktop integration, which is only a Linux idea: on Windows the installer
 # writes the start menu entry and on macOS the bundle carries its own metadata.

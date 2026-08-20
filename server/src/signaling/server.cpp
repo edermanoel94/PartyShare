@@ -160,7 +160,11 @@ void SignalingServer::dispatch(const std::vector<Outgoing>& messages) {
     // the server down.
     try {
       it->second->send(protocol::serialize(outgoing.message));
-    } catch (const std::exception& error) {
+      // maybe_unused for the same reason as the connection state handler: the
+      // only use of `error` is the debug log, and SPDLOG_DEBUG compiles to
+      // nothing in a release build. MSVC says so and GCC does not, because GCC
+      // does not warn about unused handler parameters.
+    } catch ([[maybe_unused]] const std::exception& error) {
       DV_LOG_DEBUG("Could not send a {} on connection {}: {}",
                    protocol::type_name(protocol::type_of(outgoing.message)), outgoing.connection,
                    error.what());

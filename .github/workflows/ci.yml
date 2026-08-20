@@ -281,6 +281,26 @@ jobs:
       - name: Tests
         run: ctest --preset ${{ matrix.preset }}
 
+      # ctest fails a run with no tests in it, and passes a run that lost half
+      # of them. On Windows the unit binary linked a second copy of GoogleTest
+      # through gmock and registered every TEST() into a registry main() never
+      # read: it ran, said "does NOT link in any test case", and exited 0. The
+      # step above reported 63 of 63 passing while 272 unit tests were absent,
+      # because the integration binary kept the total above zero. Counting per
+      # label is what turns that back into a red job. Detailed in M9 of PLAN.md.
+      - name: Both halves of the suite have to be there
+        shell: bash
+        run: |
+          for label in unit integration; do
+            found=$(ctest --test-dir "build/${{ matrix.preset }}" -N -L "$label" |
+                    sed -n 's/^Total Tests: //p')
+            echo "$label: ${found:-0}"
+            if [ "${found:-0}" -lt 1 ]; then
+              echo "::error::no $label tests were discovered, so none of them ran"
+              exit 1
+            fi
+          done
+
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:

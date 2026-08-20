@@ -6,13 +6,13 @@
 // lost, and a malformed feedback packet is ignored by the sender without
 // anybody noticing that the repair stopped working.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "sfu/video_feedback.hpp"
@@ -273,8 +273,11 @@ TEST(VideoFeedbackTest, ALossAcrossTheWrapIsAskedForByNumber) {
   // Named in numerical order rather than in the order they were sent, which
   // costs one extra feedback entry on the single packet in every sixty five
   // thousand that straddles the wrap. Both numbers are asked for, which is
-  // what matters.
-  EXPECT_THAT(sink.requested(0), ::testing::UnorderedElementsAre(65535, 0));
+  // what matters, so the comparison sorts instead of pinning an order the
+  // implementation is free to choose.
+  std::vector<std::uint16_t> asked = sink.requested(0);
+  std::ranges::sort(asked);
+  EXPECT_EQ(asked, (std::vector<std::uint16_t>{0, 65535}));
   EXPECT_EQ(sink.entries(0), 2U);
 }
 

@@ -14,7 +14,7 @@ What is missing is stated plainly, because a number nobody measured is worth no 
 | Platform | Status |
 | --- | --- |
 | Linux x64 | Built, run and measured. Every number in the documentation comes from here. |
-| Windows x64 | Code, presets and the MSI installer exist. Never built, never run. |
+| Windows x64 | Built and run on Windows 11 with MSVC 19.44, Qt 6.7.3 and vcpkg: all 335 tests pass, the server listens and the client opens on its login screen. The MSI and the ZIP are produced, and what the MSI carries was read back out of it file by file. Installing it was not verified: this machine has Smart App Control on, which refuses an unsigned binary, and no signing certificate exists. Two defects came out of the first build, both recorded in M9. |
 | macOS ARM64 | Built and tested on macOS 26 with Apple clang 21, Qt 6.11 and vcpkg: all 277 tests pass. The server was driven end to end over the signaling protocol, and the client starts on its login screen, which is as far as an automated check goes without a person at the keyboard. No media layer, because libwebrtc is not built there, and no DMG was produced. |
 | macOS x64 | Code, presets and DMG packaging exist. Never built, never run. |
 

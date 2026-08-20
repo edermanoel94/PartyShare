@@ -301,10 +301,23 @@ jobs:
           # client/src/webrtc is: it only compiles where its library exists,
           # and this job builds without MongoDB. Analysing it here does not
           # find problems, it finds bsoncxx headers that are not installed.
+          #
+          # run-clang-tidy rather than clang-tidy: the file list fits in one
+          # command line, so xargs made a single invocation and clang-tidy
+          # walked the files one after another while three of the runner's four
+          # cores watched. This step was six minutes of the job's ten.
+          #
+          # It also serialises the output per file, which xargs -P would not:
+          # parallel clang-tidy processes writing at once interleave their
+          # diagnostics, and a finding split across another file's notes is a
+          # finding nobody reads.
+          #
+          # The arguments are regexes matched against the compilation database,
+          # not paths, but a path is a regex that matches itself.
           find shared server client/src -name '*.cpp' \
             -not -path 'client/src/webrtc/*' \
             -not -path 'server/src/store/mongo_store.cpp' \
-            -print0 | xargs -0 clang-tidy-18 -p build/analysis
+            -print0 | xargs -0 run-clang-tidy-18 -p build/analysis -j "$(nproc)"
 
       - name: cppcheck
         run: |

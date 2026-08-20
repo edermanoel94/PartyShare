@@ -442,10 +442,17 @@ jobs:
 
       - name: Configure
         run: |
+          # The server is off for the same reason the client is: this job
+          # installs no vcpkg, so libdatachannel is not here, and
+          # Dependencies.cmake demands it whenever either of the two is on.
+          # Without this the configure failed on all three platforms before it
+          # ever reached find_package(libwebrtc), which is to say the spike had
+          # never once run here. The CMake error even named the fix.
           cmake -S . -B build/spike -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DDV_ENABLE_WEBRTC_SPIKE=ON \
             -DDV_BUILD_CLIENT=OFF \
+            -DDV_BUILD_SERVER=OFF \
             -DDV_BUILD_TESTS=OFF
         env:
           CXX: ${{ runner.os == 'Linux' && 'clang++' || '' }}

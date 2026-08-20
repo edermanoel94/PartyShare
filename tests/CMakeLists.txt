@@ -58,7 +58,7 @@ dv_set_target_warnings(dv_unit_tests)
 dv_enable_sanitizers(dv_unit_tests)
 
 gtest_discover_tests(dv_unit_tests
-  PROPERTIES LABELS unit
+  PROPERTIES LABELS unit ${DV_SANITIZER_TEST_PROPERTIES}
   DISCOVERY_TIMEOUT 30
 )
 
@@ -79,7 +79,7 @@ dv_set_target_warnings(dv_integration_tests)
 dv_enable_sanitizers(dv_integration_tests)
 
 gtest_discover_tests(dv_integration_tests
-  PROPERTIES LABELS integration TIMEOUT 60
+  PROPERTIES LABELS integration TIMEOUT 60 ${DV_SANITIZER_TEST_PROPERTIES}
   DISCOVERY_TIMEOUT 30
 )
 

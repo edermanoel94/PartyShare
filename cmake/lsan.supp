@@ -1,0 +1,22 @@
+# LeakSanitizer suppressions.
+#
+# One entry, and it should stay that way: everything the project itself
+# allocates is expected to be freed, and a suppression file that grows is a
+# suppression file that stops being read.
+#
+# OpenSSL 3 keeps a public and a private DRBG per thread, created on first use -
+# here from SSL_CTX_new, inside libdatachannel's DTLS transport - and frees them
+# when the thread exits. A process that ends while a worker thread still holds
+# its pair hands LeakSanitizer two live allocations with no owner left to point
+# at, which is what a leak looks like from the outside. It reported 4848 bytes
+# in 18 allocations: two roots in rand_new_drbg and sixteen children of them,
+# every frame inside OpenSSL or libdatachannel and not one in this repository.
+#
+# It is also why SfuTest.EachParticipantGetsOneTrackPerOtherParticipant and
+# SfuTest.VideoAndAudioTravelWithoutGettingMixedUp failed on one run and passed
+# on the one before it with no change in between: whether the DTLS thread has
+# exited by the time LeakSanitizer looks is a matter of timing.
+#
+# Matching rand_new_drbg rather than SSL_CTX_new keeps this to the DRBG
+# allocation itself. A leak of ours reached through SSL_CTX_new still fails.
+leak:rand_new_drbg

@@ -34,3 +34,8 @@ config.local.json
 
 # The pinned vcpkg checkout, created by scripts/ci_vcpkg.sh
 .vcpkg/
+
+# The install tree the Windows release procedure stages before windeployqt
+# and cpack run over it. On a runner it disappears with the machine; on a
+# development one it sits in the working tree looking like new source.
+stage/

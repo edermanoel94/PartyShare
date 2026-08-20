@@ -45,11 +45,25 @@ endif()
 
 add_executable(dv_unit_tests ${dv_unit_sources})
 
+# gmock is deliberately absent, and it costs one assertion in
+# unit/test_video_feedback.cpp that sorts instead of using a matcher.
+#
+# On Windows, vcpkg's dynamic triplet builds gmock.dll and gmock_main.dll with
+# their own copy of GoogleTest compiled in: neither of them links gtest.dll, and
+# gmock.dll exports MakeAndRegisterTestInfo itself. gtest_main.dll does link
+# gtest.dll. So an executable that links both binds its TEST() registrations to
+# the registry inside gmock.dll while main() reads the one inside gtest.dll, and
+# the two never meet.
+#
+# The result is not a link error. It is an executable that starts, prints "this
+# test program does NOT link in any test case", and exits 0. The first Windows
+# build of this repository ran 63 tests instead of 277 and reported success,
+# because ctest only treats *no tests at all* as a failure and the integration
+# binary, which never linked gmock, kept the count above zero.
 target_link_libraries(dv_unit_tests PRIVATE
   dv::shared
   dv::server_core
   ${dv_client_test_libraries}
-  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )

@@ -110,8 +110,8 @@ class SignalingClientTest : public ::testing::Test {
     options.hub.heartbeat_timeout = 2000ms;
 
     server_ = std::make_unique<SignalingServer>(options);
-    ASSERT_TRUE(server_->add_user("ana", "senha", "Ana").ok());
-    ASSERT_TRUE(server_->add_user("bruno", "senha", "Bruno").ok());
+    ASSERT_TRUE(server_->add_user("ana", "password", "Ana").ok());
+    ASSERT_TRUE(server_->add_user("bruno", "password", "Bruno").ok());
     server_->start();
     ASSERT_NE(server_->port(), 0);
   }
@@ -140,7 +140,7 @@ class SignalingClientTest : public ::testing::Test {
     EXPECT_TRUE(client->connect().ok());
     EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
 
-    EXPECT_TRUE(client->send(proto::Authenticate{username, "senha"}).ok());
+    EXPECT_TRUE(client->send(proto::Authenticate{username, "password"}).ok());
     const auto authenticated = recorder.wait_for<proto::Authenticated>(kTimeout);
     EXPECT_TRUE(authenticated.has_value()) << "could not authenticate " << username;
 
@@ -252,7 +252,7 @@ TEST_F(SignalingClientTest, ItComesBackWhenTheServerDoes) {
   server_options.port = port;
   server_options.enable_sfu = false;
   auto restarted = std::make_unique<dv::server::SignalingServer>(server_options);
-  ASSERT_TRUE(restarted->add_user("ana", "senha", "Ana").ok());
+  ASSERT_TRUE(restarted->add_user("ana", "password", "Ana").ok());
   restarted->start();
 
   // Waited on the counter rather than on the state: the recorder only knows
@@ -274,7 +274,7 @@ TEST_F(SignalingClientTest, CreatesAndJoinsARoom) {
   Recorder& recorder = new_recorder();
   const auto [client, user] = login("ana", recorder);
 
-  ASSERT_TRUE(client->send(proto::CreateRoom{user.id, "sala-dev"}).ok());
+  ASSERT_TRUE(client->send(proto::CreateRoom{user.id, "dev-room"}).ok());
   const auto created = recorder.wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   EXPECT_EQ(created->room_id.size(), 6U);
@@ -308,7 +308,7 @@ TEST_F(SignalingClientTest, RelaysAnOfferBetweenTwoClients) {
   const auto [ana, ana_user] = login("ana", ana_recorder);
   const auto [bruno, bruno_user] = login("bruno", bruno_recorder);
 
-  ASSERT_TRUE(ana->send(proto::CreateRoom{ana_user.id, "sala-dev"}).ok());
+  ASSERT_TRUE(ana->send(proto::CreateRoom{ana_user.id, "dev-room"}).ok());
   const auto created = ana_recorder.wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;

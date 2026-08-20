@@ -40,18 +40,18 @@ class HubTest : public ::testing::Test {
 
   /// Registers an account and logs a fresh connection into it.
   std::pair<ConnectionId, dv::models::User> login(const std::string& username) {
-    const auto registered = hub_.authenticator().add_user(username, "senha", username);
+    const auto registered = hub_.authenticator().add_user(username, "password", username);
     EXPECT_TRUE(registered.ok()) << registered.error().message;
 
     const ConnectionId connection = connect();
-    const auto out = send(connection, proto::Authenticate{username, "senha"});
+    const auto out = send(connection, proto::Authenticate{username, "password"});
     const auto authenticated = find<proto::Authenticated>(out, connection);
     EXPECT_TRUE(authenticated.has_value());
     return {connection, authenticated ? authenticated->user : dv::models::User{}};
   }
 
   std::string create_room(ConnectionId connection, const std::string& user_id) {
-    const auto out = send(connection, proto::CreateRoom{user_id, "sala-dev"});
+    const auto out = send(connection, proto::CreateRoom{user_id, "dev-room"});
     const auto created = find<proto::RoomCreated>(out, connection);
     EXPECT_TRUE(created.has_value());
     return created ? created->room_id : std::string{};
@@ -87,10 +87,10 @@ class HubTest : public ::testing::Test {
 // --- authentication ----------------------------------------------------------
 
 TEST_F(HubTest, AuthenticationSucceedsWithValidCredentials) {
-  EXPECT_TRUE(hub_.authenticator().add_user("ana", "senha", "Ana").ok());
+  EXPECT_TRUE(hub_.authenticator().add_user("ana", "password", "Ana").ok());
   const ConnectionId connection = connect();
 
-  const auto out = send(connection, proto::Authenticate{"ana", "senha"});
+  const auto out = send(connection, proto::Authenticate{"ana", "password"});
   const auto authenticated = find<proto::Authenticated>(out, connection);
   ASSERT_TRUE(authenticated.has_value());
   EXPECT_EQ(authenticated->user.display_name, "Ana");
@@ -98,10 +98,10 @@ TEST_F(HubTest, AuthenticationSucceedsWithValidCredentials) {
 }
 
 TEST_F(HubTest, AuthenticationFailsWithTheWrongPassword) {
-  EXPECT_TRUE(hub_.authenticator().add_user("ana", "senha", "Ana").ok());
+  EXPECT_TRUE(hub_.authenticator().add_user("ana", "password", "Ana").ok());
   const ConnectionId connection = connect();
 
-  const auto out = send(connection, proto::Authenticate{"ana", "errada"});
+  const auto out = send(connection, proto::Authenticate{"ana", "wrong"});
   const auto error = find<proto::ErrorMessage>(out, connection);
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(error->code, "unauthorized");
@@ -110,7 +110,7 @@ TEST_F(HubTest, AuthenticationFailsWithTheWrongPassword) {
 TEST_F(HubTest, EverythingIsRejectedBeforeAuthentication) {
   const ConnectionId connection = connect();
 
-  const auto out = send(connection, proto::CreateRoom{"whoever", "sala"});
+  const auto out = send(connection, proto::CreateRoom{"whoever", "room"});
   const auto error = find<proto::ErrorMessage>(out, connection);
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(error->code, "unauthorized");
@@ -122,7 +122,7 @@ TEST_F(HubTest, ASecondLoginDetachesTheOlderConnection) {
 
   // The same account logs in again from somewhere else.
   const ConnectionId second = connect();
-  const auto out = send(second, proto::Authenticate{"ana", "senha"});
+  const auto out = send(second, proto::Authenticate{"ana", "password"});
   ASSERT_TRUE(find<proto::Authenticated>(out, second).has_value());
 
   // The old connection lost its identity and is back to square one.
@@ -142,7 +142,7 @@ TEST_F(HubTest, CreateRoomReturnsAValidIdentifier) {
 
 TEST_F(HubTest, CreateRoomRejectsSomeoneElsesUserId) {
   const auto [connection, user] = login("ana");
-  const auto out = send(connection, proto::CreateRoom{"outro-id", "sala"});
+  const auto out = send(connection, proto::CreateRoom{"other-id", "room"});
   const auto error = find<proto::ErrorMessage>(out, connection);
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(error->code, "unauthorized");

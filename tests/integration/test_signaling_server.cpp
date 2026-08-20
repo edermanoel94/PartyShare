@@ -56,7 +56,7 @@ class SignalingServerTest : public ::testing::Test {
     server_ = std::make_unique<SignalingServer>(options);
     for (int i = 0; i < 8; ++i) {
       const std::string name = "user" + std::to_string(i);
-      ASSERT_TRUE(server_->add_user(name, "senha", name).ok());
+      ASSERT_TRUE(server_->add_user(name, "password", name).ok());
     }
     server_->start();
     ASSERT_NE(server_->port(), 0);
@@ -73,7 +73,7 @@ class SignalingServerTest : public ::testing::Test {
     auto client = std::make_unique<WebSocketTestClient>(server_->port());
     EXPECT_TRUE(client->wait_until_open(kConnectTimeout)) << "could not connect " << username;
 
-    client->send(proto::Authenticate{username, "senha"});
+    client->send(proto::Authenticate{username, "password"});
     const auto authenticated = client->wait_for<proto::Authenticated>(kTimeout);
     EXPECT_TRUE(authenticated.has_value()) << "could not authenticate " << username;
 
@@ -83,7 +83,7 @@ class SignalingServerTest : public ::testing::Test {
   }
 
   std::string create_room(WebSocketTestClient& client, const std::string& user_id) {
-    client.send(proto::CreateRoom{user_id, "sala-dev"});
+    client.send(proto::CreateRoom{user_id, "dev-room"});
     const auto created = client.wait_for<proto::RoomCreated>(kTimeout);
     EXPECT_TRUE(created.has_value());
     return created ? created->room_id : std::string{};
@@ -117,7 +117,7 @@ TEST_F(SignalingServerTest, TheWrongPasswordIsRejectedOverTheWire) {
   WebSocketTestClient client(server_->port());
   ASSERT_TRUE(client.wait_until_open(kConnectTimeout));
 
-  client.send(proto::Authenticate{"user0", "errada"});
+  client.send(proto::Authenticate{"user0", "wrong"});
   const auto error = client.wait_for<proto::ErrorMessage>(kTimeout);
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(error->code, "unauthorized");
@@ -127,7 +127,7 @@ TEST_F(SignalingServerTest, MessagesBeforeAuthenticationAreRejected) {
   WebSocketTestClient client(server_->port());
   ASSERT_TRUE(client.wait_until_open(kConnectTimeout));
 
-  client.send(proto::CreateRoom{"whoever", "sala"});
+  client.send(proto::CreateRoom{"whoever", "room"});
   const auto error = client.wait_for<proto::ErrorMessage>(kTimeout);
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(error->code, "unauthorized");

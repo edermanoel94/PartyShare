@@ -108,12 +108,12 @@ TEST(Parse, AuthenticateRequiresBothCredentials) {
 }
 
 TEST(RoundTrip, CreateRoom) {
-  const CreateRoom original{"user123", "sala-dev"};
+  const CreateRoom original{"user123", "dev-room"};
   EXPECT_EQ(round_trip(original), original);
 }
 
 TEST(RoundTrip, RoomCreated) {
-  const RoomCreated original{"8F42A1", "sala-dev"};
+  const RoomCreated original{"8F42A1", "dev-room"};
   EXPECT_EQ(round_trip(original), original);
 }
 

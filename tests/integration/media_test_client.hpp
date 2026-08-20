@@ -97,14 +97,14 @@ class Client {
   Client& operator=(Client&&) = delete;
 
   [[nodiscard]] bool login() {
-    if (!session_->connect_and_authenticate(username_, "senha").ok()) {
+    if (!session_->connect_and_authenticate(username_, "password").ok()) {
       return false;
     }
     return wait_until([this] { return !session_->local_user().id.empty(); }, 5000ms);
   }
 
   [[nodiscard]] std::string create_room() {
-    if (!session_->create_room("sala-dev").ok()) {
+    if (!session_->create_room("dev-room").ok()) {
       return {};
     }
     if (!wait_until([this] { return !room_created().empty(); }, 5000ms)) {
@@ -204,11 +204,11 @@ class MediaEndToEndTest : public ::testing::Test {
     server_ = std::make_unique<SignalingServer>(options);
     // Five accounts, because section 22 of SPEC.md sizes a room at five and the
     // benchmarks fill one.
-    ASSERT_TRUE(server_->add_user("ana", "senha", "Ana").ok());
-    ASSERT_TRUE(server_->add_user("bruno", "senha", "Bruno").ok());
-    ASSERT_TRUE(server_->add_user("carla", "senha", "Carla").ok());
-    ASSERT_TRUE(server_->add_user("diego", "senha", "Diego").ok());
-    ASSERT_TRUE(server_->add_user("elena", "senha", "Elena").ok());
+    ASSERT_TRUE(server_->add_user("ana", "password", "Ana").ok());
+    ASSERT_TRUE(server_->add_user("bruno", "password", "Bruno").ok());
+    ASSERT_TRUE(server_->add_user("carla", "password", "Carla").ok());
+    ASSERT_TRUE(server_->add_user("diego", "password", "Diego").ok());
+    ASSERT_TRUE(server_->add_user("elena", "password", "Elena").ok());
     server_->start();
     ASSERT_NE(server_->port(), 0);
   }

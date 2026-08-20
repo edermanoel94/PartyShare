@@ -168,14 +168,14 @@ class Participant {
     if (!wait_until([this] { return signaling_.is_connected(); })) {
       return false;
     }
-    if (!signaling_.send(proto::Authenticate{username_, "senha"}).ok()) {
+    if (!signaling_.send(proto::Authenticate{username_, "password"}).ok()) {
       return false;
     }
     return wait_until([this] { return !user_.id.empty(); });
   }
 
   [[nodiscard]] bool create_room() {
-    if (!signaling_.send(proto::CreateRoom{user_.id, "sala-dev"}).ok()) {
+    if (!signaling_.send(proto::CreateRoom{user_.id, "dev-room"}).ok()) {
       return false;
     }
     return wait_until([this] { return !created_room_id_.empty(); });
@@ -393,7 +393,7 @@ class SfuTest : public ::testing::Test {
 
     server_ = std::make_unique<SignalingServer>(options);
     for (const char* name : {"ana", "bruno", "carla", "diego", "elena"}) {
-      ASSERT_TRUE(server_->add_user(name, "senha", name).ok());
+      ASSERT_TRUE(server_->add_user(name, "password", name).ok());
     }
     server_->start();
     ASSERT_NE(server_->port(), 0);

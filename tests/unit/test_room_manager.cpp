@@ -14,7 +14,7 @@ RoomManager make_manager(int capacity = 5) {
   return RoomManager(RoomManager::Options{capacity, 1234u});
 }
 
-std::string create(RoomManager& manager, const std::string& name = "sala-dev") {
+std::string create(RoomManager& manager, const std::string& name = "dev-room") {
   auto created = manager.create_room(name);
   EXPECT_TRUE(created.ok());
   return created.ok() ? created.value() : std::string{};
@@ -41,9 +41,9 @@ TEST(RoomManager, GeneratesDistinctIdentifiers) {
 
 TEST(RoomManager, KeepsTheRoomName) {
   RoomManager manager = make_manager();
-  const std::string id = create(manager, "sala-dev");
+  const std::string id = create(manager, "dev-room");
   ASSERT_NE(manager.find(id), nullptr);
-  EXPECT_EQ(manager.find(id)->name, "sala-dev");
+  EXPECT_EQ(manager.find(id)->name, "dev-room");
 }
 
 TEST(RoomManager, JoiningAddsAParticipant) {

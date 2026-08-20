@@ -303,14 +303,14 @@ class Client {
   Client& operator=(Client&&) = delete;
 
   [[nodiscard]] bool login() {
-    if (!session_->connect_and_authenticate(username_, "senha").ok()) {
+    if (!session_->connect_and_authenticate(username_, "password").ok()) {
       return false;
     }
     return wait_until([this] { return !session_->local_user().id.empty(); });
   }
 
   [[nodiscard]] std::string create_room() {
-    if (!session_->create_room("sala-dev").ok()) {
+    if (!session_->create_room("dev-room").ok()) {
       return {};
     }
     if (!wait_until([this] { return !room_created().empty(); })) {
@@ -433,8 +433,8 @@ class CallSessionTest : public ::testing::Test {
     options.sfu.ice_servers.clear();
 
     server_ = std::make_unique<SignalingServer>(options);
-    ASSERT_TRUE(server_->add_user("ana", "senha", "Ana").ok());
-    ASSERT_TRUE(server_->add_user("bruno", "senha", "Bruno").ok());
+    ASSERT_TRUE(server_->add_user("ana", "password", "Ana").ok());
+    ASSERT_TRUE(server_->add_user("bruno", "password", "Bruno").ok());
     server_->start();
     ASSERT_NE(server_->port(), 0);
   }
@@ -456,7 +456,7 @@ class CallSessionTest : public ::testing::Test {
 
 TEST_F(CallSessionTest, RefusesEmptyCredentials) {
   Client& ana = add("ana");
-  const auto attempted = ana.session().connect_and_authenticate("", "senha");
+  const auto attempted = ana.session().connect_and_authenticate("", "password");
   ASSERT_FALSE(attempted.ok());
   EXPECT_EQ(attempted.error().code, "invalid_value");
 }

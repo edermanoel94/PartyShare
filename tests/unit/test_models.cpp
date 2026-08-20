@@ -12,7 +12,7 @@ using dv::models::User;
 Room make_room() {
   Room room;
   room.id = "8F42A1";
-  room.name = "sala-dev";
+  room.name = "dev-room";
   room.participants = {
       Participant{User{"user1", "Ana", ""}, false, false},
       Participant{User{"user2", "Bruno", ""}, true, false},

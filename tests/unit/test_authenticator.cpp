@@ -14,7 +14,7 @@ const Clock::time_point kNow{};
 
 TEST(Authenticator, RegistersAUserWithAnIdentity) {
   Authenticator auth;
-  const auto user = auth.add_user("ana", "senha", "Ana");
+  const auto user = auth.add_user("ana", "password", "Ana");
   ASSERT_TRUE(user.ok()) << user.error().message;
   EXPECT_FALSE(user.value().id.empty());
   EXPECT_EQ(user.value().display_name, "Ana");
@@ -22,15 +22,15 @@ TEST(Authenticator, RegistersAUserWithAnIdentity) {
 
 TEST(Authenticator, FallsBackToTheUsernameAsDisplayName) {
   Authenticator auth;
-  const auto user = auth.add_user("ana", "senha", "");
+  const auto user = auth.add_user("ana", "password", "");
   ASSERT_TRUE(user.ok());
   EXPECT_EQ(user.value().display_name, "ana");
 }
 
 TEST(Authenticator, GivesEveryUserADistinctIdentifier) {
   Authenticator auth;
-  const auto first = auth.add_user("ana", "senha", "");
-  const auto second = auth.add_user("bruno", "senha", "");
+  const auto first = auth.add_user("ana", "password", "");
+  const auto second = auth.add_user("bruno", "password", "");
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(second.ok());
   EXPECT_NE(first.value().id, second.value().id);
@@ -38,7 +38,7 @@ TEST(Authenticator, GivesEveryUserADistinctIdentifier) {
 
 TEST(Authenticator, RejectsADuplicateUsername) {
   Authenticator auth;
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
   const auto duplicate = auth.add_user("ana", "outra", "");
   ASSERT_FALSE(duplicate.ok());
   EXPECT_EQ(duplicate.error().code, "user_exists");
@@ -46,16 +46,16 @@ TEST(Authenticator, RejectsADuplicateUsername) {
 
 TEST(Authenticator, RejectsEmptyCredentials) {
   Authenticator auth;
-  EXPECT_EQ(auth.add_user("", "senha", "").error().code, "invalid_value");
+  EXPECT_EQ(auth.add_user("", "password", "").error().code, "invalid_value");
   EXPECT_EQ(auth.add_user("ana", "", "").error().code, "invalid_value");
 }
 
 TEST(Authenticator, AuthenticatesWithTheRightPassword) {
   Authenticator auth;
-  const auto user = auth.add_user("ana", "senha", "Ana");
+  const auto user = auth.add_user("ana", "password", "Ana");
   ASSERT_TRUE(user.ok());
 
-  const auto session = auth.authenticate("ana", "senha", kNow);
+  const auto session = auth.authenticate("ana", "password", kNow);
   ASSERT_TRUE(session.ok()) << session.error().message;
   EXPECT_EQ(session.value().user.id, user.value().id);
   EXPECT_FALSE(session.value().token.empty());
@@ -64,17 +64,17 @@ TEST(Authenticator, AuthenticatesWithTheRightPassword) {
 
 TEST(Authenticator, RejectsAWrongPassword) {
   Authenticator auth;
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  const auto session = auth.authenticate("ana", "errada", kNow);
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  const auto session = auth.authenticate("ana", "wrong", kNow);
   ASSERT_FALSE(session.ok());
   EXPECT_EQ(session.error().code, "unauthorized");
 }
 
 TEST(Authenticator, AnUnknownUserFailsIdenticallyToAWrongPassword) {
   Authenticator auth;
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  const auto wrong_password = auth.authenticate("ana", "errada", kNow);
-  const auto unknown_user = auth.authenticate("ninguem", "errada", kNow);
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  const auto wrong_password = auth.authenticate("ana", "wrong", kNow);
+  const auto unknown_user = auth.authenticate("nobody", "wrong", kNow);
 
   // Identical replies, so the protocol cannot be used to enumerate accounts.
   EXPECT_EQ(wrong_password.error().code, unknown_user.error().code);
@@ -83,9 +83,9 @@ TEST(Authenticator, AnUnknownUserFailsIdenticallyToAWrongPassword) {
 
 TEST(Authenticator, IssuesADistinctTokenPerLogin) {
   Authenticator auth;
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  const auto first = auth.authenticate("ana", "senha", kNow);
-  const auto second = auth.authenticate("ana", "senha", kNow);
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  const auto first = auth.authenticate("ana", "password", kNow);
+  const auto second = auth.authenticate("ana", "password", kNow);
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(second.ok());
   EXPECT_NE(first.value().token, second.value().token);
@@ -93,8 +93,8 @@ TEST(Authenticator, IssuesADistinctTokenPerLogin) {
 
 TEST(Authenticator, ValidatesAFreshToken) {
   Authenticator auth;
-  const auto user = auth.add_user("ana", "senha", "Ana");
-  const auto session = auth.authenticate("ana", "senha", kNow);
+  const auto user = auth.add_user("ana", "password", "Ana");
+  const auto session = auth.authenticate("ana", "password", kNow);
   ASSERT_TRUE(session.ok());
 
   const auto validated = auth.validate(session.value().token, kNow);
@@ -104,15 +104,15 @@ TEST(Authenticator, ValidatesAFreshToken) {
 
 TEST(Authenticator, RejectsAnUnknownToken) {
   Authenticator auth;
-  const auto validated = auth.validate("nao-existe", kNow);
+  const auto validated = auth.validate("does-not-exist", kNow);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "unauthorized");
 }
 
 TEST(Authenticator, RejectsAnExpiredToken) {
   Authenticator auth(Authenticator::Options{std::chrono::seconds(60)});
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  const auto session = auth.authenticate("ana", "senha", kNow);
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  const auto session = auth.authenticate("ana", "password", kNow);
   ASSERT_TRUE(session.ok());
 
   EXPECT_TRUE(auth.validate(session.value().token, kNow + std::chrono::seconds(59)).ok());
@@ -123,8 +123,8 @@ TEST(Authenticator, RejectsAnExpiredToken) {
 
 TEST(Authenticator, ExpiringDropsStaleTokens) {
   Authenticator auth(Authenticator::Options{std::chrono::seconds(60)});
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  EXPECT_TRUE(auth.authenticate("ana", "senha", kNow).ok());
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  EXPECT_TRUE(auth.authenticate("ana", "password", kNow).ok());
   EXPECT_EQ(auth.active_token_count(), 1u);
 
   auth.expire_tokens(kNow + std::chrono::seconds(30));
@@ -136,8 +136,8 @@ TEST(Authenticator, ExpiringDropsStaleTokens) {
 
 TEST(Authenticator, TokensAreLongEnoughToResistGuessing) {
   Authenticator auth;
-  EXPECT_TRUE(auth.add_user("ana", "senha", "").ok());
-  const auto session = auth.authenticate("ana", "senha", kNow);
+  EXPECT_TRUE(auth.add_user("ana", "password", "").ok());
+  const auto session = auth.authenticate("ana", "password", kNow);
   ASSERT_TRUE(session.ok());
   // 32 random bytes, hex encoded.
   EXPECT_EQ(session.value().token.size(), 64u);
@@ -155,7 +155,7 @@ TEST(AuthenticatorTest, HashingAPasswordIsDeliberatelySlow) {
   dv::server::Authenticator authenticator;
 
   const auto started = std::chrono::steady_clock::now();
-  ASSERT_TRUE(authenticator.add_user("ana", "senha", "Ana").ok());
+  ASSERT_TRUE(authenticator.add_user("ana", "password", "Ana").ok());
   const auto elapsed = std::chrono::steady_clock::now() - started;
 
   EXPECT_GT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 5)
@@ -166,13 +166,13 @@ TEST(AuthenticatorTest, TheSamePasswordStoresDifferentlyForDifferentUsers) {
   // Per account salt. Without it, two people with the same password have the
   // same stored value, and one stolen file answers both at once.
   dv::server::Authenticator authenticator;
-  ASSERT_TRUE(authenticator.add_user("ana", "mesma-senha", "Ana").ok());
-  ASSERT_TRUE(authenticator.add_user("bruno", "mesma-senha", "Bruno").ok());
+  ASSERT_TRUE(authenticator.add_user("ana", "same-password", "Ana").ok());
+  ASSERT_TRUE(authenticator.add_user("bruno", "same-password", "Bruno").ok());
 
   // Both still authenticate, which is what says the salt is stored and used
   // rather than merely generated.
-  EXPECT_TRUE(authenticator.authenticate("ana", "mesma-senha", kNow).ok());
-  EXPECT_TRUE(authenticator.authenticate("bruno", "mesma-senha", kNow).ok());
+  EXPECT_TRUE(authenticator.authenticate("ana", "same-password", kNow).ok());
+  EXPECT_TRUE(authenticator.authenticate("bruno", "same-password", kNow).ok());
 }
 
 }  // namespace

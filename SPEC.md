@@ -97,7 +97,7 @@ The application has to allow creating or joining a channel.
 Example:
 
 ```text
-Channel: sala-dev
+Channel: dev-room
 ID: 8F42A1
 ```
 

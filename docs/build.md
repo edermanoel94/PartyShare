@@ -199,6 +199,49 @@ ctest --preset macos-arm64-release
 The client is a bundle, `build/macos-arm64-release/bin/partyshare.app`, and the server is a plain binary next to it.
 The first configure builds the vcpkg dependencies from source, which takes minutes; later ones reuse them.
 
+### Windows
+
+winget has the compiler, CMake and Ninja. Qt comes from `aqtinstall`, because the Qt installer wants an account, and
+libdatachannel from vcpkg as everywhere else.
+
+```powershell
+winget install -e --id Microsoft.VisualStudio.2022.BuildTools `
+  --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install -e --id Kitware.CMake
+winget install -e --id Ninja-build.Ninja
+winget install -e --id Python.Python.3.12
+python -m pip install aqtinstall
+python -m aqt install-qt windows desktop 6.7.3 win64_msvc2019_64 -O C:\Qt
+```
+
+The `windows-*` presets name `cl` as the compiler, so configure, build and test all have to run somewhere it exists:
+a Developer Command Prompt, or any shell that has sourced `vcvars64.bat`.
+
+```
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+bash scripts/ci_vcpkg.sh
+cmake --preset windows-release ^
+  -DCMAKE_TOOLCHAIN_FILE=%CD%\.vcpkg\scripts\buildsystems\vcpkg.cmake ^
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.7.3/msvc2019_64
+cmake --build --preset windows-release
+ctest --preset windows-release
+```
+
+The build tree is not self-contained, and this is the one thing that surprises everybody once.
+vcpkg copies the libraries it built next to the executables, so spdlog, libdatachannel and the rest are there, and Qt
+is not: `build\windows-release\bin\partyshare.exe` started from Explorer dies on
+*"Qt6Core.dll was not found"*, while the same file started from the shell that built it runs, because that shell has
+Qt on `PATH`. Either keep `C:\Qt\6.7.3\msvc2019_64\bin` on `PATH`, or work from an install tree, which carries
+everything the program loads:
+
+```
+cmake --install build\windows-release --prefix stage
+windeployqt --release stage\bin\partyshare.exe
+```
+
+`windeployqt` is the Qt half and the install rule is the other: `client/CMakeLists.txt` installs a runtime dependency
+set on Windows, which is what puts the vcpkg libraries in the tree. Neither one covers what the other does.
+
 ## Options
 
 | Option | Default | Effect |

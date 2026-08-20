@@ -7,7 +7,7 @@ What remains to be validated is listed in section 6 of [webrtc-toolchain.md](web
 
 | Question | Where |
 | --- | --- |
-| Does libwebrtc link and run on Windows x64? | A Windows machine |
+| ~~Does libwebrtc link and run on Windows x64?~~ | Answered: yes, section 5.1 |
 | Does libwebrtc link and run on macOS ARM64? | A macOS machine |
 | Does capture work on Wayland, and not only on X11? | Linux with a Wayland session |
 | Does `std::string` cross the libwebrtc boundary intact? | Windows and macOS |
@@ -88,6 +88,34 @@ The prebuilt package download is 739 MB, so the first configure takes a while.
 
 If Ninja is not installed, swap `-G Ninja` for `-G "Visual Studio 17 2022" -A x64`, and the binary lands in `build\spike\bin\Release\`.
 
+### 5.1 What the first Windows run found
+
+Done, on Windows 11 with MSVC 19.44 and the pinned `m152.7977.0.0` package. The spike passes. Two things had to
+be fixed to get there, and both are in the tree now, so the commands above work as written.
+
+**`dwmapi` was missing** from the Windows library list in `cmake/Findlibwebrtc.cmake`. Everything else resolved
+and the link died on one symbol:
+
+```text
+webrtc.lib(window_capture_utils.obj) : error LNK2019: unresolved external symbol
+__imp_DwmGetWindowAttribute referenced in function GetCroppedWindowRect
+```
+
+It follows from `RTC_ENABLE_WIN_WGC`, defined two lines above it: Windows Graphics Capture asks the desktop
+window manager whether a window is cloaked before capturing it.
+
+**The static C runtime is not optional.** `webrtc.lib` is built with `/MT` and CMake defaults to `/MD`, which
+ends in `LNK2038: mismatch detected for 'RuntimeLibrary'` repeated across the standard library and then
+`LNK1169`. The configure above therefore also needs:
+
+```bat
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>
+```
+
+That works for the spike because it builds spdlog and nlohmann_json from source in the same pass with the same
+flag. It is not enough for the client, and section 5 of [webrtc-toolchain.md](webrtc-toolchain.md) says what
+that would cost.
+
 ## 6. What a good run looks like
 
 ```text
@@ -121,8 +149,10 @@ About that last line, the symptom of the conflict differs by platform:
 - On **Linux with the prebuilt package** the spike is built standalone on purpose, and the line says `skipped`.
   That is expected and is already the known conflict.
   The real validation on Linux is over the tree `scripts/build_webrtc.sh` produces, and it has been done: the spike passes over it with `dv::shared` linked.
-- On **Windows and macOS** the spike tries to link `dv::shared` directly.
-  If the conflict exists there too, it **does not compile**: the link fails with `std::__Cr::` symbols.
+- On **Windows** the spike links `dv::shared` directly, and the answer is in: the conflict is **not** there.
+  The package carries no `std::__Cr::` symbol, and the line reads `dv::shared linked and interoperating`.
+- On **macOS** the spike tries the same thing and nobody has run it yet.
+  If the conflict exists there, it **does not compile**: the link fails with `std::__Cr::` symbols.
   That failure is precisely the result we need to know, so send the output rather than trying to work around it.
 
 ## 7. If it fails

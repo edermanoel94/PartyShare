@@ -666,6 +666,13 @@ It blocks an unsigned binary from loading outright, with a Code Integrity 3077 e
 The MSI itself is sound - `msiexec /a` extracts all thirty files - but it cannot be installed on a machine in this configuration.
 That makes task 4 of this milestone, the signing that is written and has never had a certificate, the difference between an artifact and a download nobody can run, rather than the polish it reads as.
 
+And that step would not have been enough either. It signed `stage\bin\*.exe`, which is two files: the client, and the Visual C++ redistributable that Microsoft already signed and that would have had its publisher replaced by ours.
+Of the thirty files in the install tree, twenty-two arrive signed by Microsoft or by Qt and eight do not, and seven of those eight are libraries the glob never reached - including `datachannel.dll`, which is exactly where the install died.
+Smart App Control checks every binary as it is loaded, so signing the executable and shipping seven unsigned libraries next to it produces a signed program that still does not start.
+The step now covers every unsigned `.exe` and `.dll`, skips what already carries somebody else's signature, checks `signtool`'s exit code - a native program that fails does not stop a `pwsh` step by itself - and refuses to finish while anything in the tree is still unsigned.
+
+Two constraints of the policy, worth writing down because a certificate that satisfies neither signs without complaint and changes nothing: Smart App Control accepts only certificates issued by a CA in the Microsoft Trusted Root Program, so a self-signed one is no better than none, and its signature check does not read ECC at all, so the certificate has to be RSA.
+
 Not verified here, and worth being plain about: nobody has started the client *from an installed tree* on Windows, only from the build tree.
 The media layer is absent too, as it is everywhere but Linux, because libwebrtc is not built on this machine.
 

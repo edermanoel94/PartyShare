@@ -28,8 +28,14 @@ jobs:
     # is known to be wrong. scripts/build_webrtc.sh cannot get past the
     # depot_tools CIPD bootstrap on a runner - curl gets a 403 one second in,
     # before a byte of WebRTC is fetched - and without libwebrtc there is no
-    # AppImage. Delete this line to turn the job back on once that is fixed.
-    if: false
+    # AppImage.
+    #
+    # A repository variable rather than `if: false`, which actionlint rejects as
+    # a constant condition, and rightly: a switch that can only be flipped by
+    # editing the workflow is not a switch. RELEASE_LINUX is unset today, so this
+    # job does not run. Set it to 'true' under Settings > Secrets and variables >
+    # Actions > Variables to turn it back on, once the bootstrap is fixed.
+    if: vars.RELEASE_LINUX == 'true'
     # The oldest runner available, deliberately. glibc is the one thing an
     # AppImage cannot carry, so the build machine's glibc is the floor for every
     # machine that can run the result.

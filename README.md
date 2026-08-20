@@ -122,9 +122,35 @@ With a database, and an administrator to start from:
   --database-uri=mongodb://127.0.0.1:27017 --port=8080
 ```
 
+`--database-uri` turns the database on by itself, so there is no second switch that has to agree with the first.
+A build without `-DDV_ENABLE_MONGO` refuses to start when the database is on rather than falling back to memory, because a server that was told to persist and quietly did not is one whose accounts disappear at the next restart.
+
 `--create-admin` creates that administrator, or promotes an existing account and resets its password, and then exits.
 It is also the way back in when the only administrator password is lost.
 The password is visible in `ps` while the command runs, so it is worth changing from the client afterwards.
+
+The same is true of a URI that carries a password, which is one reason to supply it through the environment or the config file instead:
+
+```sh
+export DV_DATABASE_ENABLED=1
+export DV_DATABASE_URI="mongodb://ana:password@127.0.0.1:27017/?authSource=admin"
+export DV_DATABASE_NAME=partyshare
+```
+
+```json
+{
+  "database": {
+    "enabled": true,
+    "uri": "mongodb://127.0.0.1:27017",
+    "name": "partyshare",
+    "timeout_ms": 2000
+  }
+}
+```
+
+Neither of those turns the database on by naming a URI, unlike the command line option, so `enabled` has to be set as well.
+`timeout_ms` defaults to 2000 and is deliberately short: the store is called with the server's lock held, so the driver's own default of thirty seconds would not fail one login, it would hold every call on the server for half a minute.
+Writing the configuration back out replaces the credentials in the URI with asterisks, so dumping it is not a way to read the password.
 
 `--users-file` points at a list of development accounts:
 

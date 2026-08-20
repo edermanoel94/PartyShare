@@ -49,6 +49,26 @@ jobs:
             libxrandr-dev libxcomposite-dev libxtst-dev \
             desktop-file-utils zsync
 
+      # libdatachannel is the one dependency with no FetchContent fallback, so
+      # Dependencies.cmake stops the configure outright when it is absent. The
+      # Windows and macOS jobs below have always prepared vcpkg and this one
+      # never did, which made the tag that first exercised this pipeline the
+      # thing that found out.
+      #
+      # Before libwebrtc rather than after it. This step is a couple of minutes
+      # and the one below is a 30 GB checkout, so putting the cheap failure
+      # first is the difference between learning that vcpkg is broken now and
+      # learning it at the end of an afternoon of compiling.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-ubuntu-22.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-ubuntu-22.04-
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+
       - name: Restore the libwebrtc cache
         id: webrtc-cache
         uses: actions/cache@v4
@@ -59,21 +79,6 @@ jobs:
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
         run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
-
-      # libdatachannel is the one dependency with no FetchContent fallback, so
-      # Dependencies.cmake stops the configure outright when it is absent. The
-      # Windows and macOS jobs below have always prepared vcpkg and this one
-      # never did, which made the tag that first exercised this pipeline the
-      # thing that found out.
-      - name: Restore the vcpkg binary cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vcpkg/archives
-          key: vcpkg-ubuntu-22.04-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-ubuntu-22.04-
-
-      - name: Prepare vcpkg
-        run: scripts/ci_vcpkg.sh
 
       - name: Build the AppImage
         run: scripts/appimage.sh

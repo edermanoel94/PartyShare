@@ -14,7 +14,6 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -86,7 +85,13 @@ func open(t *testing.T) (*store.Store, *session) {
 		t.Skipf("set %s to a MongoDB this test may write to", uriVariable)
 	}
 
-	name := fmt.Sprintf("dbadmin_e2e_%d_%d", time.Now().UnixNano(), os.Getpid())
+	// Random, for the reason the store's own tests give: a name taken from
+	// the clock is not unique between tests that start together.
+	suffix, err := store.RandomHex(8)
+	if err != nil {
+		t.Fatalf("RandomHex: %v", err)
+	}
+	name := "dbadmin_e2e_" + suffix
 	database, err := store.Open(context.Background(), store.Config{
 		URI:      uri,
 		Database: name,

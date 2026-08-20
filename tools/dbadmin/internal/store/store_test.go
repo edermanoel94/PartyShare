@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -28,7 +28,15 @@ func testStore(t *testing.T) *Store {
 		t.Skipf("set %s to a MongoDB these tests may write to", uriVariable)
 	}
 
-	name := fmt.Sprintf("dbadmin_test_%d_%d", time.Now().UnixNano(), os.Getpid())
+	// Random, and not a timestamp. These tests run in parallel, and the wall
+	// clock two of them read on the way in is coarser than a nanosecond: two
+	// databases named for the same instant are two tests writing to one
+	// collection, and the one that finishes first drops it under the other.
+	suffix, err := RandomHex(8)
+	if err != nil {
+		t.Fatalf("RandomHex: %v", err)
+	}
+	name := "dbadmin_test_" + suffix
 	opened, err := Open(context.Background(), Config{
 		URI:      uri,
 		Database: name,
@@ -203,40 +211,30 @@ func TestEveryChangeIsRecorded(t *testing.T) {
 		}
 	}
 
-	// Sorted rather than indexed: the five actions happen inside one second,
-	// so their order among themselves is not something the log promises.
-	details := map[string]string{}
+	// Gathered and sorted rather than indexed. The five actions happen inside
+	// one second, so the order the log returns them in is not something it
+	// promises, and two of them are an update_user against the same account:
+	// a map of one detail per action and target keeps whichever arrived last,
+	// which is a test that passes or fails by coin toss.
+	details := map[string][]string{}
 	for _, entry := range entries {
-		details[entry.Action+" "+entry.TargetID] = entry.Detail
+		key := entry.Action + " " + entry.TargetID
+		details[key] = append(details[key], entry.Detail)
 	}
-	want := map[string]string{
-		ActionCreateUser + " " + created.UserID: "username=ana role=admin",
-		ActionCreateUser + " " + second.UserID:  "username=bruno role=admin",
-		ActionUpdateUser + " " + second.UserID:  "password",
-		ActionDeleteUser + " " + second.UserID:  "username=bruno",
+	want := map[string][]string{
+		ActionCreateUser + " " + created.UserID: {"username=ana role=admin"},
+		ActionCreateUser + " " + second.UserID:  {"username=bruno role=admin"},
+		ActionUpdateUser + " " + second.UserID:  {"password", "role=user display_name"},
+		ActionDeleteUser + " " + second.UserID:  {"username=bruno"},
 	}
-	for key, detail := range want {
-		if details[key] != detail {
-			t.Errorf("%s recorded %q, want %q", key, details[key], detail)
+	for key, expected := range want {
+		got := slices.Clone(details[key])
+		slices.Sort(got)
+		slices.Sort(expected)
+		if !slices.Equal(got, expected) {
+			t.Errorf("%s recorded %q, want %q", key, got, expected)
 		}
 	}
-	// The update wrote two entries against the same key, one of which is the
-	// password above. The other names what moved.
-	if got := entryDetail(entries, ActionUpdateUser, second.UserID, "password"); got !=
-		"role=user display_name" {
-		t.Errorf("the update recorded %q, want the fields that changed", got)
-	}
-}
-
-// entryDetail finds the detail of an action against a target, skipping one
-// known value, which is how the two update_user entries are told apart.
-func entryDetail(entries []AuditEntry, action, targetID, skip string) string {
-	for _, entry := range entries {
-		if entry.Action == action && entry.TargetID == targetID && entry.Detail != skip {
-			return entry.Detail
-		}
-	}
-	return ""
 }
 
 func TestUpdateAccountKeepsWhatItDoesNotOwn(t *testing.T) {
@@ -430,10 +428,12 @@ func TestAuditIsNewestFirstAndFiltersByActor(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("read %d entries, want 3", len(entries))
 	}
-	if !sort.SliceIsSorted(entries, func(i, j int) bool {
-		return entries[i].TimestampSeconds > entries[j].TimestampSeconds
-	}) {
-		t.Error("the log did not come back newest first")
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].TimestampSeconds < entries[i].TimestampSeconds {
+			t.Errorf("entry %d is older than the one before it, so the log is not newest first",
+				i)
+			break
+		}
 	}
 
 	byActor, err := database.Audit(context.Background(), AuditQuery{ActorID: "one"})

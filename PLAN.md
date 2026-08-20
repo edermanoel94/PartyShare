@@ -586,7 +586,7 @@ Goal: section 25 of the SPEC.
 
 Tasks:
 
-1. Partial. An NSIS Windows installer, with a shortcut, an icon and uninstallation, plus the ZIP alongside. The executable carries an icon and a version block. Written and never run.
+1. Partial. An MSI Windows installer of the client, with a start menu and desktop shortcut, an icon and an Add/Remove Programs entry, plus the ZIP alongside. The executable carries an icon and a version block. The workflow installs the MSI on the runner and checks what landed, so the packaging is exercised; nobody has yet started the client it installs.
 2. [x] An AppImage on Linux.
 3. Partial. A `.app` bundle with an icon and a `.dmg` with a shortcut to `/Applications` and a volume icon. The window appearance is missing, and none of it has ever run.
 4. Code signing on Windows and macOS. The steps exist in the workflow, conditional on the secrets, and no secret is configured.

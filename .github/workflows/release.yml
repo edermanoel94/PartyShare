@@ -151,11 +151,31 @@ jobs:
         with:
           arch: x64
 
-      # CPack shells out to makensis and reports its absence as a generator
-      # that produced nothing, which reads like a configuration mistake rather
-      # than a missing program.
-      - name: Install NSIS
-        run: choco install nsis --no-progress -y
+      # CPack shells out to candle.exe and light.exe and reports their absence
+      # as a generator that produced nothing, which reads like a configuration
+      # mistake rather than a missing program. The runner image has carried WiX
+      # 3 for years; looking before installing keeps the job cheap today and
+      # working on the day the image drops it.
+      - name: Install the WiX Toolset
+        shell: pwsh
+        run: |
+          function Find-Candle {
+            Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3.*\bin\candle.exe' `
+              -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          $candle = Find-Candle
+          if (-not $candle) {
+            choco install wixtoolset --no-progress -y
+            $candle = Find-Candle
+          }
+          if (-not $candle) { throw 'WiX 3 is not on this machine and could not be installed' }
+          # CPack looks for the toolset through the WIX environment variable
+          # before it looks anywhere else, and choco sets that variable in a
+          # registry the already running job never re-reads.
+          $root = $candle.Directory.Parent.FullName
+          Write-Host "WiX: $root"
+          Add-Content $env:GITHUB_ENV "WIX=$root\"
+          Add-Content $env:GITHUB_PATH $candle.Directory.FullName
 
       - name: Restore the vcpkg binary cache
         uses: actions/cache@v4
@@ -168,11 +188,17 @@ jobs:
         run: scripts/ci_vcpkg.sh
         shell: bash
 
+      # Client only. What a Windows machine installs from a desktop MSI is the
+      # application; the server is a Linux daemon and shipping its executable
+      # inside a start menu entry only raises the question of what to do with
+      # it. Leaving it out of the build is also what keeps it out of the ZIP,
+      # which is packed from the same install tree.
       - name: Configure
         run: >
           cmake --preset windows-release
           -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
+          -DDV_BUILD_SERVER=OFF
         shell: bash
 
       - name: Build
@@ -213,10 +239,77 @@ jobs:
             -B build/windows-release/package \
             -D CPACK_INSTALLED_DIRECTORIES="$PWD/stage;."
 
+      # An installer nobody installed is a guess. This is the Windows half of
+      # what the AppImage smoke test does on Linux: put the MSI through the same
+      # msiexec a user's machine would, look for the executable the start menu
+      # shortcut will point at, and take it away again. It does not start the
+      # client - a GUI executable on Windows has no console to report itself
+      # ready to - so it proves the package installs, not that it runs.
+      - name: Install the MSI
+        shell: pwsh
+        run: |
+          # -ErrorAction, because an Actions pwsh step stops on the first error
+          # and a pattern that matches nothing is one: without it the step dies
+          # on the wildcard and never reaches the sentence explaining what is
+          # actually missing.
+          $package = 'build\windows-release\package'
+          $msi = Get-ChildItem "$package\partyshare-*.msi" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $msi) { throw 'the WIX generator produced no .msi' }
+          if (-not (Get-ChildItem "$package\partyshare-*.zip" -ErrorAction SilentlyContinue)) {
+            throw 'the ZIP generator produced no .zip'
+          }
+
+          $log = "$env:RUNNER_TEMP\install.log"
+          $run = Start-Process msiexec -Wait -PassThru -ArgumentList `
+            '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', "`"$log`""
+          # 3010 is "installed, wants a reboot", which is a success on a machine
+          # that is about to be thrown away.
+          if ($run.ExitCode -notin 0, 3010) {
+            Get-Content $log -Tail 60
+            throw "msiexec refused the package, exit code $($run.ExitCode)"
+          }
+
+          $root = 'C:\Program Files\PartyShare'
+          $exe = "$root\bin\partyshare.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host 'what the MSI actually installed:'
+            Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
+            throw "$exe is not there after an install that reported success"
+          }
+          # The Qt platform plugin, which is the one file whose absence turns
+          # into "this application failed to start" on the user's machine and
+          # into nothing at all here.
+          if (-not (Test-Path "$root\bin\platforms\qwindows.dll")) {
+            throw 'windeployqt output did not reach the installer'
+          }
+
+          Start-Process msiexec -Wait -ArgumentList `
+            '/x', "`"$($msi.FullName)`"", '/qn', '/norestart'
+
+      # The file a person downloads is the MSI, and it is the file SmartScreen
+      # judges. Signing only the executables inside it leaves the warning on the
+      # one thing the user is asked to trust first.
+      - name: Sign the installer
+        if: env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $bytes)
+          Get-ChildItem build\windows-release\package\partyshare-*.msi | ForEach-Object {
+            signtool sign /f "$env:RUNNER_TEMP\cert.pfx" `
+              /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+              /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
+          }
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: build/windows-release/package/partyshare-*
+          path: |
+            build/windows-release/package/partyshare-*.msi
+            build/windows-release/package/partyshare-*.zip
           retention-days: 7
 
   macos:

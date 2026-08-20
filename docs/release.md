@@ -29,7 +29,7 @@ It builds everything and publishes nothing, because a release without a tag has 
 | Artifact | Platform | State |
 | --- | --- | --- |
 | `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Built and verified |
-| `partyshare-x.y.z-windows-x64.exe` | Windows x64 | Written, never run |
+| `partyshare-x.y.z-windows-x64.msi` | Windows x64 | Written, never run |
 | `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Written, never run |
 | `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Written, never run |
 | `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
@@ -90,7 +90,12 @@ This repository is developed on Linux, and neither job has ever produced a file 
 Treat the first run as the thing that will discover what is wrong with them, not as a regression.
 What they intend to produce:
 
-- The Windows installer is NSIS, with a start menu shortcut, its own icon, and uninstallation. The ZIP stays alongside it for people who prefer the files without an installer touching their machine.
+- The Windows installer is an MSI, built by CPack's WiX generator, with a start menu shortcut, a desktop shortcut, its own icon, and an entry in Add/Remove Programs.
+  An MSI is what a machine already knows how to install: `msiexec /i partyshare-x.y.z-windows-x64.msi /qn` for a fleet, a double click for a person.
+  The `CPACK_WIX_UPGRADE_GUID` in `cmake/Packaging.cmake` is what makes the next version replace this one instead of installing beside it, so it must never change.
+  The ZIP stays alongside it for people who prefer the files without an installer touching their machine.
+- Both carry the client and the Qt runtime and nothing else: the Windows job configures with `-DDV_BUILD_SERVER=OFF`, because the server is a Linux daemon and nobody installs one from a desktop MSI.
+  The job does install the MSI on the runner and check that the executable and the Qt platform plugin land where the shortcut points, so the package is known to install even though nobody has started what it installs.
 - The `.dmg` has the bundle, the shortcut to `/Applications`, and a volume icon. It lacks a background image and icon positioning in the window, which is appearance rather than function.
 - Neither has been opened on a clean machine, which is the milestone's acceptance criterion.
 

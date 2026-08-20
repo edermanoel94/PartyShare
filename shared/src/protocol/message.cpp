@@ -56,7 +56,7 @@ class FieldReader {
     return field->get<std::string>();
   }
 
-  std::string optional_string(std::string_view key, std::string fallback = {}) {
+  std::string optional_string(std::string_view key, const std::string& fallback = {}) {
     const json* field = find(key);
     if (field == nullptr || field->is_null()) {
       return fallback;

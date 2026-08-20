@@ -15,7 +15,17 @@ function(dv_set_target_warnings target)
       /w14640 # thread unsafe static member initialization
       /w14826 # conversion is sign-extended
       /w14928 # illegal copy-initialization
+      # Off. The message dispatch in shared/src/protocol/message.cpp is a chain
+      # of `if constexpr` over a variant, and every instantiation but the last
+      # returns before reaching the final fallback, so MSVC reports the fallback
+      # as unreachable once per alternative. Seventeen warnings about the one
+      # line that has to be there for the seventeenth case to work.
+      /wd4702 # unreachable code
     )
+    # std::getenv is standard C++ and MSVC's CRT deprecates it in favour of a
+    # function that only exists on Windows. The deprecation is the vendor's
+    # opinion, not a defect in the call.
+    target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(DV_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()

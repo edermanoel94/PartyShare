@@ -55,7 +55,13 @@ class Result {
   }
 
   /// Returns the contained value, or `fallback` when this Result failed.
-  [[nodiscard]] T value_or(T fallback) const& { return ok() ? std::get<T>(storage_) : fallback; }
+  ///
+  /// By const reference and not by value: the body copies out of the parameter
+  /// either way, so taking it by value copies twice whenever the caller passes
+  /// something it already had.
+  [[nodiscard]] T value_or(const T& fallback) const& {
+    return ok() ? std::get<T>(storage_) : fallback;
+  }
 
  private:
   explicit Result(Error error) : storage_(std::move(error)) {}

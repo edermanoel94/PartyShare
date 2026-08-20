@@ -39,6 +39,9 @@ class ScreenView : public QWidget {
  private slots:
   void take_pending_frame();
 
+  // Not redundant: the section above is `private slots:`, which Qt's moc
+  // needs as its own specifier, and these members are not slots.
+  // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
   std::mutex mutex_;
   QImage pending_;

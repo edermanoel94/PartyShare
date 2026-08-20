@@ -1,0 +1,16 @@
+# The interface layer, on top of the project configuration one directory up.
+#
+# Qt owns its widgets through the parent pointer: `new QLabel(this)` hands the
+# label to the parent, which deletes it. The check below assumes ownership is
+# expressed with unique_ptr, and against a Qt widget tree it fires on every
+# single construction, roughly fifty times in this directory alone. Silencing it
+# per line would bury the code in comments and would still say nothing true, so
+# it is turned off where the Qt idiom lives, and stays on everywhere else.
+#
+#   cppcoreguidelines-owning-memory
+#     Widgets are owned by their parent, which is Qt's model and not a leak.
+
+InheritParentConfig: true
+
+Checks: >
+  -cppcoreguidelines-owning-memory

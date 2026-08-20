@@ -29,6 +29,9 @@ class SettingsDialog : public QDialog {
   void on_output_changed(int index);
   void on_bitrate_changed();
 
+  // Not redundant: the section above is `private slots:`, which Qt's moc
+  // needs as its own specifier, and these members are not slots.
+  // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
   void load_devices();
   void load_monitors();

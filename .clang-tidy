@@ -81,3 +81,10 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.ConstexprVariablePrefix
     value: 'k'
+  # The same convention, for the constants that cannot be constexpr. A QHash
+  # has a non-trivial constructor, so a lookup table is a function local
+  # static const, and it is no less a constant for it.
+  - key: readability-identifier-naming.StaticConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.StaticConstantPrefix
+    value: 'k'

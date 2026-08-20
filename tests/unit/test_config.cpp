@@ -154,9 +154,11 @@ TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
 }
 
 TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
-  // The client cannot reject: Qt takes its own options from this command line.
-  const char* argv[] = {"partyshare", "--platform=offscreen", "--fps=15"};
-  const auto result = dv::config::load(3, argv, dv::config::UnknownOptions::Ignore);
+  // Why the client cannot reject. Qt spells its own options with the value
+  // detached, as "-platform offscreen", which is the very shape Reject refuses:
+  // turning it on here would refuse an argument that is not ours to judge.
+  const char* argv[] = {"partyshare", "-platform", "offscreen", "--fps=15"};
+  const auto result = dv::config::load(4, argv, dv::config::UnknownOptions::Ignore);
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(result.value().video.fps, 15);
 }

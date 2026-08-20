@@ -34,6 +34,11 @@ class ScreenView;
 /// threads, and every one of those reports is turned into a queued invocation
 /// before a widget is touched, because Qt widgets may only be used from the
 /// thread that owns them.
+// A QObject cannot be copied or moved: its identity is the thing Qt tracks.
+// The destructor exists to unhook the session callbacks, and asking for the
+// other four special members here would be asking for members that must not
+// exist.
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 class MainWindow : public QMainWindow {
   Q_OBJECT
 
@@ -61,6 +66,9 @@ class MainWindow : public QMainWindow {
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
 
+  // Not redundant: the section above is `private slots:`, which Qt's moc
+  // needs as its own specifier, and these members are not slots.
+  // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
   void build_login_page();
   void build_home_page();

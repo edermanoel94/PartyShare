@@ -35,11 +35,9 @@ namespace {
 
 /// The pages of the stack, in the order section 19 of SPEC.md walks through
 /// them.
-enum Page : int {
-  kLoginPage = 0,
-  kHomePage = 1,
-  kRoomPage = 2,
-};
+constexpr int kLoginPage = 0;
+constexpr int kHomePage = 1;
+constexpr int kRoomPage = 2;
 
 /// Where the participant's plain name is kept on a list item, next to the
 /// user id in Qt::UserRole. The visible text carries the state as well.
@@ -117,12 +115,11 @@ constexpr int kNameRole = Qt::UserRole + 1;
 }  // namespace
 
 MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
-    : QMainWindow(parent), session_(session) {
+    : QMainWindow(parent), session_(session), pages_(new QStackedWidget(this)) {
   setWindowTitle(QStringLiteral("PartyShare"));
   setMinimumSize(720, 560);
   resize(960, 760);
 
-  pages_ = new QStackedWidget(this);
   setCentralWidget(pages_);
 
   build_login_page();
@@ -316,13 +313,13 @@ void MainWindow::wire_session() {
   // a widget: it packages the news and posts it to the UI thread.
   session_.on_events({
       .on_state =
-          [this](client::app::CallSession::State state, std::string detail) {
+          [this](client::app::CallSession::State state, const std::string& detail) {
             QMetaObject::invokeMethod(this, "apply_state", Qt::QueuedConnection,
                                       Q_ARG(int, static_cast<int>(state)),
                                       Q_ARG(QString, QString::fromStdString(detail)));
           },
       .on_participants =
-          [this](std::vector<client::app::Participant> list) {
+          [this](const std::vector<client::app::Participant>& list) {
             QStringList names;
             names.reserve(static_cast<qsizetype>(list.size()));
             for (const client::app::Participant& participant : list) {
@@ -383,7 +380,7 @@ void MainWindow::wire_session() {
                                       Q_ARG(double, level), Q_ARG(bool, speaking));
           },
       .on_error =
-          [this](Error error) {
+          [this](const Error& error) {
             QMetaObject::invokeMethod(this, "apply_error", Qt::QueuedConnection,
                                       Q_ARG(QString, QString::fromStdString(error.code)),
                                       Q_ARG(QString, QString::fromStdString(error.message)));
@@ -395,13 +392,13 @@ void MainWindow::wire_session() {
             screen_view_->submit(frame);
           },
       .on_screen_share =
-          [this](std::string user_id) {
+          [this](const std::string& user_id) {
             QMetaObject::invokeMethod(this, "apply_screen_share", Qt::QueuedConnection,
                                       Q_ARG(QString, QString::fromStdString(user_id)));
           },
   });
 
-  session_.on_room_created([this](std::string room_id) {
+  session_.on_room_created([this](const std::string& room_id) {
     QMetaObject::invokeMethod(this, "apply_room_created", Qt::QueuedConnection,
                               Q_ARG(QString, QString::fromStdString(room_id)));
   });
@@ -686,10 +683,10 @@ void MainWindow::apply_screen_share(const QString& user_id) {
 
 void MainWindow::show_page() {
   switch (state_) {
+    // Until there is a call, the page depends only on whether anyone is signed
+    // in: connecting and authenticated look the same to a person waiting.
     case client::app::CallSession::State::Idle:
     case client::app::CallSession::State::Failed:
-      pages_->setCurrentIndex(session_.local_user().id.empty() ? kLoginPage : kHomePage);
-      break;
     case client::app::CallSession::State::Connecting:
     case client::app::CallSession::State::Authenticated:
       pages_->setCurrentIndex(session_.local_user().id.empty() ? kLoginPage : kHomePage);

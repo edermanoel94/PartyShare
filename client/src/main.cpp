@@ -69,9 +69,12 @@ void print_usage() {
              stdout);
 }
 
-}  // namespace
-
-int main(int argc, char* argv[]) {
+/// The whole of the client, so that main() can be nothing but the guard that
+/// stops an exception from escaping into std::terminate.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+int run(int argc, char* argv[]) {
   // Section 22 of SPEC.md asks for a startup under three seconds. Measuring it
   // from the first line of main is the closest this can get to what a person
   // experiences: everything before it belongs to the loader.
@@ -88,6 +91,7 @@ int main(int argc, char* argv[]) {
   if (!config_result) {
     // Logging is not up yet, so this is the one place that writes to stderr
     // directly.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     std::fprintf(stderr, "configuration error [%s]: %s\n", config_result.error().code.c_str(),
                  config_result.error().message.c_str());
     return 1;
@@ -145,7 +149,8 @@ int main(int argc, char* argv[]) {
   // The video section of the configuration, which until M8 was parsed, logged
   // and then ignored: the session used its own defaults, so setting a bitrate
   // or a resolution in the file changed nothing.
-  session_options.media.capture.max_size = {config.video.width, config.video.height};
+  session_options.media.capture.max_size = {.width = config.video.width,
+                                            .height = config.video.height};
   session_options.media.capture.max_fps = config.video.fps;
   session_options.media.video_min_bitrate_kbps = config.video.min_bitrate_kbps;
   session_options.media.video_max_bitrate_kbps = config.video.max_bitrate_kbps;
@@ -173,4 +178,20 @@ int main(int argc, char* argv[]) {
   DV_LOG_INFO("PartyShare client stopped with code {}", exit_code);
   dv::log::shutdown();
   return exit_code;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+  // Nothing is allowed to leave main. An exception escaping here is a
+  // std::terminate with no message, and a client that vanishes without one
+  // tells the person nothing about what happened.
+  try {
+    return run(argc, argv);
+  } catch (const std::exception& error) {
+    // The logger may not exist yet, or may be the thing that failed.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    std::fprintf(stderr, "fatal: %s\n", error.what());
+    return 1;
+  }
 }

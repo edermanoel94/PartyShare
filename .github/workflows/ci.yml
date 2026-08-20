@@ -256,28 +256,50 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy-18 cppcheck ninja-build libx11-dev
+          # libgl and the xcb libraries are here for Qt: find_package(Qt6) is
+          # QUIET, so without them the interface would be dropped from the
+          # database without a word, and the analysis would quietly cover less
+          # than it claims.
+          sudo apt-get install -y clang-18 clang-tidy-18 cppcheck ninja-build \
+            libx11-dev libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0
+
+      # The interface is analysed too, so the database has to describe it, which
+      # means Qt has to be here.
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          cache: true
 
       - name: Prepare vcpkg
         run: scripts/ci_vcpkg.sh
         shell: bash
 
+      # Built with clang, because clang-tidy is clang and reads these flags back
+      # verbatim. Qt's imported targets carry -mno-direct-extern-access under
+      # GCC, which clang does not know, and one unknown flag ends the run before
+      # a single check has a chance to say anything.
       - name: Generate the compilation database
         run: |
           cmake -S . -B build/analysis -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DDV_BUILD_CLIENT_UI=OFF
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18
 
-      # The client core is analysed too. It has no Qt in it, which is why the
-      # interface is the only thing turned off above, and it is where the
-      # threading lives.
+      # Everything that is ours, interface included. The Qt idiom the checks
+      # cannot read about is answered in client/src/ui/.clang-tidy, not by
+      # leaving the directory unanalysed.
+      #
+      # client/src/webrtc is the exception, and not a preference: it compiles
+      # only with libwebrtc, which this job does not build, so those files have
+      # no entry in the database and clang-tidy would have nothing to read.
       - name: clang-tidy
         run: |
-          find shared server \
-            client/src/app client/src/media client/src/network client/src/video \
-            -name '*.cpp' -print0 | xargs -0 clang-tidy-18 -p build/analysis
+          find shared server client/src -name '*.cpp' \
+            -not -path 'client/src/webrtc/*' \
+            -print0 | xargs -0 clang-tidy-18 -p build/analysis
 
       - name: cppcheck
         run: |

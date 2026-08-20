@@ -30,6 +30,16 @@ namespace proto = dv::protocol;
 
 constexpr auto kTimeout = 3000ms;
 
+/// Giving up gets its own, longer allowance, because what it waits for is not
+/// this client deciding anything: it is three TCP connections to a port nothing
+/// is listening on, and how fast that fails belongs to the operating system.
+/// Loopback refuses instantly on Linux and does not on Windows, where the same
+/// test took 3.25 seconds against a three second limit.
+///
+/// A state change that needs more than three seconds is a bug. Three refusals
+/// that do is a platform.
+constexpr auto kGiveUpTimeout = 15000ms;
+
 /// Collects what the client reports, from whatever thread it reports it on.
 class Recorder {
  public:
@@ -204,7 +214,7 @@ TEST_F(SignalingClientTest, GivesUpAfterTheAllowedNumberOfAttempts) {
 
   // A client that retries forever against a URL that will never answer is a
   // client that never tells anyone anything is wrong.
-  EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Failed, kTimeout));
+  EXPECT_TRUE(recorder.wait_for_state(SignalingClient::State::Failed, kGiveUpTimeout));
 }
 
 TEST_F(SignalingClientTest, WithReconnectionOffAFailureIsFinal) {

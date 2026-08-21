@@ -146,8 +146,19 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
   }
   const protocol::Message message = std::move(parsed).take();
 
-  // Authentication is the only thing an unauthenticated connection may do.
-  if (!state->user.has_value() && !std::holds_alternative<protocol::Authenticate>(message)) {
+  // Authentication is the only thing an unauthenticated connection may do, and
+  // the heartbeat is the exception, because it is not something the connection
+  // is doing. Section 4.5 of docs/protocol.md is titled "Transport level" for
+  // that reason: the server pings every connection it holds, authenticated or
+  // not, and a pong is the socket saying it is still there.
+  //
+  // Refusing it produced a loop nobody could leave. A client that mistyped a
+  // password kept the socket, answered every ping, and was told `unauthorized`
+  // for it once per heartbeat interval, for as long as the window stayed open.
+  const bool is_heartbeat = std::holds_alternative<protocol::Ping>(message) ||
+                            std::holds_alternative<protocol::Pong>(message);
+  if (!state->user.has_value() && !is_heartbeat &&
+      !std::holds_alternative<protocol::Authenticate>(message)) {
     reply_error(out, connection, unauthorized("authenticate before sending anything else"));
     return out;
   }

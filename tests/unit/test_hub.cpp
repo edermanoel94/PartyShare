@@ -116,6 +116,19 @@ TEST_F(HubTest, EverythingIsRejectedBeforeAuthentication) {
   EXPECT_EQ(error->code, "unauthorized");
 }
 
+// The exception to the rule above, and the reason it exists: the server pings
+// every connection it holds, including one that has not authenticated, so
+// refusing the answer means telling a client at the login screen `unauthorized`
+// once per heartbeat interval until it gives up or the window closes.
+TEST_F(HubTest, TheHeartbeatIsAnsweredBeforeAuthentication) {
+  const ConnectionId connection = connect();
+
+  const auto out = send(connection, proto::Pong{});
+
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, connection).has_value())
+      << "a pong from an unauthenticated connection was refused";
+}
+
 TEST_F(HubTest, ASecondLoginDetachesTheOlderConnection) {
   const auto [first, user] = login("ana");
   const std::string room = create_room(first, user.id);

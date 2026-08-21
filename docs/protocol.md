@@ -56,7 +56,9 @@ A persistent room outlives its last participant, so its identifier keeps working
 Only an administrator may ask for one, and anyone else asking is answered with `forbidden` rather than quietly given an ordinary room.
 
 `authenticate` has to be the first message on the connection.
-Anything else before it is answered with an `error` carrying code `unauthorized`.
+Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.5.
+`ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.
+Without that exception the two rules contradict each other, and a connection that failed to authenticate is told `unauthorized` once per heartbeat interval for as long as it stays open.
 
 The password appears only in that message.
 The server never echoes it back and never writes it to a log.

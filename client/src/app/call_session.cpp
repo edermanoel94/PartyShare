@@ -84,6 +84,24 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
 
   set_state(State::Connecting, options_.signaling_url);
 
+  // A second attempt on a socket that is already up is a retry after a refused
+  // password, not a second connection. The server does not close the socket
+  // when it refuses one - section 4.1 of docs/protocol.md answers with an error
+  // and leaves the connection standing - so connect() would report
+  // `already_connected` and the interface would show "disconnect() before
+  // connecting again", which is a sentence written for whoever wrote the call
+  // and not for whoever mistyped their password. Worse, the button then did
+  // nothing at all: the only way back was to close the window.
+  if (signaling_.is_connected()) {
+    if (auto sent =
+            signaling_.send(protocol::Authenticate{.username = username, .password = password});
+        !sent) {
+      set_state(State::Failed, sent.error().message);
+      return sent;
+    }
+    return std::monostate{};
+  }
+
   if (auto connected = signaling_.connect(); !connected) {
     set_state(State::Failed, connected.error().message);
     return connected;

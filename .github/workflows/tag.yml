@@ -96,7 +96,12 @@ jobs:
             exit 0
           fi
           echo "changed files:"
-          echo "$changed" | sed 's/^/  /'
+          # awk rather than sed, because shellcheck reads a sed that only
+          # rewrites the start of a line as a parameter expansion written the
+          # long way, and this one cannot be: it indents every line, not one
+          # string. Both readings are fine; the linter's is the one that has to
+          # pass.
+          echo "$changed" | awk '{print "  " $0}'
 
           if echo "$changed" | grep -qvE '\.md$'; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
@@ -134,11 +139,14 @@ jobs:
           labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
             --jq '.[].labels[].name' 2>/dev/null || true)"
 
-          level=patch
+          # Quoted, all three: `patch` is also the name of a program, and an
+          # unquoted assignment of a bare word that happens to be a command is
+          # the shape of a mistake often enough that shellcheck refuses it.
+          level="patch"
           if echo "$labels" | grep -qx 'major'; then
-            level=major
+            level="major"
           elif echo "$labels" | grep -qx 'minor'; then
-            level=minor
+            level="minor"
           fi
           echo "level=$level" >> "$GITHUB_OUTPUT"
           echo "::notice::bumping the ${level}"

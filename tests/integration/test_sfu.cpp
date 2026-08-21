@@ -361,13 +361,25 @@ class Participant {
     const std::lock_guard<std::mutex> lock(mutex_);
     return incoming_video_.size();
   }
-  [[nodiscard]] bool has_outgoing_track() {
+  /// Whether this participant can send on its microphone track yet.
+  ///
+  /// Open, and not merely present. The two are different moments and the tests
+  /// below depend on the second one: onTrack fires when the remote description
+  /// is applied, which is well before DTLS finishes, so the track object exists
+  /// for a while during which send() has nowhere to put a packet.
+  ///
+  /// Waiting on existence and then calling send_audio was a race the whole file
+  /// carried. It lost it under AddressSanitizer with five participants, where
+  /// the gap between the two moments is widest, and the failure read as
+  /// `send_audio(50)` returning false for no stated reason.
+  [[nodiscard]] bool has_open_outgoing_track() {
     const std::lock_guard<std::mutex> lock(mutex_);
-    return outgoing_ != nullptr;
+    return outgoing_ != nullptr && outgoing_->isOpen();
   }
-  [[nodiscard]] bool has_outgoing_video_track() {
+  /// The same, for the screen share.
+  [[nodiscard]] bool has_open_outgoing_video_track() {
     const std::lock_guard<std::mutex> lock(mutex_);
-    return outgoing_video_ != nullptr;
+    return outgoing_video_ != nullptr && outgoing_video_->isOpen();
   }
 
  private:
@@ -472,7 +484,7 @@ TEST_F(SfuTest, TheServerOffersAsSoonAsAParticipantJoins) {
   // One session, and the offer that carries the participant's own microphone.
   EXPECT_TRUE(wait_until([&] { return server_->media_router()->session_count() == 1; }));
   EXPECT_TRUE(wait_until([&] { return !ana.last_offer_sdp().empty(); }));
-  EXPECT_TRUE(wait_until([&] { return ana.has_outgoing_track(); }));
+  EXPECT_TRUE(wait_until([&] { return ana.has_open_outgoing_track(); }));
 
   // Alone in the room, there is nobody to listen to yet.
   EXPECT_EQ(server_->media_router()->outbound_track_count(ana.user().id), 0U);
@@ -518,7 +530,7 @@ TEST_F(SfuTest, AudioReachesTheOtherParticipant) {
 
   // Both ends have to have finished the renegotiation that added the tracks.
   ASSERT_TRUE(wait_until([&] { return bruno.incoming_track_count() >= 1; }));
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_track(); }));
 
   ASSERT_TRUE(ana.send_audio(50));
 
@@ -561,7 +573,7 @@ TEST_F(SfuTest, FiveParticipantsEachGetFourTracks) {
   }
 
   // One of them talking has to reach the other four.
-  ASSERT_TRUE(wait_until([&] { return everyone.back()->has_outgoing_track(); }));
+  ASSERT_TRUE(wait_until([&] { return everyone.back()->has_open_outgoing_track(); }));
   ASSERT_TRUE(everyone.back()->send_audio(50));
 
   EXPECT_TRUE(wait_until([&] { return router->audio_packets_forwarded() >= 4; }))
@@ -601,7 +613,7 @@ TEST_F(SfuTest, EverySessionHasItsVideoTracksFromTheStart) {
   // what makes starting and stopping a share cost no renegotiation, which
   // section 5.2 of SPEC.md needs to work without interrupting the call.
   EXPECT_TRUE(wait_until([&] { return router->has_video_tracks(ana.user().id); }));
-  EXPECT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }))
+  EXPECT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }))
       << "the participant was never offered an m-line to send its screen on";
   EXPECT_TRUE(wait_until([&] { return ana.incoming_video_track_count() == 1; }))
       << "the participant was never offered the shared screen";
@@ -620,7 +632,7 @@ TEST_F(SfuTest, OneParticipantsScreenReachesTheOthers) {
 
   ASSERT_TRUE(ana.wait_until_media_connected());
   ASSERT_TRUE(bruno.wait_until_media_connected());
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
   ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
 
   ASSERT_TRUE(ana.send_video(50));
@@ -651,7 +663,7 @@ TEST_F(SfuTest, TheSlowestViewerLimitsWhatTheSharerIsAskedFor) {
 
   ASSERT_TRUE(ana.wait_until_media_connected());
   ASSERT_TRUE(bruno.wait_until_media_connected());
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
   ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
 
   // The share has to be flowing first: what the SFU asks for is only sent
@@ -693,7 +705,7 @@ TEST_F(SfuTest, APaddedPacketIsDroppedRatherThanTakingTheServerDown) {
 
   ASSERT_TRUE(ana.wait_until_media_connected());
   ASSERT_TRUE(bruno.wait_until_media_connected());
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
   ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
 
   ASSERT_TRUE(ana.send_padded_video(20));
@@ -725,8 +737,8 @@ TEST_F(SfuTest, VideoAndAudioTravelWithoutGettingMixedUp) {
 
   ASSERT_TRUE(ana.wait_until_media_connected());
   ASSERT_TRUE(bruno.wait_until_media_connected());
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_track(); }));
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
 
   ASSERT_TRUE(ana.send_audio(30));
   ASSERT_TRUE(ana.send_video(30));
@@ -755,7 +767,7 @@ TEST_F(SfuTest, AKeyframeRequestReachesTheSharer) {
 
   ASSERT_TRUE(ana.wait_until_media_connected());
   ASSERT_TRUE(bruno.wait_until_media_connected());
-  ASSERT_TRUE(wait_until([&] { return ana.has_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
   ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
 
   // Video has to be flowing first, which is also the situation this is for: a

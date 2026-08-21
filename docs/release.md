@@ -7,21 +7,35 @@ A binary published from a laptop is a binary whose contents nobody can reproduce
 
 ## Cutting a release
 
-```sh
-# 1. The version lives in one place only.
-$EDITOR CMakeLists.txt        # project(partyshare VERSION x.y.z)
-$EDITOR vcpkg.json            # the same number
+Nothing. Merging code into `master` is cutting a release.
 
-# 2. Commit, tag, push.
-git commit -am "Version x.y.z"
-git tag vx.y.z
-git push origin master vx.y.z
-```
+`.github/workflows/tag.yml` runs on every push to `master` and does what a person used to have to remember: work out the next version, write it into `CMakeLists.txt` and `vcpkg.json`, commit that line back, write the annotated tag, and ask `release.yml` for the artifacts.
 
-The tag triggers `.github/workflows/release.yml`.
-Nothing beyond the tag is needed: the workflow builds, tests what can be tested, and publishes.
+| What was merged | What comes out |
+| --- | --- |
+| Anything that touches code | The patch: 0.1.0 becomes 0.1.1 |
+| A pull request labelled `minor` | 0.1.0 becomes 0.2.0 |
+| A pull request labelled `major` | 0.1.0 becomes 1.0.0 |
+| Only `.md` files | Nothing. No bump, no tag, no release |
 
-To exercise the pipeline without cutting a release, use `workflow_dispatch` from the GitHub interface.
+The label is read off the pull request the merge commit belongs to, which the API answers for a squash merge and a merge commit alike.
+Patch is the default because it is the honest answer for most merges: a change that neither adds a feature nor breaks one.
+It is a label rather than a commit message convention because the messages here are narrative sentences, and a machine-readable prefix would cost more than it buys.
+
+Documentation is left alone for the same reason `ci.yml` ignores it: no install rule packages a Markdown file and no test reads one, so a merge that changes nothing else would produce bytes identical to the release before it.
+Two tags pointing at the same binaries is a question somebody has to answer later, and there is no good answer.
+The filter needs *every* changed file to be Markdown, so a commit that edits a header and the page documenting it still releases.
+
+### When the automatic number is the wrong one
+
+Edit the version in the pull request, the way it used to be done.
+A push that already raises `VERSION` is tagged as written rather than raised a second time, which is the way to jump to 2.0.0, or to cut something the two labels cannot express.
+
+Remember `vcpkg.json` carries the same number, and that both have to move together.
+
+### Exercising the pipeline
+
+`workflow_dispatch` on `release.yml`, from the GitHub interface.
 It builds everything and publishes nothing, because a release without a tag has no version to be.
 
 ## What the tag produces
@@ -35,8 +49,11 @@ It builds everything and publishes nothing, because a release without a tag has 
 | `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
 | `SHA256SUMS` | - | Generated over whatever exists |
 
-The `publish` job runs with `always()` and requires only that the Linux job passed.
-A failing macOS job cannot hold back a Linux artifact that is already built and tested: partial is a worse release than complete, and a much better one than none.
+The `publish` job runs with `always()` and requires that either the Windows or the macOS job passed.
+A failing macOS job cannot hold back a Windows artifact that is already built: partial is a worse release than complete, and a much better one than none.
+
+The Linux job is not among them, and is off entirely behind the `RELEASE_LINUX` repository variable: `scripts/build_webrtc.sh` cannot get past the depot_tools bootstrap on a runner, and without libwebrtc there is no AppImage.
+So an automatic release today carries the Windows and macOS artifacts and no Linux one, which is worth knowing before the first tag that nobody asked for arrives.
 
 ## Linux
 

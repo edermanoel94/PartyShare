@@ -8,17 +8,24 @@ name: Tag
 # v0.2.0 carrying partyshare-0.1.0-windows-x64.msi is a release nobody can
 # reason about afterwards.
 #
-# So bumping a version is editing that one line in a pull request, and this job
-# is only the part nobody should have to remember: noticing that master now says
-# something no tag says yet, and writing the tag.
+# What this job used to do was only notice that master said something no tag said
+# yet. Bumping was a person's job, in a pull request. Now the bump is the job's
+# too: every merge to master that touches code raises the patch, writes the line
+# back into CMakeLists.txt, tags it and asks for the release.
+#
+# Three things keep that from being reckless, and each has its own step below: a
+# merge that only edits Markdown is left alone, a version raised by hand in the
+# pull request is honoured rather than raised a second time, and the commit this
+# job makes is recognised and ignored if it ever comes back around.
 
 on:
   push:
     branches: [master]
 
 permissions:
-  contents: write   # create the tag
-  actions: write    # dispatch the release below
+  contents: write       # push the bump commit, then the tag
+  actions: write        # dispatch the release below
+  pull-requests: read   # read the label that chooses the component
 
 concurrency:
   group: tag-master
@@ -26,60 +33,246 @@ concurrency:
 
 jobs:
   tag:
-    name: Tag the version in CMakeLists.txt
+    name: Bump the version, tag it, release it
     if: github.repository == 'edermanoel94/PartyShare'
     runs-on: ubuntu-24.04
     steps:
-      # No shallow clone: the tag check below asks the remote directly, but a
-      # tag object still has to be written against real history.
+      # No shallow clone: this job diffs the push against what came before it,
+      # and writes a commit and a tag against real history.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Read the version
+      # A push made with GITHUB_TOKEN does not start a workflow - GitHub refuses
+      # to let a run create a run - so the bump commit below cannot trigger this
+      # job again, and the loop this would otherwise be does not exist.
+      #
+      # The guard is here anyway, because that protection lives in the token and
+      # not in the workflow: the day somebody swaps GITHUB_TOKEN for a PAT to get
+      # past a branch protection rule, the loop becomes real and this is the only
+      # thing standing in front of it.
+      - name: Is this the bump commit coming back around?
+        id: guard
+        run: |
+          set -euo pipefail
+          subject="$(git log -1 --format=%s)"
+          if [[ "$subject" =~ ^partyshare\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::'${subject}' is this job's own commit, nothing to do"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The same stance ci.yml takes with paths-ignore, for the same reason: no
+      # install rule packages a Markdown file and no test reads one, so a merge
+      # that changes nothing else produces bytes identical to the release before
+      # it. Two tags pointing at the same binaries is a question somebody has to
+      # answer later, and there is no good answer.
+      #
+      # Every changed file has to match for the run to stop, so a commit that
+      # edits a header and the page documenting it still releases. That is the
+      # property worth keeping: the risk in a filter like this is never the
+      # documentation, it is the source change riding along with it.
+      - name: Did this push touch anything but documentation?
+        id: changes
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
+          # All zeroes is how a push reports "there was nothing here before",
+          # which on master means the branch was just created. The head commit
+          # alone is the best answer available then.
+          if [[ "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            changed="$(git show --pretty=format: --name-only "$GITHUB_SHA")"
+          else
+            changed="$(git diff --name-only "$before" "$GITHUB_SHA")"
+          fi
+          changed="$(echo "$changed" | sed '/^$/d')"
+
+          if [[ -z "$changed" ]]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::this push changed no files"
+            exit 0
+          fi
+          echo "changed files:"
+          # awk rather than sed, because shellcheck reads a sed that only
+          # rewrites the start of a line as a parameter expansion written the
+          # long way, and this one cannot be: it indents every line, not one
+          # string. Both readings are fine; the linter's is the one that has to
+          # pass.
+          echo "$changed" | awk '{print "  " $0}'
+
+          if echo "$changed" | grep -qvE '\.md$'; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::documentation only, no version to cut"
+          fi
+
+          # The escape hatch that used to be the whole mechanism. Somebody who
+          # wants 0.1.0 to become 2.0.0, or who is cutting something the labels
+          # cannot express, edits the line in the pull request and this job tags
+          # what they wrote instead of raising it again on top.
+          if git diff "$before" "$GITHUB_SHA" -- CMakeLists.txt | grep -qE '^\+  VERSION '; then
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::the version was raised by hand in this push"
+          else
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Patch is the default because it is the honest answer for most merges: a
+      # change that neither adds a feature nor breaks one. A pull request that is
+      # more than that says so with a label, which leaves the commit messages
+      # alone - they are narrative sentences here, and a convention that needed a
+      # machine-readable prefix would cost more than it buys.
+      #
+      # The endpoint answers for squash merges and merge commits alike, so the
+      # label is found whichever way the pull request landed.
+      - name: Which component does this bump?
+        id: level
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[].labels[].name' 2>/dev/null || true)"
+
+          # Quoted, all three: `patch` is also the name of a program, and an
+          # unquoted assignment of a bare word that happens to be a command is
+          # the shape of a mistake often enough that shellcheck refuses it.
+          level="patch"
+          if echo "$labels" | grep -qx 'major'; then
+            level="major"
+          elif echo "$labels" | grep -qx 'minor'; then
+            level="minor"
+          fi
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "::notice::bumping the ${level}"
+
+      - name: Work out the next version
         id: version
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false'
         run: |
           set -euo pipefail
           # The same expression scripts/appimage.sh uses, deliberately: two
           # readers of one line should not disagree about how to read it.
-          version="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)"
-          if [[ -z "$version" ]]; then
+          current="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)"
+          if [[ -z "$current" ]]; then
             echo "::error::could not read the version out of CMakeLists.txt"
             exit 1
           fi
           # Semver, and checked rather than assumed: CPack and WiX both reject a
           # version they cannot parse, and finding that out here costs a second
           # while finding it out in the release job costs the whole build.
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::'$version' is not MAJOR.MINOR.PATCH"
+          if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$current' is not MAJOR.MINOR.PATCH"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "CMakeLists.txt says $version"
+
+          if [[ "${{ steps.changes.outputs.manual }}" == "true" ]]; then
+            next="$current"
+            echo "needs_commit=false" >> "$GITHUB_OUTPUT"
+          else
+            IFS=. read -r major minor patch <<< "$current"
+            case "${{ steps.level.outputs.level }}" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              *)     patch=$((patch + 1)) ;;
+            esac
+            next="${major}.${minor}.${patch}"
+            echo "needs_commit=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+          echo "$current -> $next"
 
       # Asked of the remote rather than of the local clone, because the answer
-      # that matters is whether the tag exists on GitHub. This is also what makes
-      # the job idempotent: every push to master runs it, and all but the ones
-      # that follow a version bump stop here.
+      # that matters is whether the tag exists on GitHub. Nothing below this
+      # point runs twice for the same version, which is what makes the job safe
+      # to re-run by hand after a failure.
       - name: Has this version been tagged?
         id: check
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false'
         run: |
           set -euo pipefail
           tag="${{ steps.version.outputs.tag }}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "${tag} is already there, nothing to do"
+            echo "::notice::${tag} is already there, nothing to do"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "${tag} does not exist yet"
           fi
+
+      # The line goes back into master before the tag is written, so the tag
+      # points at a tree whose CMakeLists.txt already says what the tag says. A
+      # tag on the commit before the bump would name a version that the sources
+      # under it disagree with, which is the exact failure the comment at the top
+      # of this file is about.
+      - name: Write the version into CMakeLists.txt and vcpkg.json
+        id: commit
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false' && steps.check.outputs.exists == 'false' && steps.version.outputs.needs_commit == 'true'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+
+          # Anchored to the two spaces and the line ending, the same shape the
+          # reader above matches, so a VERSION mentioned anywhere else in the
+          # file - a dependency's, a comment's - is not what gets rewritten.
+          sed -i "s/^  VERSION [0-9.]*$/  VERSION ${version}/" CMakeLists.txt
+
+          written="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)"
+          if [[ "$written" != "$version" ]]; then
+            echo "::error::CMakeLists.txt says '${written}' after the edit, expected '${version}'"
+            exit 1
+          fi
+
+          # vcpkg.json carries the same number, and docs/release.md has always
+          # said to keep the two equal. By hand that was a thing to remember; on
+          # every merge it is a thing to forget, and twenty merges later
+          # CMakeLists.txt would say 0.1.21 next to a manifest still saying
+          # 0.1.0. Nothing in the build reads it - the field names the manifest
+          # itself - but a number that is wrong and unread is still wrong, and it
+          # is read by people.
+          sed -i "s/^  \"version\": \"[0-9.]*\",$/  \"version\": \"${version}\",/" vcpkg.json
+          manifest="$(sed -n 's/^  "version": "\([0-9.]*\)",$/\1/p' vcpkg.json | head -1)"
+          if [[ "$manifest" != "$version" ]]; then
+            echo "::error::vcpkg.json says '${manifest}' after the edit, expected '${version}'"
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Two -m rather than a heredoc: a here-document inside a YAML block
+          # scalar carries the block's indentation into the message, and its
+          # terminator has to sit at column zero, which this file has no way to
+          # give it. The subject is what the guard step above matches on.
+          git add CMakeLists.txt vcpkg.json
+          git commit \
+            -m "partyshare ${version}" \
+            -m "A versão que este merge produziu, escrita de volta na única linha que a guarda. Commit automático de .github/workflows/tag.yml, que a partir daqui escreve a tag v${version} e pede a release."
+
+          # Somebody may have merged while this job was running, and pushing on
+          # top of that would tag a master nobody looked at. The concurrency
+          # group makes that rare rather than impossible, so it is checked rather
+          # than assumed: the next push runs this job again and the version it
+          # works out will be the right one, which is a better outcome than a
+          # forced push here.
+          git fetch origin master
+          head="$(git rev-parse origin/master)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error::master moved to ${head} while this ran; the next push will pick it up"
+            exit 1
+          fi
+          git push origin "HEAD:master"
 
       # Annotated, not lightweight: an annotated tag carries who made it and
       # when, which is the difference between a release you can date and a
       # pointer to a commit.
       - name: Create the tag
-        if: steps.check.outputs.exists == 'false'
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false' && steps.check.outputs.exists == 'false'
         run: |
           set -euo pipefail
           tag="${{ steps.version.outputs.tag }}"
@@ -100,7 +293,7 @@ jobs:
       # github.ref inside that run refs/tags/v..., and the publish job checks
       # exactly that before it uploads anything.
       - name: Ask for the release
-        if: steps.check.outputs.exists == 'false'
+        if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false' && steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

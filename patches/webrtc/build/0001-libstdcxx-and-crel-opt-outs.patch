@@ -1,0 +1,55 @@
+diff --git a/config/compiler/BUILD.gn b/config/compiler/BUILD.gn
+index d76ab929f..43d418f14 100644
+--- a/config/compiler/BUILD.gn
++++ b/config/compiler/BUILD.gn
+@@ -51,6 +51,23 @@ if (!is_clang) {
+ declare_args() {
+   # This allows overriding the location of lld.
+   lld_path = default_lld_path
++
++  # Turn off ELF CREL relocations.
++  #
++  # Only lld reads them, so a library that carries them forces every consumer to
++  # link with lld as well - including a Qt client that has no other reason to
++  # care which linker it uses.
++  dv_disable_crel = false
++
++  # Header directories of an external libstdc++, ahead of whatever the machine
++  # has.
++  #
++  # WebRTC builds against Chromium's libc++ by default, which is a different
++  # standard library from the one Qt uses, and the two cannot meet in one
++  # binary. use_custom_libcxx=false picks the system one instead, and the range
++  # that works is narrow enough that "the system one" is not good enough: it has
++  # to be a pinned version. Empty leaves the toolchain exactly as it was.
++  dv_libstdcxx_include_dirs = []
+ }
+ 
+ declare_args() {
+@@ -293,7 +310,15 @@ use_clang_warning_suppression_file =
+ # source root and might have conflicting versions of some headers) can remove
+ # this and specify their own include paths.
+ config("default_include_dirs") {
+-  include_dirs = [
++  # The pinned headers first, so they win over whatever the machine has
++  # installed. The order within the list is the caller's: libstdc++ wants the
++  # version directory, then the target one, then backward. Empty by default,
++  # which leaves this exactly as it was.
++  #
++  # Assigned rather than prepended afterwards, because GN refuses to replace a
++  # list that already holds something.
++  include_dirs = dv_libstdcxx_include_dirs
++  include_dirs += [
+     "//",
+     root_gen_dir,
+   ]
+@@ -662,7 +687,8 @@ config("compiler") {
+     # TODO(crbug.com/376278218): This causes segfault on Linux ARM builds.
+     # It also causes segfault on Linux s390x:
+     # https://github.com/llvm/llvm-project/issues/149511
+-    if (is_linux && use_lld && current_cpu != "arm" && current_cpu != "s390x") {
++    if (is_linux && use_lld && !dv_disable_crel && current_cpu != "arm" &&
++        current_cpu != "s390x") {
+       cflags += [ "-Wa,--crel,--allow-experimental-crel" ]
+     }
+   }

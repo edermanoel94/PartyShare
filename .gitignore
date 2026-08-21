@@ -6,8 +6,9 @@
 # build/0001-libstdcxx-and-crel-opt-outs.patch was never committed because
 # `git add` refused it silently. scripts/build_webrtc.sh passes the two GN
 # arguments that patch declares, so a clone that has never seen the file
-# fails at gn gen, and the Linux media layer builds only on machines where
-# it happens to exist untracked.
+# arguments that patch declares. GN answers an argument it does not know with
+# a warning and a zero exit, so the build does not fail - it produces a library
+# against the wrong libstdc++, with CREL relocations left on.
 /build/
 /out/
 /install/

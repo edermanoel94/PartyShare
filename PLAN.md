@@ -238,16 +238,29 @@ m152, now measured by a two line probe at configure time. `libyuv` in a differen
 `#include <array>` in `test_benchmark.cpp`, latent for as long as the file has existed, because libstdc++ brings it
 in by transitivity and the MSVC standard library does not.
 
-The result is a `partyshare.exe` of 30 MB with Qt, libwebrtc and OpenSSL in it, and 24 of 25 media tests passing.
-The one that fails, `TheEchoCancellerRunsOnTheCapturedAudio`, fails in an interesting way: the call connects, the
-audio flows at a round trip of 1 ms with nothing lost, and AEC3 never reports itself as running. That is written
-down rather than fixed, because what it means is not yet known.
+The result is a `partyshare.exe` of 30 MB with Qt, libwebrtc and OpenSSL in it, and all 25 media tests passing.
+
+One of them took a second pass to understand, and the answer inverted the first reading.
+`TheEchoCancellerRunsOnTheCapturedAudio` failed, and the note here said AEC3 never reported itself as running,
+without knowing why. It is not that echo cancellation was off. Windows has a canceller of its own; libwebrtc asks
+the audio device whether it does, enables it, and switches AEC3 off for it - `webrtc_voice_engine.cc` says
+*"Disabling EC since built-in EC will be used instead"* on the way past. `echo_return_loss` is an AEC3 metric, so
+there was nothing to read, and the echo was being cancelled the whole time.
+
+The test asserted "AEC3 reports echo return loss" as a stand-in for "echo is being cancelled", and the two are the
+same thing only on a platform that has no canceller of its own. The field is called `echo_cancellation_active`,
+and answering false on a machine that is cancelling echo is worse than answering nothing, so the fix went into the
+metric rather than into the test: it is true when AEC3 reports its loss, and true when the platform's own canceller
+is the one running. The paired test that turns cancellation off still tells the two apart.
 
 And one finding that has nothing to do with Windows. `.gitignore` matched `build/` at any depth, which includes
 `patches/webrtc/build/`, so the patch this repository documents for the Linux source build was never committed -
 `git add` refused it without a word. `scripts/build_webrtc.sh` passes the two GN arguments only that patch declares,
-so the Linux media layer builds from a fresh clone on no machine at all, and works today only where the file happens
-to sit untracked. The rule is anchored to the root now; the patch itself still has to come back from whoever has it.
+and GN answers an argument it does not know with a warning and a zero exit rather than an error. So the build from a
+fresh clone does not fail, it succeeds and produces the wrong library: linked against whatever libstdc++ the machine has
+instead of the pinned one, with the CREL relocations left on that force every consumer to link with lld. It worked only
+where the file happened to sit untracked, and nowhere else, quietly. The rule is anchored to the root now and the patch
+is reconstructed from what the toolchain document describes, which is not the same as having run it on Linux.
 
 ---
 ### M4 - Vertical slice: audio between two clients

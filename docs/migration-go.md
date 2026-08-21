@@ -58,6 +58,68 @@ Settled before G2, because everything after depends on them.
 | Tests | Standard `testing` | With `-race`, which is the reason section 7 exists. |
 | CGO | Off | pion, the Mongo driver and scrypt are pure Go. `CGO_ENABLED=0` gives one static binary per platform from one machine, which is the packaging half of the whole argument. |
 
+### 3.1 The libraries, against the criteria
+
+A table of decisions is worth nothing without the check behind it, so this is the check.
+The criteria are not general ones: they are what `server/src` does today and what `docs/protocol.md` obliges anybody who replaces it to keep doing.
+
+Status means one of three things.
+**Confirmed** is an API read in the library's own documentation that does the stated thing.
+**Named** is an API that exists and is the obvious answer, with the behaviour our protocol needs not yet observed.
+**Spike** is a question no documentation can settle, because the answer is what our client does when it receives the result.
+
+| Criterion, from the current server | Library and API | Status |
+| --- | --- | --- |
+| The server is always the offerer and owns the mids | `PeerConnection.CreateOffer`, `AddTrack` before negotiating | Confirmed |
+| Forward RTP without decoding, rewriting SSRC and payload type | `TrackLocalStaticRTP.WriteRTP`, which binds per sender and rewrites on write | Confirmed |
+| `a=msid:<user_id>` on each sendonly audio line | `NewTrackLocalStaticRTP(cap, id, streamID)`, stream id set to the user id | Named. The msid pion writes is `<streamID> <trackID>`, two tokens, and what the client reads out of it is a spike question |
+| Opus at 111 and H.264 at 96, named by us | `MediaEngine.RegisterCodec(RTPCodecParameters, ...)`, which carries the payload type | Confirmed |
+| `a=rtcp-fb:96 nack` and `goog-remb` in the offer we write | `MediaEngine.RegisterFeedback(RTCPFeedback, ...)` | Confirmed |
+| Answer a viewer's NACK from a cache of recent packets | `interceptor/pkg/nack.ResponderInterceptor` | Named |
+| Ask the sharer to resend what was lost upstream | `interceptor/pkg/nack.GeneratorInterceptor` | Named. This is the half libdatachannel never had, and the reason `video_feedback.cpp` exists |
+| Pass a viewer's PLI up to the sharer | `RTPSender.Read` to see it, `PeerConnection.WriteRTCP` to send it up | Confirmed |
+| Send REMB to the sharer once a second | `PeerConnection.WriteRTCP([]rtcp.Packet)`, with `rtcp.ReceiverEstimatedMaximumBitrate` | Named |
+| Read what a viewer says it can take | `RTPSender.Read`, parsed for REMB | Named |
+| Demultiplex arriving media by the SSRC in `a=ssrc` | pion's own track resolution | Spike. Section 4.3 says media without it is dropped on arrival; what pion does in its absence has to be seen, not assumed |
+| One JSON message per text frame, and a reader that can time out on the heartbeat | `websocket.Accept`, `wsjson.Read(ctx, ...)` with a deadline on the context | Confirmed |
+| One reader goroutine, writes from the hub loop | Documented: all methods may be called concurrently except `Reader` and `Read` | Confirmed, and it is exactly the shape section 7 asks for |
+| The same documents, indexes and short timeout | `go.mongodb.org/mongo-driver/v2`, already writing them | Confirmed by `tools/dbadmin` running against MongoDB in CI |
+| scrypt, N of 2^14, r of 8, p of 1, 32 bytes, salt as hex text | `golang.org/x/crypto/scrypt` | Confirmed by `TestDerivedKeyMatchesTheServer`, which exists |
+| One static binary, no compiler on the target | All of the above are pure Go | Confirmed |
+
+**What reading the documentation already changed in this plan.**
+
+pion does not drain RTCP for you.
+Its own WHIP example is explicit about it: the receiving side has to loop on `receiver.ReadRTCP()` and every outgoing sender has to loop on `rtpSender.Read()`, and *without those loops RTCP feedback is silently dropped and never processed*.
+That is the M8 freeze with a different cause and the same symptom, and it is the kind of defect that produces a working demo and a frozen screen share at 5% loss.
+Two goroutines that look like they do nothing are load bearing, and G5 task 5 is not done until both exist.
+
+`TrackLocalStaticRTP.WriteRTP` copies the packet and allocates on every call.
+At five participants, one screen share and one packet becoming four forwarded ones, that is worth measuring in G5 rather than assuming, and pion offers lower level write paths if it turns out to matter.
+
+pion's own wiki states that the standard WebRTC API cannot express an SFU at all: reading, writing and modifying RTP, selecting streams, custom NACK handling.
+That is the reason pion and not a higher level library, and it is also the honest version of section 11: pion gives access, not answers.
+
+**What is rejected, and why.**
+
+LiveKit and similar are servers, not libraries.
+Adopting one is not a migration of this server, it is a replacement of the topology, the protocol and the bitrate rules with somebody else's, and the clients would have to change, which is the one thing this plan is built to avoid.
+
+`gorilla/websocket` would do.
+The deciding factor is small and stated so it can be overruled: every read here wants the heartbeat timeout expressed as a context deadline, and one library takes a context and the other takes a deadline on the connection.
+
+**The spike, and when.**
+
+Three of the rows above are marked Spike or turn on our client's behaviour, and all three are answered by the same half-week of work: one Go process using pion, one unmodified Qt client, one audio track.
+
+1. Does the client accept an offer pion writes, negotiate DTLS and produce audio?
+2. What does the client read out of `a=msid`, and does the stream id reach it as the speaker's identity?
+3. Does pion resolve arriving tracks the way section 4.3 requires, and what happens when `a=ssrc` is absent?
+
+**This spike runs before G2, not at G5.**
+Every milestone from G2 onward assumes the answer to question 1 is yes, and it is the only assumption in this document whose failure invalidates the rest of it.
+It costs days and it is placed before the milestones that cost weeks.
+
 ---
 
 ## 4. What the migration inherits
@@ -80,37 +142,52 @@ That is a specification a conformance suite can be generated from, which is what
 
 ## 5. Repository layout
 
-**Decision: one Go module at the repository root, with `tools/dbadmin` folded into it.**
+**Decision: the whole Go tree lives at `server/go/`, and nothing of it appears at the root.**
+
+The root of this repository is a CMake project and stays one.
+A `go.mod` beside `CMakeLists.txt`, with `cmd/` and `internal/` beside `client/` and `shared/`, would make Go the first thing the layout says about a project whose client is C++ and remains C++.
+The server is one of the three pieces described in the README, so it sits one directory deep, exactly like the other two.
 
 ```text
 PartyShare/
-├── go.mod                     module github.com/edermanoel94/PartyShare
-├── go.sum
-├── internal/
-│   ├── store/                 from tools/dbadmin/internal/store, now shared
-│   ├── protocol/              transcription of shared/protocol
-│   ├── models/                transcription of shared/models
-│   ├── config/                transcription of shared/config
-│   ├── signaling/             hub, authenticator, permissions, server
-│   ├── rooms/                 room manager
-│   └── sfu/                   media router, video feedback, bandwidth estimator
-├── cmd/
-│   ├── partyshare-server/
-│   └── dbadmin/               from tools/dbadmin/main.go
-├── tests/conformance/         see section 6
-├── server/                    the C++ server, until G7
-└── client/ shared/ ...        untouched
+├── CMakeLists.txt             still the root of a CMake project
+├── client/  shared/           untouched
+├── server/
+│   ├── CMakeLists.txt         the C++ server, until G7
+│   ├── src/                   idem
+│   └── go/
+│       ├── go.mod             module github.com/edermanoel94/PartyShare/server/go
+│       ├── go.sum
+│       ├── cmd/
+│       │   ├── partyshare-server/
+│       │   ├── dbadmin/       from tools/dbadmin
+│       │   └── conformance/   the driver of section 6
+│       └── internal/
+│           ├── store/         from tools/dbadmin/internal/store, now shared
+│           ├── protocol/      transcription of shared/protocol
+│           ├── models/        transcription of shared/models
+│           ├── config/        transcription of shared/config
+│           ├── signaling/     hub, authenticator, permissions, transport
+│           ├── rooms/         room manager
+│           └── sfu/           media router, video feedback, bandwidth estimator
+└── tests/
+    └── conformance/           the scenarios of section 6, JSON, no Go in them
 ```
 
-The alternative is a `go.work` over two or three modules, and the reason to reject it is in the CI file already:
+Every Go path named in this document is relative to `server/go/`.
+The binary keeps the name `partyshare-server`, so nothing outside the repository has to know which of the two it is talking to.
+
+**`tools/dbadmin` moves into that module, as `cmd/dbadmin`.**
+The reason to fold it rather than leave it is in the CI file already:
 the `dbadmin` job carries a comment about the one thing that can break silently in two places at once, a cost parameter changed in the tool locking every account out of the server.
-Folding the module makes that impossible rather than tested, because there is then one definition of `scryptCost` and one of every `bson` tag.
+Inside one module that stops being a thing to test and becomes a thing that cannot happen, because there is then one definition of `scryptCost` and one of every `bson` tag.
 
-The cost is a `go.mod` at the root of a repository whose root is CMake, and `go run ./cmd/dbadmin` where it used to be `cd tools/dbadmin && go run .`.
-Both are documentation changes, and `tools/dbadmin/README.md` gets them in G0.
+The alternative is leaving the tool under `tools/` as its own module and having it depend on this one through a `replace` directive.
+That keeps the directory name at the cost of a second `go.mod`, a second `go test ./...` in CI, and a relative path in a file nobody reads that is wrong the first time anything moves.
+The directory name is worth less than the single definition, so the tool moves, and `tools/dbadmin/README.md` becomes a pointer to where it went.
 
-The Go server lives at `cmd/partyshare-server` from the start and keeps the same binary name, so nothing outside the repository has to know which one it is talking to.
-`server/` stays where it is, building and passing its own tests, until G7 deletes it.
+At G7 the C++ half of `server/` is deleted and `server/go/` stays exactly where it is.
+Promoting it to `server/` afterwards is a rename that changes every import path in the module and buys a shorter path.
 
 ---
 
@@ -179,12 +256,13 @@ Sizes are relative. No week counts, because none has been measured.
 
 ### G0 - The module, and the tool inside it
 
-**Deliverables.** Root `go.mod`, `tools/dbadmin` moved to `cmd/dbadmin` and `internal/store`, CI job widened to the whole module.
+**Deliverables.** The module at `server/go/`, `tools/dbadmin` moved into it as `cmd/dbadmin` and `internal/store`, CI job widened to the whole module.
 
 **Tasks.**
-1. Create the root module; move the dbadmin packages; fix imports.
-2. Update `tools/dbadmin/README.md` and the `dbadmin` CI job's `working-directory` and `go-version-file`.
+1. Create the module; move the dbadmin packages; fix imports.
+2. Update `tools/dbadmin/README.md`, which becomes a pointer, and the `dbadmin` CI job's `working-directory`, `go-version-file` and `cache-dependency-path`.
 3. Add `cmd/partyshare-server` with a `main` that prints the usage text and exits, so the binary exists from the first commit.
+4. Confirm the format job is unaffected: it walks `shared client server tests tools` for `*.cpp` and `*.hpp`, so a Go tree under `server/` matches nothing it looks for.
 
 **Acceptance.** `gofmt -l .` empty, `go vet ./...` clean, `go build ./...`, `go test -race ./...` green against Mongo in CI, and dbadmin's behaviour unchanged from a user's seat.
 
@@ -192,7 +270,10 @@ Sizes are relative. No week counts, because none has been measured.
 
 ### G1 - The conformance suite, against the C++ server
 
-**Deliverables.** `tests/conformance/`: the driver, the scenario format of section 6, and the scenarios.
+**Deliverables.** The scenarios in `tests/conformance/`, and the driver that runs them in `cmd/conformance`.
+
+The scenarios are JSON and contain no Go, which is what lets them sit outside the module beside the C++ tests they describe.
+The driver is Go because it has to be one program, and it is the only Go in this milestone.
 
 **Tasks.**
 1. Driver: multi connection, variable capture, ordered and unordered expectations, timeouts.
@@ -204,6 +285,19 @@ Sizes are relative. No week counts, because none has been measured.
 A scenario that needs a change to the server is a scenario that found a defect or misread the document, and both are settled here rather than during the port.
 
 **Size.** Medium, and the highest value per line in the plan.
+
+### G1.5 - The pion spike
+
+Independent of G1 and runnable beside it. Whoever is not writing scenarios writes this.
+
+**Deliverables.** A throwaway program, and three answers written into section 3.1.
+
+**Tasks.** The three questions of section 3.1, against one unmodified Qt client: an offer pion writes and the client accepts, what the client reads out of `a=msid`, and how pion resolves an arriving track with and without `a=ssrc`.
+
+**Acceptance.** Audio from the client, through a pion process, back to a second client, with the speaker identified correctly.
+The program is then deleted; what survives is the three answers and whatever they changed in G5.
+
+**Size.** Days. It is the cheapest milestone here and the only one whose failure stops the plan, which is why it is not at the end.
 
 ### G2 - Protocol, models, configuration
 
@@ -262,6 +356,7 @@ Two Qt clients in a room, seeing each other, with no audio.
 3. Forwarding: `TrackLocalStaticRTP.WriteRTP`, which rewrites SSRC and payload type per binding. Opus at 111 and H.264 at 96, registered on the media engine so the offer we write names them.
 4. The immutable routing table behind `atomic.Pointer`, and the counters the metrics log reports.
 5. Repair: `nack.ResponderInterceptor` downstream, `nack.GeneratorInterceptor` upstream, PLI from a viewer passed up to the sharer.
+   The RTCP drain loops of section 3.1 are part of this task and not an implementation detail of it: without one loop per receiver and one per sender, every interceptor above is registered and does nothing.
 6. Bitrate: port `bandwidth_estimator.hpp` unchanged in its constants, send REMB once a second while a stream is arriving, cap it by the lowest a viewer reported, read viewer REMB off the sender.
 7. Renegotiation while an offer is in flight has to wait, as it does today.
 
@@ -291,10 +386,10 @@ The bar is the one the C++ set: 443 frames in 15 seconds at 5% loss, not 4, and 
 **Tasks.**
 1. Run both servers against the G1 suite in CI for the whole transition window, which is what keeps them from drifting.
 2. Switch the default, soak, keep the C++ binary buildable for one release.
-3. Delete `server/`, its tests, `dv::server_core` from the build, and the `libdatachannel` and `openssl` entries from `vcpkg.json` if nothing else needs them.
+3. Delete `server/src`, `server/CMakeLists.txt`, the server tests, `dv::server_core` from the build, and the `libdatachannel` and `openssl` entries from `vcpkg.json` if nothing else needs them. `server/go/` stays where it is.
 4. Move the Go server's documentation into `PLAN.md` and `SPEC.md` where they describe the server as C++.
 
-**Acceptance.** `server/` gone, the client untouched across the whole migration, and the G1 suite green against the only server left.
+**Acceptance.** Nothing C++ left under `server/`, the client untouched across the whole migration, and the G1 suite green against the only server left.
 
 ---
 
@@ -317,8 +412,9 @@ They are listed here because reading them is cheaper than finding them twice.
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| pion's SDP differs from libdatachannel's in a way the client notices | High | The one risk that invalidates the premise. Retired in G5 by the earliest possible test: one Qt client, one Go SFU, audio. Do it in the first days of G5, not at the end. |
-| `a=msid` reaching the client differently | Medium | pion writes `a=msid:<streamID> <trackID>`; the protocol says `a=msid:<user_id>`. Setting the stream id to the user id is the likely answer, and it is verified against the client rather than assumed. |
+| pion's SDP differs from libdatachannel's in a way the client notices | High | The one risk that invalidates the premise. Retired by the spike of section 3.1, which runs before G2 and not at G5, because everything after G2 assumes it away. |
+| `a=msid` reaching the client differently | Medium | pion writes `a=msid:<streamID> <trackID>`; the protocol says `a=msid:<user_id>`. Setting the stream id to the user id is the likely answer, and question 2 of the spike verifies it against the client rather than assuming it. |
+| RTCP feedback silently dropped | High | pion processes none of it unless something loops on `receiver.ReadRTCP` and on every `rtpSender.Read`. The failure mode is a working demo and a frozen screen share under loss, which is M8 again by another route. Section 3.1, and an assertion in G5 rather than a comment. |
 | Two protocol implementations drifting | Medium | The G1 suite runs against both for the whole window, and the window ends at G7. |
 | The single goroutine hub becoming a bottleneck | Low | Five participants per room. If it ever is one, the fix is a hub per room, which the room identifier already partitions cleanly. |
 | scrypt memory under a login flood | Medium | 16 MiB per attempt, bounded by a semaphore rather than by a mutex that happened to serialize it. Section 7. |

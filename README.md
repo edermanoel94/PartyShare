@@ -54,6 +54,7 @@ That is what makes it possible to reimplement the server in another language wit
 
 Prerequisites: CMake 3.25, Ninja 1.11, a C++20 compiler, and Qt 6.5 for the client.
 The server also needs libdatachannel and OpenSSL, neither of which is header only.
+[INSTALL.md](INSTALL.md) walks a fresh machine through the whole thing, from those prerequisites to a room with two clients in it.
 
 ```sh
 cmake --preset linux-release
@@ -235,6 +236,7 @@ PartyShare/
 | --- | --- |
 | [SPEC.md](SPEC.md) | The product specification and the acceptance criteria |
 | [PLAN.md](PLAN.md) | The milestones, what each one delivered, and the bugs found along the way |
+| [INSTALL.md](INSTALL.md) | The short path: prerequisites, build, run the server, run the client |
 | [docs/build.md](docs/build.md) | Building, presets, options and media debugging |
 | [docs/requirements.md](docs/requirements.md) | The hardware needed to run the client and the server |
 | [docs/protocol.md](docs/protocol.md) | The normative definition of the signaling protocol, roles included |

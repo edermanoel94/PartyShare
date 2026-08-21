@@ -155,9 +155,15 @@ target_include_directories(libwebrtc::libwebrtc SYSTEM INTERFACE
 if(WIN32)
   target_compile_definitions(libwebrtc::libwebrtc INTERFACE
     WEBRTC_WIN NOMINMAX WIN32_LEAN_AND_MEAN _WINSOCKAPI_ RTC_ENABLE_WIN_WGC)
+  # dwmapi comes with RTC_ENABLE_WIN_WGC above rather than on its own: Windows
+  # Graphics Capture asks the desktop window manager whether a window is cloaked
+  # before it captures it, and window_capture_utils.obj and wgc_capture_source.obj
+  # both call DwmGetWindowAttribute. Without it the link fails on that one symbol
+  # after everything else has resolved, which is how the first Windows build of
+  # the spike ended.
   target_link_libraries(libwebrtc::libwebrtc INTERFACE
     winmm ws2_32 secur32 dmoguids wmcodecdspuuid msdmo strmiids iphlpapi
-    dxgi d3d11 shcore)
+    dxgi d3d11 shcore dwmapi)
 
 elseif(APPLE)
   target_compile_definitions(libwebrtc::libwebrtc INTERFACE WEBRTC_POSIX WEBRTC_MAC)

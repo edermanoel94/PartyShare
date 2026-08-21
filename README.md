@@ -20,7 +20,9 @@ What is missing is stated plainly, because a number nobody measured is worth no 
 
 Two known gaps, both in M3:
 repeating the screen capture validation on a Wayland session,
-and running the libwebrtc spike on Windows and macOS following [docs/webrtc-validation.md](docs/webrtc-validation.md).
+and running the libwebrtc spike on macOS following [docs/webrtc-validation.md](docs/webrtc-validation.md).
+The Windows half of that second gap is closed: the spike passes there, and what it cost is in
+[docs/webrtc-toolchain.md](docs/webrtc-toolchain.md).
 
 ## How it works
 

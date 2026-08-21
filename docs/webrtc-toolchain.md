@@ -269,8 +269,33 @@ The `std::string across ABI` line in the output says which of the two cases happ
 
 ### Windows and macOS
 
-They probably have the same problem, because Chromium uses its own libc++ on all three platforms by default.
-That has not been confirmed yet, and it is one of the things [webrtc-validation.md](webrtc-validation.md) asks to check.
+The guess here used to be that they had the same problem, because Chromium uses its own libc++ on all three
+platforms by default. **On Windows that guess was wrong**, and the spike has now run there to say so.
+
+The prebuilt Windows package carries no `std::__Cr::` symbol at all: it is built against MSVC's own STL, so
+`dv::shared` links straight into it and the spike passes with `std::string across ABI` reporting
+`dv::shared linked and interoperating`. Windows therefore does **not** need the source build that Linux needed,
+and section 5's argument, which is a Linux argument, does not carry over to it.
+
+What Windows has instead is the same conflict wearing different clothes. `webrtc.lib` is compiled against the
+**static** C runtime, `/MT`, and everything else here defaults to the dynamic one, `/MD`. Linking the two produces
+dozens of
+
+```text
+libcpmt.lib(xdateord.obj) : error LNK2038: mismatch detected for 'RuntimeLibrary':
+value 'MT_StaticRelease' doesn't match value 'MD_DynamicRelease' in main.cpp.obj
+```
+
+and then `fatal error LNK1169: one or more multiply defined symbols found`. The whole link has to agree, so the
+build sets `CMAKE_MSVC_RUNTIME_LIBRARY` to `MultiThreaded$<$<CONFIG:Debug>:Debug>`.
+
+For the spike that is enough, because it takes spdlog and nlohmann_json through `FetchContent` and compiles them
+in the same pass with the same flag. For the client it is not: those libraries come from vcpkg's `x64-windows`
+triplet, which is `/MD`, and so do OpenSSL and libdatachannel. Turning `DV_BUILD_CLIENT_MEDIA` on for Windows
+means moving that whole stack to `x64-windows-static`, which changes what the MSI ships as well. That is a
+decision, not an adjustment, and it has not been taken.
+
+macOS is still unmeasured. Nothing here says which of the two shapes it will have.
 
 ## 6. What is left to close M3
 
@@ -285,7 +310,9 @@ That has not been confirmed yet, and it is one of the things [webrtc-validation.
       One monitor enumerated and a 1920x1080 frame genuinely captured.
 - [ ] Validate screen capture on Wayland, through the XDG portal.
       The development machine runs X11, so this depends on another session.
-- [ ] Spike running on Windows x64, see [webrtc-validation.md](webrtc-validation.md).
+- [x] Spike running on Windows x64, see [webrtc-validation.md](webrtc-validation.md).
+      One monitor enumerated, a real 1920x1080 frame captured, six audio devices listed, and `dv::shared`
+      linked and interoperating. It also found a missing `dwmapi` in this file's own Windows library list.
 - [ ] Spike running on macOS ARM64.
 
 macOS x64 stays out: the distribution publishes no such build.

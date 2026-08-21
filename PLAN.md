@@ -188,12 +188,12 @@ Tasks:
 8. [x] Complete the source build and revalidate the spike over it.
 9. [x] Validate screen capture with a graphics server attached, under X11.
 10. [ ] Repeat the capture validation in a Wayland session.
-11. [ ] Run the spike on Windows x64 and macOS ARM64, following `docs/webrtc-validation.md`.
+11. Partial. The spike runs on Windows x64. macOS ARM64 is still unmeasured. See `docs/webrtc-validation.md`.
 
 Acceptance criteria:
 
 - The minimal binary runs on Windows, Linux and macOS ARM64.
-  Linux confirmed over the source build, the other two pending.
+  Linux confirmed over the source build, Windows confirmed over the prebuilt package, macOS pending.
 - CI downloads and caches libwebrtc without manual intervention.
   The job exists in `.github/workflows/ci.yml` under `workflow_dispatch`, and has not been run yet.
 - Without those two items, the plan falls back to the alternative described in section 1.
@@ -201,6 +201,23 @@ Acceptance criteria:
 What the source build established is in [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md).
 The standard library conflict is over: the resulting library holds symbols only in `std::__cxx11`, the same ABI as Qt, and the spike passes with `dv::shared` linked.
 It also captures a real 1920x1080 frame under X11, which is the guarantee M6 needs before it can exist.
+
+Windows answered differently, and better than the guess.
+The prebuilt package there carries no `std::__Cr::` symbol at all - it is built against MSVC's own STL - so
+`dv::shared` links straight into it and the spike passes with the ABI line reading
+`dv::shared linked and interoperating`. Windows does not need the source build Linux needed, and the argument in
+section 5 of the toolchain document turns out to be a Linux argument rather than a general one.
+
+What it has instead is the same conflict in another currency: `webrtc.lib` is compiled against the static C
+runtime and everything else defaults to the dynamic one, so the link fails with `LNK2038` across the whole
+standard library until `CMAKE_MSVC_RUNTIME_LIBRARY` says `MultiThreaded`. That is free for the spike, which
+builds its two dependencies from source in the same pass, and expensive for the client, whose dependencies come
+from vcpkg's `x64-windows` triplet and would all have to move to `x64-windows-static`. Turning the media layer on
+for Windows is therefore a decision about the whole dependency stack, and it has not been taken.
+
+The run also found a defect of ours: the Windows library list in `cmake/Findlibwebrtc.cmake` had no `dwmapi`,
+which `RTC_ENABLE_WIN_WGC` two lines above it requires, and the link died on `DwmGetWindowAttribute` alone after
+everything else had resolved.
 
 ---
 ### M4 - Vertical slice: audio between two clients

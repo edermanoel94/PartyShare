@@ -21,8 +21,10 @@ What is missing is stated plainly, because a number nobody measured is worth no 
 Two known gaps, both in M3:
 repeating the screen capture validation on a Wayland session,
 and running the libwebrtc spike on macOS following [docs/webrtc-validation.md](docs/webrtc-validation.md).
-The Windows half of that second gap is closed: the spike passes there, and what it cost is in
-[docs/webrtc-toolchain.md](docs/webrtc-toolchain.md).
+The Windows half of that second gap is closed, and further than the spike: the media layer builds
+and runs there over a source build of libwebrtc, with 24 of the 25 media tests passing.
+Section 8 of [docs/webrtc-validation.md](docs/webrtc-validation.md) is the procedure, and it is
+worth reading before starting rather than during.
 
 ## How it works
 

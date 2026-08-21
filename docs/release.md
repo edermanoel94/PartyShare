@@ -43,8 +43,8 @@ It builds everything and publishes nothing, because a release without a tag has 
 | Artifact | Platform | State |
 | --- | --- | --- |
 | `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Built and verified |
-| `partyshare-x.y.z-windows-x64.msi` | Windows x64 | Written, never run |
-| `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Written, never run |
+| `partyshare-x.y.z-windows-x64.msi` | Windows x64 | Built, installed and run |
+| `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Built, installed and run |
 | `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Written, never run |
 | `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
 | `SHA256SUMS` | - | Generated over whatever exists |
@@ -113,6 +113,12 @@ What they intend to produce:
   The ZIP stays alongside it for people who prefer the files without an installer touching their machine.
 - Both carry the client and the Qt runtime and nothing else: the Windows job configures with `-DDV_BUILD_SERVER=OFF`, because the server is a Linux daemon and nobody installs one from a desktop MSI.
   The job does install the MSI on the runner and check that the executable and the Qt platform plugin land where the shortcut points, so the package is known to install even though nobody has started what it installs.
+- **The Windows client carries the media layer, and did not until v0.1.4.**
+  `DV_BUILD_CLIENT_MEDIA` defaults to OFF and the job did not pass it, so every MSI up to v0.1.3 installed a client that connected, joined a room, and answered every attempt to speak with "This build was compiled without audio and video".
+  It is the same failure the first AppImage had, found the same way: by installing the artifact and trying to use it.
+  The job now configures with `-DDV_BUILD_CLIENT_MEDIA=ON`, and libwebrtc comes from the tree described in section 8 of [webrtc-validation.md](webrtc-validation.md), fetched by `cmake/Findlibwebrtc.cmake`.
+  A step after the build scans `partyshare.exe` for the sentence only the stub carries and fails the job when it is there, because a flag that goes missing again would otherwise build, package, install, sign and publish without a word.
+  **macOS has no equivalent yet**: no libwebrtc tree has ever been built for it, so the `.dmg` still ships a client that cannot make a call.
 - The `.dmg` has the bundle, the shortcut to `/Applications`, and a volume icon. It lacks a background image and icon positioning in the window, which is appearance rather than function.
 - Neither has been opened on a clean machine, which is the milestone's acceptance criterion.
 

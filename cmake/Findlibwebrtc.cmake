@@ -25,6 +25,11 @@
 #   DV_WEBRTC_URL           override the archive URL
 #   DV_WEBRTC_SHA256        override the expected checksum
 #   DV_WEBRTC_LINUX_FLAVOR  which Ubuntu build to use on Linux (24.04 or 22.04)
+#   DV_WEBRTC_WINDOWS_DYNAMIC_CRT
+#                           on Windows, fetch the tree built with
+#                           win_use_dynamic_crt=true, which is the only one that
+#                           links next to Qt and vcpkg. Off gives the published
+#                           /MT package, which is what the spike wants.
 #   DV_WEBRTC_USE_BUNDLED_LIBCXX
 #                           on Linux, compile consumers against the libc++ this
 #                           build was made with. Required for the published
@@ -45,6 +50,23 @@ set(DV_WEBRTC_LINUX_FLAVOR "24.04" CACHE STRING "Ubuntu build flavor on Linux")
 option(DV_WEBRTC_USE_BUNDLED_LIBCXX "Compile against the libc++ libwebrtc was built with" ON)
 option(DV_WEBRTC_ALLOW_UNVERIFIED "Allow a download with no recorded checksum" OFF)
 
+# Which of the two Windows trees to fetch.
+#
+# The published shiguredo package is built against the static C runtime, /MT,
+# and Qt and everything vcpkg's x64-windows triplet produces is /MD. Linking
+# the two ends in LNK2038 repeated across the standard library, so the client
+# cannot use that archive at all: section 5 of docs/webrtc-toolchain.md.
+#
+# With this on, the fetch is a tree built from the same milestone with
+# win_use_dynamic_crt=true and rtc_build_ssl=false, published from this
+# repository because reproducing it takes a 30 GB Chromium checkout. Section 8
+# of docs/webrtc-validation.md is the procedure that made it.
+#
+# Turn it off for the M3 spike, which is configured standalone with
+# CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded and wants the /MT package.
+option(DV_WEBRTC_WINDOWS_DYNAMIC_CRT
+       "On Windows, fetch the libwebrtc built against the dynamic CRT" ON)
+
 set(_dv_webrtc_base
     "https://github.com/shiguredo-webrtc-build/webrtc-build/releases/download/${DV_WEBRTC_VERSION}")
 
@@ -54,12 +76,23 @@ set(_dv_sha_ubuntu_2404 "d8cd09982a9674b47a1564c651df2229d3bbc2243d77e09e90f3bcb
 set(_dv_sha_ubuntu_2204 "d7e8a15ac6419c8fff5fd0714ce27304375ab4de2d67d7bd0d85388b8a5b8085")
 set(_dv_sha_windows_x64 "fbc4afe2f9e0a8a42ca8afb94f0ba37511c0dba7728be012edee86ee848435a4")
 
+# The dynamic CRT tree is not one of the four above: it is built by hand and
+# published from this repository, so its URL is recorded next to its checksum.
+set(_dv_url_windows_x64_md
+    "https://github.com/edermanoel94/PartyShare/releases/download/webrtc-${DV_WEBRTC_VERSION}-windows-x64/webrtc-${DV_WEBRTC_VERSION}-windows-x64-dynamic-crt.tar.gz")
+set(_dv_sha_windows_x64_md "6c2056ec726ce947501a6a764a544543813da4773b9d0b4036c93c24d8146954")
+
 # --- select the archive -------------------------------------------------------
 
 if(NOT DV_WEBRTC_ROOT)
   if(WIN32)
-    set(_dv_url "${_dv_webrtc_base}/webrtc.windows_x86_64.zip")
-    set(_dv_sha "${_dv_sha_windows_x64}")
+    if(DV_WEBRTC_WINDOWS_DYNAMIC_CRT)
+      set(_dv_url "${_dv_url_windows_x64_md}")
+      set(_dv_sha "${_dv_sha_windows_x64_md}")
+    else()
+      set(_dv_url "${_dv_webrtc_base}/webrtc.windows_x86_64.zip")
+      set(_dv_sha "${_dv_sha_windows_x64}")
+    endif()
   elseif(APPLE)
     if(CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
       # SPEC.md lists macOS x64 as desirable, not mandatory. This distribution

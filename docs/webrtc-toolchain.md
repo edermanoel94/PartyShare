@@ -303,8 +303,18 @@ build sets `CMAKE_MSVC_RUNTIME_LIBRARY` to `MultiThreaded$<$<CONFIG:Debug>:Debug
 For the spike that is enough, because it takes spdlog and nlohmann_json through `FetchContent` and compiles them
 in the same pass with the same flag. For the client it is not: those libraries come from vcpkg's `x64-windows`
 triplet, which is `/MD`, and so do OpenSSL and libdatachannel. Turning `DV_BUILD_CLIENT_MEDIA` on for Windows
-means moving that whole stack to `x64-windows-static`, which changes what the MSI ships as well. That is a
-decision, not an adjustment, and it has not been taken.
+means making the whole link agree, and there are two ways to do that.
+
+Moving that stack to `x64-windows-static` is one, and it is the expensive one: it changes what the MSI ships as
+well. **The decision taken was the other direction** - move libwebrtc to `/MD` instead of moving everything else
+to `/MT` - which is what `win_use_dynamic_crt=true` does, and what section 8 of
+[webrtc-validation.md](webrtc-validation.md) builds. vcpkg stays on `x64-windows`, Qt stays as it is downloaded,
+and the MSI keeps shipping the same DLLs.
+
+That tree cannot be downloaded from anywhere, so it is published from this repository, under the
+`webrtc-m152.7977.0.0-windows-x64` tag. `cmake/Findlibwebrtc.cmake` fetches it on Windows by default, and
+`DV_WEBRTC_WINDOWS_DYNAMIC_CRT=OFF` goes back to the `/MT` package for the spike, which is the only thing that
+wants it.
 
 macOS is still unmeasured. Nothing here says which of the two shapes it will have.
 

@@ -246,8 +246,11 @@ down rather than fixed, because what it means is not yet known.
 And one finding that has nothing to do with Windows. `.gitignore` matched `build/` at any depth, which includes
 `patches/webrtc/build/`, so the patch this repository documents for the Linux source build was never committed -
 `git add` refused it without a word. `scripts/build_webrtc.sh` passes the two GN arguments only that patch declares,
-so the Linux media layer builds from a fresh clone on no machine at all, and works today only where the file happens
-to sit untracked. The rule is anchored to the root now; the patch itself still has to come back from whoever has it.
+and GN answers an argument it does not know with a warning and a zero exit rather than an error. So the build from a
+fresh clone does not fail, it succeeds and produces the wrong library: linked against whatever libstdc++ the machine has
+instead of the pinned one, with the CREL relocations left on that force every consumer to link with lld. It worked only
+where the file happened to sit untracked, and nowhere else, quietly. The rule is anchored to the root now and the patch
+is reconstructed from what the toolchain document describes, which is not the same as having run it on Linux.
 
 ---
 ### M4 - Vertical slice: audio between two clients

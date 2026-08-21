@@ -548,9 +548,16 @@ jobs:
           # Without this the configure failed on all three platforms before it
           # ever reached find_package(libwebrtc), which is to say the spike had
           # never once run here. The CMake error even named the fix.
+          #
+          # DV_WEBRTC_WINDOWS_DYNAMIC_CRT is off because the spike is the one
+          # consumer that still wants the published /MT package. The default is
+          # on, and points at the tree built for the client, which expects an
+          # external OpenSSL this job has no vcpkg to bring. Read only on Windows
+          # and ignored on the other two platforms.
           cmake -S . -B build/spike -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DDV_ENABLE_WEBRTC_SPIKE=ON \
+            -DDV_WEBRTC_WINDOWS_DYNAMIC_CRT=OFF \
             -DDV_BUILD_CLIENT=OFF \
             -DDV_BUILD_SERVER=OFF \
             -DDV_BUILD_TESTS=OFF

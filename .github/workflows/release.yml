@@ -225,16 +225,51 @@ jobs:
       # inside a start menu entry only raises the question of what to do with
       # it. Leaving it out of the build is also what keeps it out of the ZIP,
       # which is packed from the same install tree.
+      #
+      # DV_BUILD_CLIENT_MEDIA is the whole difference between an installer and
+      # an installer that can make a call. It defaults to OFF, and every MSI
+      # this pipeline published up to v0.1.3 was built without it: the client
+      # started, connected, joined a room and answered every attempt to speak
+      # with "This build was compiled without audio and video", which is what
+      # media/media_session.cpp returns when the stub is the only
+      # create_media_session in the binary.
+      #
+      # It is not free to turn on. libwebrtc is fetched by
+      # cmake/Findlibwebrtc.cmake, and on Windows the published package is
+      # built against the static CRT while Qt and everything from vcpkg is
+      # dynamic; DV_WEBRTC_WINDOWS_DYNAMIC_CRT, on by default, is what points
+      # the fetch at a tree the client can actually link. The download is
+      # around 100 MB and the archive expands to a 340 MB static library.
       - name: Configure
         run: >
           cmake --preset windows-release
           -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
           -DDV_BUILD_SERVER=OFF
+          -DDV_BUILD_CLIENT_MEDIA=ON
         shell: bash
 
       - name: Build
         run: cmake --build --preset windows-release
+
+      # find_package(libwebrtc REQUIRED) already fails the configure when the
+      # media layer cannot be built, so this is not about the fetch breaking.
+      # It is about the flag above being dropped or misspelled, which is a
+      # change that builds, packages, installs, signs and publishes, and is
+      # only discovered by a person who downloaded the result and tried to
+      # talk. The sentence looked for here exists in exactly one translation
+      # unit, and only when the stub is compiled in.
+      - name: Check the media layer is in the binary
+        shell: pwsh
+        run: |
+          $exe = 'build/windows-release/bin/partyshare.exe'
+          if (-not (Test-Path $exe)) { throw "$exe was not built" }
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($exe))
+          if ($text.Contains('built without libwebrtc')) {
+            throw 'this build carries the media stub, so it cannot send or receive audio'
+          }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "media layer present, partyshare.exe is $mb MB"
 
       - name: Stage the install tree
         shell: bash

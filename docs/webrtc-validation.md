@@ -104,17 +104,22 @@ __imp_DwmGetWindowAttribute referenced in function GetCroppedWindowRect
 It follows from `RTC_ENABLE_WIN_WGC`, defined two lines above it: Windows Graphics Capture asks the desktop
 window manager whether a window is cloaked before capturing it.
 
-**The static C runtime is not optional.** `webrtc.lib` is built with `/MT` and CMake defaults to `/MD`, which
-ends in `LNK2038: mismatch detected for 'RuntimeLibrary'` repeated across the standard library and then
-`LNK1169`. The configure above therefore also needs:
+**The static C runtime is not optional.** The `webrtc.lib` in the published package is built with `/MT` and
+CMake defaults to `/MD`, which ends in `LNK2038: mismatch detected for 'RuntimeLibrary'` repeated across the
+standard library and then `LNK1169`. The configure above therefore also needs:
 
 ```bat
+  -DDV_WEBRTC_WINDOWS_DYNAMIC_CRT=OFF ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>
 ```
 
-That works for the spike because it builds spdlog and nlohmann_json from source in the same pass with the same
-flag. It is not enough for the client, and section 5 of [webrtc-toolchain.md](webrtc-toolchain.md) says what
-that would cost.
+The first of the two is what asks for the published `/MT` package at all: `cmake/Findlibwebrtc.cmake` fetches
+the dynamic CRT tree of section 8 by default now, because that is the one the client links, and the spike is
+the only thing left that wants the other.
+
+The `/MT` pair works for the spike because it builds spdlog and nlohmann_json from source in the same pass with
+the same flag. It is not enough for the client, and section 5 of
+[webrtc-toolchain.md](webrtc-toolchain.md) says what each way out costs.
 
 ## 6. What a good run looks like
 
@@ -251,5 +256,7 @@ Headers go into `dist/include` the way the script does it on Linux, libyuv flatt
 ### 8.4 What it produced
 
 A `partyshare.exe` of 30 MB holding Qt, libwebrtc and OpenSSL at once, which is the combination the prebuilt package makes impossible, and 24 of the 25 media tests passing. The one that did not is in section 6 of [webrtc-toolchain.md](webrtc-toolchain.md).
+
+The `dist` tree this produces is published as a release asset, under the `webrtc-m152.7977.0.0-windows-x64` tag, because a release pipeline cannot be asked to repeat any of the above on every tag. `cmake/Findlibwebrtc.cmake` holds its URL and its SHA-256 and fetches it by default on Windows. Rebuilding it - a new milestone, a different GN argument - means repeating section 8, uploading the result, and changing `_dv_url_windows_x64_md` and `_dv_sha_windows_x64_md` together.
 
 In both cases, set aside the time: the checkout is over 30 GB and the build takes tens of minutes.

@@ -202,6 +202,26 @@ install(TARGETS dv_client
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# The commented example of the file the client looks for on its own.
+#
+# example and not config.ini, deliberately. The installer owns what it installs:
+# a config.ini shipped here would be replaced on the next upgrade, taking the
+# address of the server with it, and the person who typed it would have no
+# reason to suspect the installer. Renaming a file once is the cheaper rule.
+if(WIN32)
+  # Beside the executable, which is the directory the client actually reads.
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.example.ini
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+else()
+  # Not bindir here: that directory is for executables on a Unix system, and
+  # the two people who would look for an example there are outnumbered by the
+  # packaging tools that would complain about it.
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.example.ini
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  )
+endif()
+
 if(WIN32)
   # CMake 4 normalises the paths this reads before matching them; older CMake
   # hands them over exactly as the loader recorded them, which on Windows means

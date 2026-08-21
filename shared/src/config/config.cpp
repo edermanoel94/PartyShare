@@ -1,14 +1,26 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <system_error>
 
 #include <nlohmann/json.hpp>
 
 #include <dv/config/config.hpp>
+
+#ifdef _WIN32
+// Before windows.h and not after, for the same reason crash_reporter.cpp says:
+// the header defines min and max as macros.
+#define NOMINMAX
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace dv::config {
 namespace {
@@ -27,14 +39,23 @@ std::optional<std::string> env(const char* name) {
   return std::string(raw);
 }
 
-bool parse_bool(std::string_view text, bool fallback) {
+/// Nothing when the text is not a boolean at all.
+///
+/// The fallback form below cannot say that, and a configuration file needs it:
+/// `echo_cancellation = yeah` has to be an error rather than the default coming
+/// back and the line reading as though it did something.
+std::optional<bool> parse_bool_strict(std::string_view text) {
   if (text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "on") {
     return true;
   }
   if (text == "0" || text == "false" || text == "FALSE" || text == "no" || text == "off") {
     return false;
   }
-  return fallback;
+  return std::nullopt;
+}
+
+bool parse_bool(std::string_view text, bool fallback) {
+  return parse_bool_strict(text).value_or(fallback);
 }
 
 std::optional<int> parse_int(const std::string& text) {
@@ -122,6 +143,349 @@ bool split_argument(std::string_view argument, std::string_view& key, std::strin
   return true;
 }
 
+// --- INI ---------------------------------------------------------------------
+
+Error ini_error(int line, const std::string& reason) {
+  return Error{.code = "invalid_ini", .message = "line " + std::to_string(line) + ": " + reason};
+}
+
+std::string_view trim(std::string_view text) {
+  const auto is_space = [](char character) {
+    return std::isspace(static_cast<unsigned char>(character)) != 0;
+  };
+  while (!text.empty() && is_space(text.front())) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && is_space(text.back())) {
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
+/// Drops one layer of double quotes.
+///
+/// Nothing here needs quoting - a value runs to the end of its line - but a URL
+/// pasted out of the JSON form arrives wearing them, and refusing that would be
+/// pedantry rather than validation.
+std::string_view unquote(std::string_view text) {
+  if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+    text.remove_prefix(1);
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
+std::vector<std::string> split_list(std::string_view text) {
+  std::vector<std::string> items;
+  while (!text.empty()) {
+    const std::size_t comma = text.find(',');
+    const std::string_view item = trim(unquote(trim(text.substr(0, comma))));
+    if (!item.empty()) {
+      items.emplace_back(item);
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    text.remove_prefix(comma + 1);
+  }
+  return items;
+}
+
+/// Writes one key into `config`.
+///
+/// Returns nothing on success, and the reason otherwise. The two failures are
+/// deliberately distinct in the message: a key nobody knows is a typo, and a
+/// value nobody can read is a different mistake with a different fix.
+std::optional<std::string> apply_ini_field(Config& config, std::string_view section,
+                                           const std::string& key, const std::string& value) {
+  const auto as_text = [&value](std::string& target) {
+    target = value;
+    return true;
+  };
+  const auto as_int = [&value](int& target) {
+    const auto parsed = parse_int(value);
+    if (!parsed) {
+      return false;
+    }
+    target = *parsed;
+    return true;
+  };
+  const auto as_port = [&value](std::uint16_t& target) {
+    const auto parsed = parse_int(value);
+    if (!parsed || *parsed < 0 || *parsed > 65535) {
+      return false;
+    }
+    target = static_cast<std::uint16_t>(*parsed);
+    return true;
+  };
+  const auto as_bool = [&value](bool& target) {
+    const auto parsed = parse_bool_strict(value);
+    if (!parsed) {
+      return false;
+    }
+    target = *parsed;
+    return true;
+  };
+
+  bool known = true;
+  bool understood = true;
+
+  if (section == "video") {
+    if (key == "width") {
+      understood = as_int(config.video.width);
+    } else if (key == "height") {
+      understood = as_int(config.video.height);
+    } else if (key == "fps") {
+      understood = as_int(config.video.fps);
+    } else if (key == "min_bitrate_kbps") {
+      understood = as_int(config.video.min_bitrate_kbps);
+    } else if (key == "max_bitrate_kbps") {
+      understood = as_int(config.video.max_bitrate_kbps);
+    } else if (key == "floor_bitrate_kbps") {
+      understood = as_int(config.video.floor_bitrate_kbps);
+    } else if (key == "codec") {
+      understood = as_text(config.video.codec);
+    } else {
+      known = false;
+    }
+  } else if (section == "audio") {
+    if (key == "sample_rate_hz") {
+      understood = as_int(config.audio.sample_rate_hz);
+    } else if (key == "channels") {
+      understood = as_int(config.audio.channels);
+    } else if (key == "bitrate_kbps") {
+      understood = as_int(config.audio.bitrate_kbps);
+    } else if (key == "frame_duration_ms") {
+      understood = as_int(config.audio.frame_duration_ms);
+    } else if (key == "echo_cancellation") {
+      understood = as_bool(config.audio.echo_cancellation);
+    } else if (key == "noise_suppression") {
+      understood = as_bool(config.audio.noise_suppression);
+    } else if (key == "automatic_gain_control") {
+      understood = as_bool(config.audio.automatic_gain_control);
+    } else if (key == "input_device") {
+      understood = as_text(config.audio.input_device);
+    } else if (key == "output_device") {
+      understood = as_text(config.audio.output_device);
+    } else {
+      known = false;
+    }
+  } else if (section == "network") {
+    if (key == "signaling_url") {
+      understood = as_text(config.network.signaling_url);
+    } else if (key == "stun_servers") {
+      config.network.stun_servers = split_list(value);
+    } else if (key == "turn_url") {
+      understood = as_text(config.network.turn_url);
+    } else if (key == "turn_username") {
+      understood = as_text(config.network.turn_username);
+    } else if (key == "turn_password") {
+      understood = as_text(config.network.turn_password);
+    } else if (key == "ice_port_range_begin") {
+      understood = as_port(config.network.ice_port_range_begin);
+    } else if (key == "ice_port_range_end") {
+      understood = as_port(config.network.ice_port_range_end);
+    } else if (key == "reconnect_initial_delay_ms") {
+      understood = as_int(config.network.reconnect_initial_delay_ms);
+    } else if (key == "reconnect_max_delay_ms") {
+      understood = as_int(config.network.reconnect_max_delay_ms);
+    } else {
+      known = false;
+    }
+  } else if (section == "logging") {
+    if (key == "level") {
+      understood = as_text(config.logging.level);
+    } else if (key == "file_path") {
+      understood = as_text(config.logging.file_path);
+    } else if (key == "log_to_console") {
+      understood = as_bool(config.logging.log_to_console);
+    } else if (key == "crash_directory") {
+      understood = as_text(config.logging.crash_directory);
+    } else if (key == "crash_reports") {
+      understood = as_bool(config.logging.crash_reports);
+    } else {
+      known = false;
+    }
+  } else if (section == "server") {
+    if (key == "bind_address") {
+      understood = as_text(config.server.bind_address);
+    } else if (key == "port") {
+      understood = as_port(config.server.port);
+    } else if (key == "max_participants_per_room") {
+      understood = as_int(config.server.max_participants_per_room);
+    } else if (key == "heartbeat_interval_ms") {
+      understood = as_int(config.server.heartbeat_interval_ms);
+    } else if (key == "heartbeat_timeout_ms") {
+      understood = as_int(config.server.heartbeat_timeout_ms);
+    } else if (key == "users_file") {
+      understood = as_text(config.server.users_file);
+    } else {
+      known = false;
+    }
+  } else if (section == "database") {
+    if (key == "enabled") {
+      understood = as_bool(config.database.enabled);
+    } else if (key == "uri") {
+      understood = as_text(config.database.uri);
+    } else if (key == "name") {
+      understood = as_text(config.database.name);
+    } else if (key == "timeout_ms") {
+      understood = as_int(config.database.timeout_ms);
+    } else {
+      known = false;
+    }
+  } else {
+    known = false;
+  }
+
+  if (!known) {
+    return "no such setting as [" + std::string(section) + "] " + key;
+  }
+  if (!understood) {
+    return "'" + value + "' is not a value " + key + " can take";
+  }
+  return std::nullopt;
+}
+
+// --- where the files live ----------------------------------------------------
+
+std::filesystem::path from_environment(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && *value != '\0' ? std::filesystem::path(value)
+                                            : std::filesystem::path();
+}
+
+/// The directory the running executable sits in.
+///
+/// Asked of the operating system rather than of argv[0] or the working
+/// directory, and that is the whole point: a shortcut carries a working
+/// directory of its own, so a file found relative to it is a file that depends
+/// on how the program was launched. The start menu entry and the desktop icon
+/// would then disagree about which server to connect to.
+///
+/// Empty when the answer cannot be had, which every caller treats as "there is
+/// no file beside the executable".
+std::filesystem::path executable_directory() {
+#ifdef _WIN32
+  std::wstring buffer(MAX_PATH, L'\0');
+  for (;;) {
+    const DWORD written =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (written == 0) {
+      return {};
+    }
+    // The call truncates rather than failing, and says so only by filling the
+    // buffer exactly. A path longer than MAX_PATH is legal on a current
+    // Windows, so growing until it fits is not a theoretical branch.
+    if (written < buffer.size()) {
+      buffer.resize(written);
+      break;
+    }
+    if (buffer.size() > 32768) {
+      return {};
+    }
+    buffer.resize(buffer.size() * 2);
+  }
+  return std::filesystem::path(buffer).parent_path();
+#elif defined(__APPLE__)
+  std::error_code failed;
+  std::uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::string buffer(size, '\0');
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    return {};
+  }
+  buffer.resize(std::string(buffer.c_str()).size());
+  const std::filesystem::path resolved = std::filesystem::weakly_canonical(buffer, failed);
+  return failed ? std::filesystem::path(buffer).parent_path() : resolved.parent_path();
+#else
+  std::error_code failed;
+  const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", failed);
+  return failed ? std::filesystem::path() : self.parent_path();
+#endif
+}
+
+/// Where this user's own configuration belongs.
+///
+/// The same per-platform shape dv::diagnostics::default_crash_directory picks,
+/// because two answers to "where does this program keep its files" is one too
+/// many.
+std::filesystem::path user_config_directory() {
+#ifdef _WIN32
+  std::filesystem::path base = from_environment("LOCALAPPDATA");
+  if (base.empty()) {
+    return {};
+  }
+  return base / "partyshare";
+#elif defined(__APPLE__)
+  const std::filesystem::path home = from_environment("HOME");
+  if (home.empty()) {
+    return {};
+  }
+  return home / "Library" / "Application Support" / "partyshare";
+#else
+  std::filesystem::path base = from_environment("XDG_CONFIG_HOME");
+  if (base.empty()) {
+    const std::filesystem::path home = from_environment("HOME");
+    if (home.empty()) {
+      return {};
+    }
+    base = home / ".config";
+  }
+  return base / "partyshare";
+#endif
+}
+
+/// The file --config or DV_CONFIG_FILE names, or empty when neither does.
+///
+/// Pulled out of load() because config_files() has to give the same answer, and
+/// the same question asked twice in two places is the same question answered
+/// differently sooner or later.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+std::string named_config_path(int argc, const char* const argv[]) {
+  std::string path = env("DV_CONFIG_FILE").value_or("");
+  for (int i = 1; i < argc; ++i) {
+    std::string_view key;
+    std::string_view value;
+    if (split_argument(argv[i], key, value) && key == "config") {
+      path = std::string(value);
+    }
+  }
+  return path;
+}
+
+/// Reads one configuration file over `base`, choosing the parser by extension.
+///
+/// A missing file is an error only when somebody named it. The cascade is built
+/// from paths that usually do not exist, and that is not the same event as
+/// asking for a file by name and not finding it.
+Result<Config> read_config_file(const std::filesystem::path& path, Config base, bool required) {
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    if (required) {
+      return Result<Config>::failure("config_file_not_found",
+                                     "cannot open configuration file: " + path.string());
+    }
+    return base;
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+
+  // By extension, so --config keeps taking the JSON it always took while the
+  // discovered files are INI. One setting, two spellings, and the file itself
+  // says which one it is.
+  std::string extension = path.extension().string();
+  std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  if (extension == ".ini") {
+    return parse_ini(buffer.str(), std::move(base));
+  }
+  return parse_json(buffer.str(), std::move(base));
+}
+
 }  // namespace
 
 Result<Config> parse_json(const std::string& json_text, Config base) {
@@ -199,19 +563,83 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
   return base;
 }
 
-Result<Config> load_from_file(const std::string& path) {
-  Config config;
+Result<Config> parse_ini(const std::string& ini_text, Config base) {
+  std::istringstream input(ini_text);
+  std::string raw;
+  std::string section;
+  int number = 0;
 
-  std::ifstream input(path);
-  if (input.is_open()) {
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    auto parsed = parse_json(buffer.str(), std::move(config));
-    if (!parsed) {
-      return parsed;
+  while (std::getline(input, raw)) {
+    ++number;
+    // Trimming before anything else is also what makes a file written on
+    // Windows readable on Linux: the carriage return is whitespace, and it
+    // leaves with the rest of it.
+    const std::string_view line = trim(raw);
+    if (line.empty() || line.front() == ';' || line.front() == '#') {
+      continue;
     }
-    config = std::move(parsed).take();
+
+    if (line.front() == '[') {
+      if (line.back() != ']') {
+        return Result<Config>::failure(ini_error(number, "a section header ends with ]"));
+      }
+      section = std::string(trim(line.substr(1, line.size() - 2)));
+      if (section.empty()) {
+        return Result<Config>::failure(ini_error(number, "a section needs a name"));
+      }
+      continue;
+    }
+
+    const std::size_t equals = line.find('=');
+    if (equals == std::string_view::npos) {
+      return Result<Config>::failure(ini_error(number, "expected [section], or key = value"));
+    }
+    // A setting above the first header would otherwise land nowhere and read as
+    // though it had been applied.
+    if (section.empty()) {
+      return Result<Config>::failure(ini_error(number, "this setting is under no [section]"));
+    }
+
+    const std::string key(trim(line.substr(0, equals)));
+    if (key.empty()) {
+      return Result<Config>::failure(ini_error(number, "a setting needs a name"));
+    }
+    const std::string value(trim(unquote(trim(line.substr(equals + 1)))));
+
+    if (const auto reason = apply_ini_field(base, section, key, value)) {
+      return Result<Config>::failure(ini_error(number, *reason));
+    }
   }
+
+  return base;
+}
+
+std::vector<std::filesystem::path> default_config_paths() {
+  std::vector<std::filesystem::path> paths;
+  if (const std::filesystem::path beside = executable_directory(); !beside.empty()) {
+    paths.push_back(beside / "config.ini");
+  }
+  if (const std::filesystem::path mine = user_config_directory(); !mine.empty()) {
+    paths.push_back(mine / "config.ini");
+  }
+  return paths;
+}
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+std::vector<std::filesystem::path> config_files(int argc, const char* const argv[]) {
+  const std::string named = named_config_path(argc, argv);
+  if (!named.empty()) {
+    return {std::filesystem::path(named)};
+  }
+  return default_config_paths();
+}
+
+Result<Config> load_from_file(const std::string& path) {
+  auto loaded = read_config_file(path, Config{}, false);
+  if (!loaded) {
+    return loaded;
+  }
+  Config config = std::move(loaded).take();
 
   apply_environment(config);
 
@@ -271,29 +699,31 @@ void apply_environment(Config& config) {
 Result<Config> load(int argc, const char* const argv[], UnknownOptions unknown) {
   // The configuration file path is the one setting that has to be read from
   // the command line before anything else can be loaded.
-  std::string config_path = env("DV_CONFIG_FILE").value_or("");
-  for (int i = 1; i < argc; ++i) {
-    std::string_view key;
-    std::string_view value;
-    if (split_argument(argv[i], key, value) && key == "config") {
-      config_path = std::string(value);
-    }
-  }
+  const std::string config_path = named_config_path(argc, argv);
 
   Config config;
-  if (!config_path.empty()) {
-    std::ifstream input(config_path);
-    if (!input.is_open()) {
-      return Result<Config>::failure("config_file_not_found",
-                                     "cannot open configuration file: " + config_path);
+  if (config_path.empty()) {
+    // Nobody named a file, so the cascade applies: the one beside the
+    // executable, which whoever installed the machine wrote and which answers
+    // for every account on it, and then this user's own on top. Neither
+    // existing is the ordinary case, and it leaves the built-in defaults.
+    for (const std::filesystem::path& path : default_config_paths()) {
+      auto loaded = read_config_file(path, std::move(config), false);
+      if (!loaded) {
+        return loaded;
+      }
+      config = std::move(loaded).take();
     }
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    auto parsed = parse_json(buffer.str(), std::move(config));
-    if (!parsed) {
-      return parsed;
+  } else {
+    // An explicit --config replaces the cascade rather than joining it. "Use
+    // this file" is what it looks like it says, and a machine-wide setting
+    // leaking into a run that named its own configuration is the kind of
+    // surprise that costs an afternoon.
+    auto loaded = read_config_file(config_path, std::move(config), true);
+    if (!loaded) {
+      return loaded;
     }
-    config = std::move(parsed).take();
+    config = std::move(loaded).take();
   }
 
   apply_environment(config);

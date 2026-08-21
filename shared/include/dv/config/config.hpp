@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -145,6 +146,41 @@ enum class UnknownOptions : std::uint8_t {
 [[nodiscard]] Result<Config> load_from_file(const std::string& path);
 
 [[nodiscard]] Result<Config> parse_json(const std::string& json_text, Config base);
+
+/// Parses the INI form of the same settings.
+///
+/// Sections are the structs and keys are their fields, so [network] with
+/// signaling_url is network.signaling_url, and nothing has to be learned twice.
+/// Comments start with ; or #, a value may be wrapped in double quotes, and a
+/// list - stun_servers is the only one - is separated by commas.
+///
+/// An unknown section or key is an error rather than a silence. A file nobody
+/// validates is a file where a typed key does nothing at all, and "I put the
+/// address in and it still connects to localhost" is the report that follows.
+[[nodiscard]] Result<Config> parse_ini(const std::string& ini_text, Config base);
+
+/// The files load() reads on its own, weakest first.
+///
+/// Next to the executable, then under the user's own configuration directory:
+/// whoever installs a machine writes the first and it answers for everyone on
+/// it, and a person overrides it in the second without being asked for an
+/// administrator. Passing --config replaces both.
+///
+/// A path in the list is not a file that exists. Nothing here touches the disk.
+[[nodiscard]] std::vector<std::filesystem::path> default_config_paths();
+
+/// The files load() would read for this command line, in the order it reads
+/// them: the cascade above, or the single file --config or DV_CONFIG_FILE
+/// names, since that one replaces it.
+///
+/// Exists so that a program can say which files it read without working out
+/// the answer a second time and getting it wrong. Reporting the cascade while
+/// load() honoured an explicit --config is not a cosmetic mistake: it sends
+/// whoever is reading the log to edit a file that is not being used.
+///
+/// The array is what main() is handed, and there is no other shape for it.
+/// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+[[nodiscard]] std::vector<std::filesystem::path> config_files(int argc, const char* const argv[]);
 
 void apply_environment(Config& config);
 

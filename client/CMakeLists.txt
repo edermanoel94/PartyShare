@@ -71,7 +71,12 @@ if(DV_BUILD_CLIENT_MEDIA)
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-  if(DV_HARDWARE_ENCODER_NVENC AND NOT APPLE)
+  # Not on Windows, for the same kind of reason it is not on Apple: the loader
+  # here is dlopen, and Windows has LoadLibrary instead. Porting it is real work
+  # on a path nobody has measured on this platform yet, and a hardware encoder
+  # that fails to compile is worse than one that is absent, because absent is
+  # what the software encoder is for.
+  if(DV_HARDWARE_ENCODER_NVENC AND NOT APPLE AND NOT WIN32)
     target_compile_definitions(dv_client_media PRIVATE DV_WITH_NVENC)
     target_include_directories(dv_client_media PRIVATE
       ${CMAKE_SOURCE_DIR}/third_party/nvcodec)

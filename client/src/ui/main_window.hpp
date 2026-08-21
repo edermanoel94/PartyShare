@@ -58,6 +58,7 @@ class MainWindow : public QMainWindow {
   void on_open_settings();
   void on_open_administration();
   void on_close_administration();
+  void on_copy_room_id();
   void on_participant_selected();
   void on_participant_menu(const QPoint& where);
   void on_volume_changed(int value);
@@ -106,6 +107,7 @@ class MainWindow : public QMainWindow {
 
   // Room.
   QLabel* room_title_ = nullptr;
+  QPushButton* copy_room_button_ = nullptr;
   ScreenView* screen_view_ = nullptr;
   QListWidget* participants_ = nullptr;
   QProgressBar* microphone_level_ = nullptr;

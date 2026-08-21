@@ -5,11 +5,13 @@
 
 #include <dv/logging/logger.hpp>
 
+#include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFont>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -259,9 +261,18 @@ void MainWindow::build_room_page() {
   QFont bold = room_title_->font();
   bold.setBold(true);
   room_title_->setFont(bold);
+  // The only way to read the room code back out from inside a call. The home
+  // page shows it in a QLineEdit, which a person can select and copy; this is a
+  // QLabel, and a label copies nothing. Inviting somebody is exactly the thing
+  // you do from in here, so the code has to be reachable from in here.
+  copy_room_button_ = new QPushButton(QStringLiteral("Copy"), page);
+  copy_room_button_->setToolTip(QStringLiteral("Copy the room code to the clipboard"));
+  connect(copy_room_button_, &QPushButton::clicked, this, &MainWindow::on_copy_room_id);
+
   sharing_label_ = new QLabel(QString{}, page);
   sharing_label_->setStyleSheet(QStringLiteral("color: palette(highlight); font-weight: bold;"));
   header->addWidget(room_title_);
+  header->addWidget(copy_room_button_);
   header->addStretch();
   header->addWidget(sharing_label_);
 
@@ -589,6 +600,22 @@ void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+}
+
+void MainWindow::on_copy_room_id() {
+  // The code alone, not the "Room: " the label reads. Whoever receives it pastes
+  // it into the Room ID field, and on_join_room only trims and upper cases what
+  // it finds there - a prefix would survive that and fail the join.
+  const QString room = QString::fromStdString(session_.room_id());
+  if (room.isEmpty()) {
+    return;
+  }
+  QGuiApplication::clipboard()->setText(room);
+
+  // The status bar rather than the button, for the same reason the mute notice
+  // goes there: a button that renames itself moves what is beside it, and the
+  // status bar is already where this application says what just happened.
+  status_->setText(QStringLiteral("Room code %1 copied").arg(room));
 }
 
 void MainWindow::on_participant_selected() {

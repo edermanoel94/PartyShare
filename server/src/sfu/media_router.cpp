@@ -46,9 +46,9 @@ constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc
 /// H.264 RTP runs on a 90 kHz clock, which is what every video profile uses.
 constexpr int kVideoClockRate = 90000;
 
-[[nodiscard]] rtc::Configuration make_configuration(const std::vector<std::string>& ice_servers) {
+[[nodiscard]] rtc::Configuration make_configuration(const MediaRouter::Options& options) {
   rtc::Configuration configuration;
-  for (const std::string& server : ice_servers) {
+  for (const std::string& server : options.ice_servers) {
     if (server.empty()) {
       continue;
     }
@@ -59,6 +59,14 @@ constexpr int kVideoClockRate = 90000;
       // host candidates on a local network.
       DV_LOG_WARN("SFU: ignoring unusable ICE server '{}': {}", server, error.what());
     }
+  }
+  // Left alone, libdatachannel's own defaults mean "any ephemeral port", which
+  // is only firewallable by opening the whole ephemeral range. A configured
+  // range narrows that to something an operator can write down, at one port
+  // per participant.
+  if (options.port_range_begin != 0 && options.port_range_end != 0) {
+    configuration.portRangeBegin = options.port_range_begin;
+    configuration.portRangeEnd = options.port_range_end;
   }
   return configuration;
 }
@@ -112,8 +120,7 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   Session session;
   session.user_id = user.id;
   session.room_id = room_id;
-  session.connection =
-      std::make_shared<rtc::PeerConnection>(make_configuration(options_.ice_servers));
+  session.connection = std::make_shared<rtc::PeerConnection>(make_configuration(options_));
 
   const std::string user_id = user.id;
 

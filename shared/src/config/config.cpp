@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -73,6 +74,16 @@ void apply_env_string(const char* name, std::string& target) {
 void apply_env_bool(const char* name, bool& target) {
   if (const auto raw = env(name)) {
     target = parse_bool(*raw, target);
+  }
+}
+
+/// Zero is a legitimate value here, unlike for the port the server listens on:
+/// it is how the ICE range says "leave it to the system".
+void apply_env_port(const char* name, std::uint16_t& target) {
+  if (const auto raw = env(name)) {
+    if (const auto parsed = parse_int(*raw); parsed && *parsed >= 0 && *parsed <= 65535) {
+      target = static_cast<std::uint16_t>(*parsed);
+    }
   }
 }
 
@@ -152,6 +163,8 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(network, "turn_url", base.network.turn_url);
       read_field(network, "turn_username", base.network.turn_username);
       read_field(network, "turn_password", base.network.turn_password);
+      read_field(network, "ice_port_range_begin", base.network.ice_port_range_begin);
+      read_field(network, "ice_port_range_end", base.network.ice_port_range_end);
       read_field(network, "reconnect_initial_delay_ms", base.network.reconnect_initial_delay_ms);
       read_field(network, "reconnect_max_delay_ms", base.network.reconnect_max_delay_ms);
     }
@@ -231,6 +244,8 @@ void apply_environment(Config& config) {
   apply_env_string("DV_TURN_URL", config.network.turn_url);
   apply_env_string("DV_TURN_USERNAME", config.network.turn_username);
   apply_env_string("DV_TURN_PASSWORD", config.network.turn_password);
+  apply_env_port("DV_ICE_PORT_RANGE_BEGIN", config.network.ice_port_range_begin);
+  apply_env_port("DV_ICE_PORT_RANGE_END", config.network.ice_port_range_end);
 
   apply_env_string("DV_LOG_LEVEL", config.logging.level);
   apply_env_string("DV_LOG_FILE", config.logging.file_path);
@@ -338,6 +353,22 @@ Result<Config> load(int argc, const char* const argv[], UnknownOptions unknown) 
       } else {
         return Result<Config>::failure(invalid_value("--port", "must be between 1 and 65535"));
       }
+    } else if (key == "ice-port-range") {
+      // One option rather than two, because a range is what an operator writes
+      // into a firewall rule and half a range is never what anyone meant.
+      const std::size_t dash = text.find('-');
+      std::optional<int> begin;
+      std::optional<int> end;
+      if (dash != std::string::npos) {
+        begin = parse_int(text.substr(0, dash));
+        end = parse_int(text.substr(dash + 1));
+      }
+      if (!begin || !end || *begin < 1 || *begin > 65535 || *end < 1 || *end > 65535) {
+        return Result<Config>::failure(invalid_value(
+            "--ice-port-range", "must be BEGIN-END, both between 1 and 65535, as in 50000-50100"));
+      }
+      config.network.ice_port_range_begin = static_cast<std::uint16_t>(*begin);
+      config.network.ice_port_range_end = static_cast<std::uint16_t>(*end);
     } else if (key == "fps") {
       if (const auto parsed = parse_int(text)) {
         config.video.fps = *parsed;
@@ -424,6 +455,17 @@ std::optional<Error> validate(const Config& config) {
       config.network.reconnect_max_delay_ms < config.network.reconnect_initial_delay_ms) {
     return invalid_value("network.reconnect delays", "max must be at least the initial delay");
   }
+  const bool range_begins = config.network.ice_port_range_begin != 0;
+  const bool range_ends = config.network.ice_port_range_end != 0;
+  if (range_begins != range_ends) {
+    // Half a range would silently become no range at all, and the firewall rule
+    // written against it would be wrong in a way nothing reports.
+    return invalid_value("network.ice_port_range_begin/end",
+                         "must both be set, or both left at zero for the ephemeral range");
+  }
+  if (range_begins && config.network.ice_port_range_begin > config.network.ice_port_range_end) {
+    return invalid_value("network.ice_port_range_begin", "must not be above ice_port_range_end");
+  }
 
   if (config.server.port == 0) {
     return invalid_value("server.port", "must not be zero");
@@ -461,6 +503,8 @@ std::string to_json(const Config& config) {
                        {"stun_servers", config.network.stun_servers},
                        {"turn_url", config.network.turn_url},
                        {"turn_username", config.network.turn_username},
+                       {"ice_port_range_begin", config.network.ice_port_range_begin},
+                       {"ice_port_range_end", config.network.ice_port_range_end},
                        // The password is deliberately omitted. Section 17 of SPEC.md forbids
                        // writing credentials out in plain text.
                        {"reconnect_initial_delay_ms", config.network.reconnect_initial_delay_ms},

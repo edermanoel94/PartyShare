@@ -186,6 +186,7 @@ quietly ignored. `partyshare-server --help` lists all of them. The ones that mat
 | `--port=PORT` | 8080 | Port to listen on |
 | `--bind-address=ADDRESS` | 0.0.0.0 | Address to listen on |
 | `--max-participants=N` | 5 | Participants per room |
+| `--ice-port-range=A-B` | — | UDP range the SFU binds media in, one port per participant. Unset, the system picks an ephemeral port and the firewall has to allow the whole ephemeral range. See [requirements.md](docs/requirements.md) |
 | `--users-file=PATH` | — | Development account list |
 | `--config=PATH` | — | Configuration file, read before anything else |
 | `--log-level=LEVEL` | info | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `off` |

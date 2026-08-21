@@ -12,6 +12,8 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -71,6 +73,35 @@ template <typename Predicate>
   header->setTimestamp(timestamp);
   header->setPayloadType(static_cast<std::uint8_t>(payload_type));
   return packet;
+}
+
+/// The port out of an SDP candidate line, as in
+/// "a=candidate:1 1 UDP 2130706431 127.0.0.1 50003 typ host".
+///
+/// The address and the port are the two fields before "typ", which is a more
+/// stable place to count from than the start of the line: the foundation is an
+/// arbitrary token and libdatachannel may or may not prefix the "a=".
+[[nodiscard]] std::optional<std::uint16_t> candidate_port(const std::string& line) {
+  std::istringstream fields(line);
+  std::vector<std::string> parts;
+  for (std::string part; fields >> part;) {
+    parts.push_back(std::move(part));
+  }
+  for (std::size_t i = 1; i < parts.size(); ++i) {
+    if (parts[i] != "typ") {
+      continue;
+    }
+    try {
+      const int value = std::stoi(parts[i - 1]);
+      if (value < 1 || value > 65535) {
+        return std::nullopt;
+      }
+      return static_cast<std::uint16_t>(value);
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
 }
 
 /// A participant: the project's signaling client plus a libdatachannel peer
@@ -309,6 +340,18 @@ class Participant {
     const std::lock_guard<std::mutex> lock(mutex_);
     return last_answer_sdp_;
   }
+  /// The ports of every candidate the SFU has sent so far. Its own sockets,
+  /// not this participant's, which is what makes them worth asserting on.
+  [[nodiscard]] std::vector<std::uint16_t> sfu_candidate_ports() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::uint16_t> ports;
+    for (const std::string& candidate : remote_candidates_) {
+      if (const auto port = candidate_port(candidate)) {
+        ports.push_back(*port);
+      }
+    }
+    return ports;
+  }
   [[nodiscard]] std::uint64_t received_video_rtp() const { return received_video_rtp_.load(); }
   [[nodiscard]] std::size_t incoming_track_count() {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -354,6 +397,10 @@ class Participant {
       return;
     }
     if (const auto* candidate = std::get_if<proto::IceCandidate>(&message)) {
+      {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        remote_candidates_.push_back(candidate->candidate);
+      }
       connection_->addRemoteCandidate(rtc::Candidate(candidate->candidate, candidate->sdp_mid));
       return;
     }
@@ -377,6 +424,7 @@ class Participant {
   std::vector<std::shared_ptr<rtc::Track>> incoming_video_;
   std::string last_offer_sdp_;
   std::string last_answer_sdp_;
+  std::vector<std::string> remote_candidates_;
 };
 
 class SfuTest : public ::testing::Test {
@@ -752,6 +800,44 @@ TEST_F(SfuTest, TheMediaIsEncryptedAndNothingElseIsOffered) {
     // would be one that could carry plaintext.
     EXPECT_EQ(sdp.find(" RTP/AVP "), std::string::npos) << name << " offers unencrypted media";
   }
+}
+
+// The SFU's own media sockets, and the only reason the range setting exists: a
+// firewall in front of the server can allow these ports and nothing else.
+TEST(SfuPortRange, TheSfuBindsInsideTheConfiguredRange) {
+  constexpr std::uint16_t kBegin = 50000;
+  constexpr std::uint16_t kEnd = 50100;
+
+  SignalingServer::Options options;
+  options.bind_address = "127.0.0.1";
+  options.port = 0;
+  options.hub.max_participants_per_room = 5;
+  options.hub.heartbeat_interval = 1000ms;
+  options.hub.heartbeat_timeout = 30000ms;
+  options.enable_sfu = true;
+  // No STUN, so every candidate the SFU sends is a host candidate on a socket
+  // it bound itself, which is exactly what the range governs.
+  options.sfu.ice_servers.clear();
+  options.sfu.port_range_begin = kBegin;
+  options.sfu.port_range_end = kEnd;
+
+  SignalingServer server(options);
+  ASSERT_TRUE(server.add_user("ana", "password", "Ana").ok());
+  server.start();
+
+  Participant ana(server.port(), "ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  ASSERT_TRUE(ana.join(ana.created_room_id()));
+
+  ASSERT_TRUE(wait_until([&] { return !ana.sfu_candidate_ports().empty(); }));
+  const std::vector<std::uint16_t> ports = ana.sfu_candidate_ports();
+  for (const std::uint16_t port : ports) {
+    EXPECT_GE(port, kBegin);
+    EXPECT_LE(port, kEnd);
+  }
+
+  server.stop();
 }
 
 }  // namespace

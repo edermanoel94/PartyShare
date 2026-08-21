@@ -252,4 +252,74 @@ TEST(Config, SerializationRoundTrips) {
   EXPECT_EQ(reparsed.value().server.port, 9999);
 }
 
+TEST(Config, TheIceRangeIsUnsetByDefault) {
+  // Zero on both is what makes the SFU keep asking the system for an ephemeral
+  // port, which is how it behaved before the range existed.
+  const Config config;
+  EXPECT_EQ(config.network.ice_port_range_begin, 0);
+  EXPECT_EQ(config.network.ice_port_range_end, 0);
+}
+
+TEST(Config, ReadsTheIceRangeFromOneOption) {
+  const char* argv[] = {"partyshare-server", "--ice-port-range=50000-50100"};
+  const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().network.ice_port_range_begin, 50000);
+  EXPECT_EQ(result.value().network.ice_port_range_end, 50100);
+}
+
+TEST(Config, RejectsAnIceRangeThatIsNotARange) {
+  for (const char* option :
+       {"--ice-port-range=50000", "--ice-port-range=50000-", "--ice-port-range=-50100",
+        "--ice-port-range=abc-def", "--ice-port-range=0-50100", "--ice-port-range=50000-70000"}) {
+    const char* argv[] = {"partyshare-server", option};
+    const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
+    ASSERT_FALSE(result.ok()) << option << " was accepted";
+    EXPECT_EQ(result.error().code, "invalid_value") << option;
+  }
+}
+
+TEST(Config, ReadsTheIceRangeFromTheEnvironment) {
+  const ScopedEnv begin("DV_ICE_PORT_RANGE_BEGIN", "40000");
+  const ScopedEnv end("DV_ICE_PORT_RANGE_END", "40050");
+  Config config;
+  dv::config::apply_environment(config);
+  EXPECT_EQ(config.network.ice_port_range_begin, 40000);
+  EXPECT_EQ(config.network.ice_port_range_end, 40050);
+}
+
+TEST(Config, ValidationRejectsHalfAnIceRange) {
+  // Half a range would quietly become no range at all, and the firewall rule
+  // written against it would let nothing through.
+  Config config;
+  config.network.ice_port_range_begin = 50000;
+  const auto violation = dv::config::validate(config);
+  ASSERT_TRUE(violation.has_value());
+  EXPECT_EQ(violation->code, "invalid_value");
+
+  config.network.ice_port_range_begin = 0;
+  config.network.ice_port_range_end = 50100;
+  EXPECT_TRUE(dv::config::validate(config).has_value());
+}
+
+TEST(Config, ValidationRejectsAnIceRangeThatRunsBackwards) {
+  Config config;
+  config.network.ice_port_range_begin = 50100;
+  config.network.ice_port_range_end = 50000;
+  const auto violation = dv::config::validate(config);
+  ASSERT_TRUE(violation.has_value());
+  EXPECT_EQ(violation->code, "invalid_value");
+}
+
+TEST(Config, TheIceRangeSurvivesSerialization) {
+  Config original;
+  original.network.ice_port_range_begin = 50000;
+  original.network.ice_port_range_end = 50100;
+
+  const auto reparsed = dv::config::parse_json(dv::config::to_json(original), Config{});
+  ASSERT_TRUE(reparsed.ok()) << reparsed.error().message;
+  EXPECT_EQ(reparsed.value().network.ice_port_range_begin, 50000);
+  EXPECT_EQ(reparsed.value().network.ice_port_range_end, 50100);
+}
+
 }  // namespace

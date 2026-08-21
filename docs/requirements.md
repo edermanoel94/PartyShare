@@ -139,12 +139,43 @@ A rule that works for planning: add 3.3 Mbps per screen viewer and 200 kbps per 
 
 | Port | Protocol | Use |
 | --- | --- | --- |
-| 8080 | TCP | WebSocket signaling, configurable with `--port` or `DV_SERVER_PORT` |
-| ephemeral | UDP | ICE and media, chosen by the system on each connection |
+| 8080 | TCP | WebSocket signaling, inbound, configurable with `--port` or `DV_SERVER_PORT` |
+| ephemeral | UDP | ICE and media, inbound, chosen by the system unless a range is set |
+| 19302 | UDP | STUN, outbound, whatever `network.stun_servers` names |
+| 3478 | UDP | TURN, outbound, only when `network.turn_url` is set |
 | 27017 | TCP | MongoDB, outbound, only when persistence is on |
 
 The server has to reach the clients over UDP.
 Behind NAT it uses the configured STUN servers, plus an optional TURN for the cases STUN does not solve.
+
+### Narrowing the media range
+
+Left alone, the SFU asks the system for an ephemeral port on every connection, and a firewall in front of it
+has nothing narrower to allow than the whole ephemeral range: `/proc/sys/net/ipv4/ip_local_port_range`, which
+is 32768 to 60999 on most Linux systems. `--ice-port-range` replaces that with a range you choose:
+
+```sh
+partyshare-server --ice-port-range=50000-50100
+```
+
+The same setting is `network.ice_port_range_begin` and `network.ice_port_range_end` in the configuration file,
+and `DV_ICE_PORT_RANGE_BEGIN` and `DV_ICE_PORT_RANGE_END` in the environment.
+Both ends have to be given: half a range is refused at startup rather than silently becoming no range at all.
+
+Size it from the load, because the SFU binds one port per participant: `max_participants_per_room` times the
+number of rooms running at once. A hundred ports carries twenty full rooms.
+The server logs the range it ended up with on startup, or says the ports are ephemeral when none was set.
+
+One range is worth nothing: 1024 to 65535 is libdatachannel's own default, which it reads as "no range" and
+answers with an ephemeral port anyway.
+
+```sh
+# Linux, with the range above
+sudo ufw allow 8080/tcp
+sudo ufw allow 50000:50100/udp
+```
+
+On AWS, GCP or Azure the security group needs the same two entries; the host firewall alone does not open them.
 
 ## Build machine
 

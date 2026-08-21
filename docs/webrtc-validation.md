@@ -178,7 +178,78 @@ scripts/build_webrtc.sh
 scripts/validate_webrtc.sh --root ~/.cache/partyshare/webrtc/dist
 ```
 
-On Windows the build requires Visual Studio with the Windows SDK and the depot_tools toolchain, and the procedure is the one in the official WebRTC documentation.
-Worth recording here once it has been done for the first time.
+On Windows there is no script yet, and the procedure below is the one that worked the first time it was done.
+Read section 8.1 before starting: two of its steps are prerequisites that fail late and expensively.
+
+### 8.1 Two prerequisites, and why they come first
+
+**Smart App Control has to be off.** The Chromium toolchain downloads and runs dozens of unsigned binaries through CIPD - `luci-auth`, `gn`, `ninja`, `clang`, `rustc`. With Smart App Control enforcing, `gclient sync` dies on the first of them:
+
+```text
+Exception: 4551: 'depot_tools\.cipd_bin\luci-auth.exe' was blocked
+by your organization's Device Guard policy.
+```
+
+That happens *after* the 14 GB checkout, not before. Turning Smart App Control off is a one way door: Microsoft only allows it to be enabled on a clean install of Windows, so re-enabling it later means resetting the machine. Decide before downloading rather than after.
+
+**The Windows SDK needs the debugging tools**, which the Visual Studio Build Tools workload does not bring:
+
+```powershell
+winsdksetup.exe /features OptionId.WindowsDesktopDebuggers /quiet /norestart
+```
+
+### 8.2 The build
+
+Chromium looks for Visual Studio under `%ProgramFiles%`, and the Build Tools install lands in `%ProgramFiles(x86)%`, so it has to be pointed at it.
+
+```bat
+set "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+set "vs2022_install=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+set "GYP_MSVS_VERSION=2022"
+set "PATH=%CD%\depot_tools;%PATH%"
+
+git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+fetch --nohooks webrtc
+cd src
+git fetch origin branch-heads/7977:branch-heads/7977
+git checkout branch-heads/7977
+gclient sync -D --force --reset --with_branch_heads --with_tags
+git -C build apply <PartyShare>\patches\webrtc\build\0002-win-dynamic-crt.patch
+```
+
+The GN arguments are the ones `scripts/build_webrtc.sh` uses, plus three that only Windows needs:
+
+```text
+win_use_dynamic_crt=true
+rtc_build_ssl=false                    libsrtp_build_boringssl=false
+rtc_ssl_root="<openssl include dir>"   libsrtp_ssl_root="<the same>"
+```
+
+`win_use_dynamic_crt` is what the patch adds. The two ssl pairs have to agree with each other or `pc/BUILD.gn` refuses the configure with *"Mismatch ssl build settings detected"*, and then with *"Mismatch in ssl root detected"*.
+
+### 8.3 Packaging, and the trap in it
+
+`ninja -C out/dv-release webrtc` is not the whole library, exactly as section 4.6 says, and Windows needs one piece more than Linux does: `rtc_software_fallback_wrappers`, without which the client link ends on `CreateVideoEncoderSoftwareFallbackWrapper` alone.
+
+The per target `.lib` files are **thin archives** - they begin with `!<thin>` and hold paths rather than objects - so `lib.exe` cannot read them, and `lib /LIST` answers with nothing rather than with a complaint. Merge the object files instead, which sit under `obj/<target path>/<target name>/*.obj`:
+
+```bat
+lib /OUT:dist\lib\webrtc.lib obj\webrtc.lib ^
+  obj\api\video_codecs\builtin_video_encoder_factory\*.obj ^
+  obj\api\video_codecs\builtin_video_decoder_factory\*.obj ^
+  obj\api\video_codecs\rtc_software_fallback_wrappers\*.obj ^
+  obj\api\video\adapted_video_track_source\*.obj ^
+  obj\media\rtc_internal_video_codecs\*.obj ^
+  obj\media\rtc_simulcast_encoder_adapter\*.obj
+```
+
+Headers go into `dist/include` the way the script does it on Linux, libyuv flattened included. Then two marker files, both read by `cmake/Findlibwebrtc.cmake`:
+
+- `DV_SYSTEM_LIBCXX`, because the tree was built with `use_custom_libcxx=false`.
+- `DV_EXTERNAL_SSL`, because it was built with `rtc_build_ssl=false` and something else has to bring the OpenSSL. Without it the client link ends in 49 unresolved externals starting at `SSL_CTX_set_options`.
+
+### 8.4 What it produced
+
+A `partyshare.exe` of 30 MB holding Qt, libwebrtc and OpenSSL at once, which is the combination the prebuilt package makes impossible, and 24 of the 25 media tests passing. The one that did not is in section 6 of [webrtc-toolchain.md](webrtc-toolchain.md).
 
 In both cases, set aside the time: the checkout is over 30 GB and the build takes tens of minutes.

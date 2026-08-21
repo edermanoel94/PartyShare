@@ -11,6 +11,19 @@
 // The output is the point: the assertions only guard against the run being
 // meaningless, and what goes into docs/benchmarks.md is what it prints.
 
+#ifdef _WIN32
+// clang-format off
+// windows.h has to come first: psapi.h does not include it and uses its types,
+// and sorting these two alphabetically is what breaks the build.
+#include <windows.h>
+
+#include <psapi.h>
+// clang-format on
+#endif
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -34,6 +47,42 @@ constexpr std::size_t kParticipants = 5;
   return 30s;
 }
 
+// Both numbers below come from the operating system rather than from a timer,
+// because what the benchmark reports is what the machine spent, not what the
+// test observed. Windows has no /proc, and the Linux implementation does not
+// fail there so much as answer zero, which is worse: the assertion at the end
+// would report a benchmark that measured nothing as one that found nothing.
+#ifdef _WIN32
+/// Resident memory of this process, in mebibytes.
+[[nodiscard]] double resident_mib() {
+  PROCESS_MEMORY_COUNTERS counters{};
+  counters.cb = sizeof(counters);
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) == 0) {
+    return 0;
+  }
+  return static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+}
+
+/// CPU seconds this process has used, user plus system.
+[[nodiscard]] double cpu_seconds() {
+  FILETIME created{};
+  FILETIME exited{};
+  FILETIME kernel{};
+  FILETIME user{};
+  if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) == 0) {
+    return 0;
+  }
+  // Counts of 100 nanosecond intervals, split across two 32 bit halves because
+  // the struct predates a 64 bit integer being something an API could return.
+  const auto to_seconds = [](const FILETIME& time) {
+    ULARGE_INTEGER value{};
+    value.LowPart = time.dwLowDateTime;
+    value.HighPart = time.dwHighDateTime;
+    return static_cast<double>(value.QuadPart) / 1e7;
+  };
+  return to_seconds(kernel) + to_seconds(user);
+}
+#else
 /// Resident memory of this process, in mebibytes.
 [[nodiscard]] double resident_mib() {
   std::ifstream status("/proc/self/status");
@@ -61,6 +110,7 @@ constexpr std::size_t kParticipants = 5;
   const auto ticks = static_cast<double>(sysconf(_SC_CLK_TCK));
   return static_cast<double>(user + system) / ticks;
 }
+#endif
 
 class BenchmarkTest : public MediaEndToEndTest {
  protected:

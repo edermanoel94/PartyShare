@@ -188,7 +188,7 @@ Tasks:
 8. [x] Complete the source build and revalidate the spike over it.
 9. [x] Validate screen capture with a graphics server attached, under X11.
 10. [ ] Repeat the capture validation in a Wayland session.
-11. Partial. The spike runs on Windows x64. macOS ARM64 is still unmeasured. See `docs/webrtc-validation.md`.
+11. Partial. Windows x64 is done, spike and media layer both, over a source build. macOS ARM64 is still unmeasured. See `docs/webrtc-validation.md`.
 
 Acceptance criteria:
 
@@ -218,6 +218,36 @@ for Windows is therefore a decision about the whole dependency stack, and it has
 The run also found a defect of ours: the Windows library list in `cmake/Findlibwebrtc.cmake` had no `dwmapi`,
 which `RTC_ENABLE_WIN_WGC` two lines above it requires, and the link died on `DwmGetWindowAttribute` alone after
 everything else had resolved.
+
+Then the media layer, which is where the prebuilt package stopped being usable at all.
+
+Two walls, and they are the same wall seen twice. The archive is compiled against the static C runtime and Qt ships
+against the dynamic one, with no /MT build of Qt existing; an executable has one runtime, so the two cannot share a
+binary. And it bundles BoringSSL, whose symbols are the ones libdatachannel's OpenSSL already defines, which the
+Windows linker refuses and the Linux one quietly resolves in favour of whichever archive it read first. That second
+one is why Linux never met this: it is not that the conflict is absent there, it is that ELF linking hides it.
+
+A source build answers both, and needed a patch of its own to do it: GN ties the dynamic CRT to `is_component_build`,
+and taking that route would ship the whole library as DLLs and put the installer near 90 MB instead of 65. The new
+`win_use_dynamic_crt` separates the two decisions, and is off by default.
+
+Four defects of ours came out of compiling `client/src/webrtc` with MSVC for the first time, and none of them is a
+warning - all four stop the build. `dlfcn.h` in the NVENC encoder, now off on Windows. `CreateClientTcpSocket` in
+two shapes, because the prebuilt and source trees disagree about a method signature while both calling themselves
+m152, now measured by a two line probe at configure time. `libyuv` in a different place in each tree. And a missing
+`#include <array>` in `test_benchmark.cpp`, latent for as long as the file has existed, because libstdc++ brings it
+in by transitivity and the MSVC standard library does not.
+
+The result is a `partyshare.exe` of 30 MB with Qt, libwebrtc and OpenSSL in it, and 24 of 25 media tests passing.
+The one that fails, `TheEchoCancellerRunsOnTheCapturedAudio`, fails in an interesting way: the call connects, the
+audio flows at a round trip of 1 ms with nothing lost, and AEC3 never reports itself as running. That is written
+down rather than fixed, because what it means is not yet known.
+
+And one finding that has nothing to do with Windows. `.gitignore` matched `build/` at any depth, which includes
+`patches/webrtc/build/`, so the patch this repository documents for the Linux source build was never committed -
+`git add` refused it without a word. `scripts/build_webrtc.sh` passes the two GN arguments only that patch declares,
+so the Linux media layer builds from a fresh clone on no machine at all, and works today only where the file happens
+to sit untracked. The rule is anchored to the root now; the patch itself still has to come back from whoever has it.
 
 ---
 ### M4 - Vertical slice: audio between two clients

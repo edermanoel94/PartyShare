@@ -468,6 +468,27 @@ TEST_F(CallSessionTest, RefusesToJoinBeforeAuthenticating) {
   EXPECT_EQ(attempted.error().code, "unauthorized");
 }
 
+// Mistyping a password is the most ordinary thing that happens on a login
+// screen, and it used to end the session for good. The server answers the
+// refusal with an error and leaves the socket standing, so the second attempt
+// found a connection already open, reported `already_connected`, and put
+// "disconnect() before connecting again" in front of the user. The button did
+// nothing from then on and the only way back was to close the window.
+TEST_F(CallSessionTest, AWrongPasswordCanBeFollowedByTheRightOne) {
+  Client& ana = add("ana");
+
+  ASSERT_TRUE(ana.session().connect_and_authenticate("ana", "wrong").ok());
+  ASSERT_TRUE(wait_until([&] { return !ana.errors().empty(); }))
+      << "the session never reported the refusal";
+  EXPECT_EQ(ana.errors().front().code, "unauthorized");
+  EXPECT_TRUE(ana.session().local_user().id.empty()) << "a wrong password authenticated";
+
+  ASSERT_TRUE(ana.session().connect_and_authenticate("ana", "password").ok())
+      << "the second attempt was refused before it reached the server";
+  EXPECT_TRUE(wait_until([&] { return !ana.session().local_user().id.empty(); }))
+      << "the right password after a wrong one did not authenticate";
+}
+
 TEST_F(CallSessionTest, AuthenticatesAndReachesTheAuthenticatedState) {
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());

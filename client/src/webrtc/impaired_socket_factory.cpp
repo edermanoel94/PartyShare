@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -203,12 +204,34 @@ class ImpairedSocketFactory : public webrtc::PacketSocketFactory {
     return inner_->CreateServerTcpSocket(env, local_address, min_port, max_port, opts);
   }
 
+  // Two shapes of the same method, and the tree decides which one exists.
+  //
+  // The prebuilt archives carry a six parameter form with a proxy and a user
+  // agent in the middle, in a webrtc::revive namespace upstream does not have;
+  // the tree scripts/build_webrtc.sh produces carries the four parameter form.
+  // Both call themselves m152. Findlibwebrtc.cmake compiles a two line probe to
+  // find out and defines DV_WEBRTC_TCP_SOCKET_TAKES_PROXY when it is the first,
+  // because an override that guesses wrong is not a warning, it is C3668.
+  //
+  // Neither body does anything but forward. This class impairs UDP, which is
+  // what the media travels on; TCP is here because the interface is pure and
+  // something has to stand in for it.
+#if DV_WEBRTC_TCP_SOCKET_TAKES_PROXY
+  std::unique_ptr<webrtc::AsyncPacketSocket> CreateClientTcpSocket(
+      const webrtc::Environment& env, const webrtc::SocketAddress& local_address,
+      const webrtc::SocketAddress& remote_address, const webrtc::revive::ProxyInfo& proxy_info,
+      const std::string& user_agent, const webrtc::PacketSocketTcpOptions& options) override {
+    return inner_->CreateClientTcpSocket(env, local_address, remote_address, proxy_info, user_agent,
+                                         options);
+  }
+#else
   std::unique_ptr<webrtc::AsyncPacketSocket> CreateClientTcpSocket(
       const webrtc::Environment& env, const webrtc::SocketAddress& local_address,
       const webrtc::SocketAddress& remote_address,
       const webrtc::PacketSocketTcpOptions& options) override {
     return inner_->CreateClientTcpSocket(env, local_address, remote_address, options);
   }
+#endif
 
   std::unique_ptr<webrtc::AsyncDnsResolverInterface> CreateAsyncDnsResolver() override {
     return inner_->CreateAsyncDnsResolver();

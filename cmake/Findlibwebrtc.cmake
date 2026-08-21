@@ -138,6 +138,19 @@ if(EXISTS "${_dv_webrtc_prefix}/DV_SYSTEM_LIBCXX")
   set(DV_WEBRTC_USE_BUNDLED_LIBCXX OFF CACHE BOOL "" FORCE)
 endif()
 
+# A tree built with rtc_build_ssl=false has no BoringSSL inside it, and expects
+# whoever links it to bring an OpenSSL. That is the point on Windows: the
+# prebuilt archives bundle BoringSSL, and its symbols collide with the OpenSSL
+# libdatachannel needs, so the SFU and the client cannot be linked into the same
+# binary. Dropping the bundled copy is what makes one process able to hold both.
+#
+# Marked by a file rather than guessed from the platform, for the same reason
+# DV_SYSTEM_LIBCXX is: it is a property of how the tree was built, and the
+# alternative is 49 unresolved externals naming SSL_CTX_set_options.
+if(EXISTS "${_dv_webrtc_prefix}/DV_EXTERNAL_SSL")
+  set(DV_WEBRTC_EXTERNAL_SSL ON)
+endif()
+
 add_library(libwebrtc::libwebrtc STATIC IMPORTED GLOBAL)
 set_target_properties(libwebrtc::libwebrtc PROPERTIES
   IMPORTED_LOCATION "${DV_WEBRTC_LIBRARY}"
@@ -149,6 +162,61 @@ target_include_directories(libwebrtc::libwebrtc SYSTEM INTERFACE
   "${DV_WEBRTC_INCLUDE_DIR}/third_party/abseil-cpp"
   "${DV_WEBRTC_INCLUDE_DIR}"
 )
+
+# libyuv is included as <libyuv/convert.h>, and the two trees disagree about
+# where that lives. The one scripts/build_webrtc.sh produces flattens it into
+# the top include directory; the prebuilt archives keep the Chromium layout and
+# leave it under third_party/libyuv/include. Added when it is there rather than
+# by platform, because it is a property of the tree and not of the operating
+# system: without it the screen capturer and the media session do not compile,
+# and they are the two files that convert frames.
+if(EXISTS "${DV_WEBRTC_INCLUDE_DIR}/third_party/libyuv/include/libyuv/convert.h")
+  target_include_directories(libwebrtc::libwebrtc SYSTEM INTERFACE
+    "${DV_WEBRTC_INCLUDE_DIR}/third_party/libyuv/include")
+endif()
+
+# Which shape PacketSocketFactory::CreateClientTcpSocket has.
+#
+# Both trees call themselves m152, and their headers disagree: the prebuilt
+# archives carry a six parameter form with a proxy and a user agent in the
+# middle, in a webrtc::revive namespace that upstream does not have, and the
+# source build carries the four parameter form the code was written against.
+# An override that guesses wrong is not a warning, it is C3668, so the answer is
+# measured here instead.
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES
+  "${DV_WEBRTC_INCLUDE_DIR}/third_party/abseil-cpp" "${DV_WEBRTC_INCLUDE_DIR}")
+# The same definitions the target carries below. Without them the header does
+# not parse at all and the probe answers "no proxy" for the wrong reason, which
+# is the failure mode a silent check has: it is never wrong, it is only useless.
+if(WIN32)
+  set(CMAKE_REQUIRED_DEFINITIONS
+    -DWEBRTC_WIN -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_WINSOCKAPI_)
+elseif(APPLE)
+  set(CMAKE_REQUIRED_DEFINITIONS -DWEBRTC_POSIX -DWEBRTC_MAC)
+else()
+  set(CMAKE_REQUIRED_DEFINITIONS -DWEBRTC_POSIX -DWEBRTC_LINUX)
+endif()
+set(CMAKE_REQUIRED_QUIET ON)
+check_cxx_source_compiles("
+#include <api/packet_socket_factory.h>
+using P = webrtc::revive::ProxyInfo;
+int main() { return 0; }
+" DV_WEBRTC_TCP_SOCKET_TAKES_PROXY)
+unset(CMAKE_REQUIRED_INCLUDES)
+unset(CMAKE_REQUIRED_DEFINITIONS)
+unset(CMAKE_REQUIRED_QUIET)
+if(DV_WEBRTC_TCP_SOCKET_TAKES_PROXY)
+  target_compile_definitions(libwebrtc::libwebrtc INTERFACE
+    DV_WEBRTC_TCP_SOCKET_TAKES_PROXY=1)
+  message(STATUS "libwebrtc: CreateClientTcpSocket takes a proxy and a user agent")
+endif()
+
+if(DV_WEBRTC_EXTERNAL_SSL)
+  message(STATUS "libwebrtc: linking the external OpenSSL rather than a bundled BoringSSL")
+  find_package(OpenSSL REQUIRED)
+  target_link_libraries(libwebrtc::libwebrtc INTERFACE OpenSSL::SSL OpenSSL::Crypto)
+endif()
 
 # --- platform usage requirements ---------------------------------------------
 

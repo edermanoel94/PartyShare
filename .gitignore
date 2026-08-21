@@ -1,7 +1,16 @@
 # Build
-build/
-out/
-install/
+#
+# Anchored to the root on purpose. Without the leading slash these match a
+# directory of that name at any depth, and patches/webrtc/build/ is one:
+# the patch documented in docs/webrtc-toolchain.md as
+# build/0001-libstdcxx-and-crel-opt-outs.patch was never committed because
+# `git add` refused it silently. scripts/build_webrtc.sh passes the two GN
+# arguments that patch declares, so a clone that has never seen the file
+# fails at gn gen, and the Linux media layer builds only on machines where
+# it happens to exist untracked.
+/build/
+/out/
+/install/
 CMakeUserPresets.json
 
 # Dependencies

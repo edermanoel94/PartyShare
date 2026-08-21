@@ -295,6 +295,12 @@ Section 17 of the SPEC forbids it in production, and the server logs a warning o
 Environment variables use the `DV_` prefix, for example `DV_SIGNALING_URL`, `DV_LOG_LEVEL`, `DV_VIDEO_FPS`.
 The complete list is in `shared/src/config/config.cpp`.
 
+The client also reads a `config.ini` it is not told about, first beside its own executable and then under
+the user's configuration directory, with the second winning. That is how an installed client is pointed at
+a server, because a shortcut carries no arguments; the ports section of [requirements.md](requirements.md)
+and the client chapter of [../INSTALL.md](../INSTALL.md) cover it. `--config=PATH` takes `.ini` or `.json`
+by extension and replaces both.
+
 `--ice-port-range=50000-50100` pins the UDP ports the SFU binds media in, which is what makes a firewall rule
 possible: without it the system picks an ephemeral port per participant.
 The ports section of [requirements.md](requirements.md) covers how to size the range.

@@ -1,4 +1,6 @@
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -320,6 +322,193 @@ TEST(Config, TheIceRangeSurvivesSerialization) {
   ASSERT_TRUE(reparsed.ok()) << reparsed.error().message;
   EXPECT_EQ(reparsed.value().network.ice_port_range_begin, 50000);
   EXPECT_EQ(reparsed.value().network.ice_port_range_end, 50100);
+}
+
+// --- INI ---------------------------------------------------------------------
+
+/// Writes `text` to a uniquely named file and removes it afterwards.
+class ScopedFile {
+ public:
+  ScopedFile(const std::string& extension, const std::string& text) {
+    static int counter = 0;
+    path_ = std::filesystem::temp_directory_path() /
+            ("dv-config-" + std::to_string(++counter) + extension);
+    std::ofstream(path_) << text;
+  }
+
+  ScopedFile(const ScopedFile&) = delete;
+  ScopedFile& operator=(const ScopedFile&) = delete;
+  ScopedFile(ScopedFile&&) = delete;
+  ScopedFile& operator=(ScopedFile&&) = delete;
+
+  ~ScopedFile() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+  }
+
+  [[nodiscard]] std::string path() const { return path_.string(); }
+
+ private:
+  std::filesystem::path path_;
+};
+
+TEST(ConfigIni, ReadsTheServerAddress) {
+  // The whole reason the format exists: somebody opens a file in Notepad and
+  // writes down where the server is.
+  const auto parsed = dv::config::parse_ini(
+      "[network]\n"
+      "signaling_url = ws://192.168.1.10:8080\n",
+      Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().network.signaling_url, "ws://192.168.1.10:8080");
+}
+
+TEST(ConfigIni, IgnoresCommentsBlankLinesAndCarriageReturns) {
+  // The carriage returns are the point of half this test: the file is edited on
+  // Windows, and on Linux every line would otherwise end in one.
+  const auto parsed = dv::config::parse_ini(
+      "; onde fica o servidor\r\n"
+      "\r\n"
+      "[network]\r\n"
+      "# tambem um comentario\r\n"
+      "   signaling_url   =   ws://10.0.0.5:9000   \r\n",
+      Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().network.signaling_url, "ws://10.0.0.5:9000");
+}
+
+TEST(ConfigIni, TakesAQuotedValue) {
+  const auto parsed = dv::config::parse_ini(
+      "[network]\n"
+      "signaling_url = \"ws://192.168.1.10:8080\"\n",
+      Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().network.signaling_url, "ws://192.168.1.10:8080");
+}
+
+TEST(ConfigIni, SplitsAListOnCommas) {
+  const auto parsed = dv::config::parse_ini(
+      "[network]\n"
+      "stun_servers = stun:a.example:3478, stun:b.example:3478\n",
+      Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  ASSERT_EQ(parsed.value().network.stun_servers.size(), 2U);
+  EXPECT_EQ(parsed.value().network.stun_servers[0], "stun:a.example:3478");
+  EXPECT_EQ(parsed.value().network.stun_servers[1], "stun:b.example:3478");
+}
+
+TEST(ConfigIni, ReachesEverySection) {
+  const auto parsed = dv::config::parse_ini(
+      "[video]\nfps = 24\n"
+      "[audio]\nchannels = 2\n"
+      "[network]\nice_port_range_begin = 50000\n"
+      "[logging]\nlevel = debug\n"
+      "[server]\nport = 9000\n"
+      "[database]\nenabled = true\n",
+      Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().video.fps, 24);
+  EXPECT_EQ(parsed.value().audio.channels, 2);
+  EXPECT_EQ(parsed.value().network.ice_port_range_begin, 50000);
+  EXPECT_EQ(parsed.value().logging.level, "debug");
+  EXPECT_EQ(parsed.value().server.port, 9000);
+  EXPECT_TRUE(parsed.value().database.enabled);
+}
+
+TEST(ConfigIni, RefusesWhatItCannotApply) {
+  // Every one of these would otherwise be a line that looks applied and is not,
+  // which is the failure this format exists to make impossible.
+  const std::pair<const char*, const char*> cases[] = {
+      {"[nowhere]\nkey = 1\n", "an unknown section"},
+      {"[network]\nsignalling_url = ws://x:1\n", "a misspelled key"},
+      {"[video]\nfps = many\n", "a number that is not one"},
+      {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
+      {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
+      {"[server]\nport = 70000\n", "a port out of range"},
+      {"signaling_url = ws://x:1\n", "a setting under no section"},
+      {"[network\nsignaling_url = ws://x:1\n", "an unterminated section header"},
+      {"[network]\njust some words\n", "a line that is neither"},
+      {"[network]\n = ws://x:1\n", "a nameless setting"},
+  };
+  for (const auto& [text, what] : cases) {
+    const auto parsed = dv::config::parse_ini(text, Config{});
+    ASSERT_FALSE(parsed.ok()) << what << " was accepted";
+    EXPECT_EQ(parsed.error().code, "invalid_ini") << what;
+    // The line number is what makes the file editable by a person.
+    EXPECT_NE(parsed.error().message.find("line "), std::string::npos) << what;
+  }
+}
+
+TEST(ConfigIni, LeavesAloneWhatItWasNotTold) {
+  Config base;
+  base.video.fps = 15;
+  const auto parsed = dv::config::parse_ini("[network]\nsignaling_url = ws://x:1\n", base);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().video.fps, 15);
+}
+
+TEST(ConfigIni, LoadFromFilePicksTheParserByExtension) {
+  const ScopedFile ini(".ini", "[network]\nsignaling_url = ws://192.168.1.10:8080\n");
+  const auto from_ini = dv::config::load_from_file(ini.path());
+  ASSERT_TRUE(from_ini.ok()) << from_ini.error().message;
+  EXPECT_EQ(from_ini.value().network.signaling_url, "ws://192.168.1.10:8080");
+
+  // JSON is the form that existed first, and it has to keep working.
+  const ScopedFile json(".json", "{\"network\": {\"signaling_url\": \"ws://10.0.0.5:9000\"}}");
+  const auto from_json = dv::config::load_from_file(json.path());
+  ASSERT_TRUE(from_json.ok()) << from_json.error().message;
+  EXPECT_EQ(from_json.value().network.signaling_url, "ws://10.0.0.5:9000");
+}
+
+TEST(ConfigIni, TheCascadeRunsFromTheExecutableToTheUser) {
+  // Forward slashes on purpose: std::filesystem takes them on Windows too, and
+  // a backslash here would only be an escape waiting to be got wrong.
+#ifdef _WIN32
+  const ScopedEnv base("LOCALAPPDATA", "C:/dv-test-appdata");
+#elif defined(__APPLE__)
+  const ScopedEnv base("HOME", "/dv-test-home");
+#else
+  const ScopedEnv base("XDG_CONFIG_HOME", "/dv-test-config");
+#endif
+
+  const auto paths = dv::config::default_config_paths();
+  ASSERT_FALSE(paths.empty());
+  for (const auto& path : paths) {
+    EXPECT_EQ(path.filename().string(), "config.ini");
+  }
+
+  // The user's own comes last, which is what makes it the one that wins.
+  const std::string last = paths.back().string();
+  EXPECT_NE(last.find("dv-test-"), std::string::npos) << last;
+  EXPECT_NE(last.find("partyshare"), std::string::npos) << last;
+
+  // The machine's comes first, beside the executable running this.
+  if (paths.size() > 1) {
+    EXPECT_NE(paths.front(), paths.back());
+  }
+}
+
+TEST(ConfigIni, TheNamedFileReplacesTheCascadeRatherThanJoiningIt) {
+  // The log of a running client is built from this, so it has to answer what
+  // load() will actually read. Naming files that were not read is what sends
+  // somebody to edit the wrong one.
+  const char* plain[] = {"partyshare"};
+  EXPECT_EQ(dv::config::config_files(1, plain), dv::config::default_config_paths());
+
+  const char* named[] = {"partyshare", "--config=/tmp/somewhere.ini"};
+  const auto explicitly = dv::config::config_files(2, named);
+  ASSERT_EQ(explicitly.size(), 1U);
+  EXPECT_EQ(explicitly.front(), std::filesystem::path("/tmp/somewhere.ini"));
+
+  const ScopedEnv from_env("DV_CONFIG_FILE", "/tmp/from-env.ini");
+  const auto by_environment = dv::config::config_files(1, plain);
+  ASSERT_EQ(by_environment.size(), 1U);
+  EXPECT_EQ(by_environment.front(), std::filesystem::path("/tmp/from-env.ini"));
+
+  // And the command line still beats the environment.
+  const auto both = dv::config::config_files(2, named);
+  ASSERT_EQ(both.size(), 1U);
+  EXPECT_EQ(both.front(), std::filesystem::path("/tmp/somewhere.ini"));
 }
 
 }  // namespace

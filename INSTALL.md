@@ -243,8 +243,48 @@ Log in with one of the accounts from `dev-users.json`, create a room, and share 
 is connecting to that same server. `partyshare --help` lists the rest: `--input-device`, `--output-device`,
 `--codec`, `--fps`, `--log-level`, `--log-file`.
 
-Configuration precedence is: built-in defaults, then the config file, then `DV_`-prefixed environment
-variables, then the command line. The complete list of variables is in `shared/src/config/config.cpp`.
+### Writing the address down instead of typing it
+
+A flag is fine for one run and useless for a machine somebody else uses: an installed client is started
+from a shortcut, and a shortcut carries no arguments. So the client looks for a `config.ini` on its own,
+in two places, and neither has to exist:
+
+| Order | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| 1. The machine's | Beside `partyshare.exe` | Beside the binary | Beside the binary |
+| 2. This user's | `%LOCALAPPDATA%\partyshare\` | `$XDG_CONFIG_HOME/partyshare/` | `~/Library/Application Support/partyshare/` |
+
+The second wins over the first. That is the split that matters: whoever installs a machine writes the first
+one and it answers for every account on it, and a person overrides it in the second without being asked for
+an administrator password.
+
+One line is the whole file:
+
+```ini
+[network]
+signaling_url = ws://192.168.1.10:8080
+```
+
+The Windows installer drops a commented `config.example.ini` beside the executable. Rename it to
+`config.ini` to put it to work — it ships under the other name because the installer replaces what it
+installed, and an upgrade would otherwise take the address of the server with it.
+
+Sections and keys are the same names the JSON form uses, so nothing has to be learned twice. Comments start
+with `;` or `#`. A key the client does not know is a startup error naming the line, rather than a line that
+quietly does nothing:
+
+```text
+configuration error [invalid_ini]: line 2: no such setting as [network] signalling_url
+```
+
+The client prints which of these files it read and which it did not find, every startup, at `info`. That
+log line is the answer to "I put the address in and it still connects to localhost", which is almost always
+a file written one directory away from the one being read.
+
+Configuration precedence is: built-in defaults, the machine's `config.ini`, this user's `config.ini`, then
+`DV_`-prefixed environment variables, then the command line. `--config=PATH` takes either `.ini` or `.json`
+and **replaces** both discovered files rather than joining them. The complete list of variables is in
+`shared/src/config/config.cpp`.
 
 ### Two clients on one machine
 

@@ -1,6 +1,8 @@
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <string_view>
+#include <system_error>
 
 #include <dv/config/config.hpp>
 #include <dv/diagnostics/crash_reporter.hpp>
@@ -51,7 +53,8 @@ void print_usage() {
              "Every option takes the --key=value form. A bare --key is ignored.\n"
              "\n"
              "Options:\n"
-             "  --config=PATH            Configuration file to read before anything else\n"
+             "  --config=PATH            Configuration file, .ini or .json. Replaces the\n"
+             "                           two below rather than joining them.\n"
              "  --signaling-url=URL      Signaling server to connect to\n"
              "  --input-device=NAME      Microphone to capture from\n"
              "  --output-device=NAME     Speakers to play through\n"
@@ -64,8 +67,19 @@ void print_usage() {
              "Qt reads its own options from this same command line, so anything not\n"
              "listed here is passed on to Qt rather than refused.\n"
              "\n"
-             "Configuration precedence, lowest first: built-in defaults, the file given\n"
-             "to --config, environment variables prefixed with DV_, then these options.\n",
+             "Configuration precedence, lowest first: built-in defaults, config.ini\n"
+             "beside this executable, config.ini under the user's own configuration\n"
+             "directory, environment variables prefixed with DV_, then these options.\n"
+             "\n"
+             "The two files are found without being named, and neither has to exist.\n"
+             "The first is the machine's, written by whoever installed it; the second\n"
+             "is this user's, and needs no administrator to edit. Where they are on\n"
+             "this machine is printed at startup, with --log-level=info.\n"
+             "\n"
+             "To point the client at a server, one line is enough:\n"
+             "\n"
+             "  [network]\n"
+             "  signaling_url = ws://192.168.1.10:8080\n",
              stdout);
 }
 
@@ -103,6 +117,26 @@ int run(int argc, char* argv[]) {
       .file_path = config.logging.file_path,
       .log_to_console = config.logging.log_to_console,
   });
+
+  // Which files were and were not read, every time.
+  //
+  // This is the one thing that turns "I put the address in and it still
+  // connects to localhost" from a support conversation into a glance at the
+  // log. The path is printed whether or not the file is there, because half of
+  // those reports are a file written one directory away from the one that is
+  // read, and a path that says "missing" answers that immediately.
+  //
+  // config_files and not default_config_paths: an explicit --config replaces
+  // the cascade, and a log naming files that were not read would send the
+  // reader to edit the wrong one.
+  for (const std::filesystem::path& path : dv::config::config_files(argc, argv)) {
+    std::error_code failed;
+    const bool present = std::filesystem::is_regular_file(path, failed);
+    DV_LOG_INFO("Configuration file {}: {}", present ? "read" : "missing", path.string());
+  }
+  // What the files added up to is logged a few lines below, with the rest of
+  // the effective configuration. Saying it twice would only invite the two
+  // lines to disagree one day.
 
   // Before anything that could crash, and after logging so that a failure to
   // install has somewhere to be said.

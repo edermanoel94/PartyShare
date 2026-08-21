@@ -126,6 +126,10 @@ void print_usage() {
              "  --bind-address=ADDRESS   Address to listen on (default 0.0.0.0)\n"
              "  --port=PORT              Port to listen on, 1 to 65535 (default 8080)\n"
              "  --max-participants=N     Participants allowed per room (default 5)\n"
+             "  --ice-port-range=A-B     UDP range the SFU binds media in, as 50000-50100.\n"
+             "                           Unset, the system picks an ephemeral port per\n"
+             "                           participant and the firewall has to allow the\n"
+             "                           whole ephemeral range.\n"
              "  --users-file=PATH        Development account list, see below\n"
              "  --database-uri=URI       MongoDB to persist accounts, rooms and the audit\n"
              "                           log in. Giving one turns the database on.\n"
@@ -339,6 +343,8 @@ int main(int argc, char* argv[]) {
     // ICE for the SFU's own connections. TURN only matters once a participant is
     // behind a NAT that STUN cannot get through, which is why it is optional.
     options.sfu.ice_servers = config.network.stun_servers;
+    options.sfu.port_range_begin = config.network.ice_port_range_begin;
+    options.sfu.port_range_end = config.network.ice_port_range_end;
     // What the SFU will ask a screen share to aim for: the configured range,
     // with the floor congestion control may squeeze it to.
     options.sfu.bandwidth.start_kbps = config.video.min_bitrate_kbps;
@@ -363,6 +369,12 @@ int main(int argc, char* argv[]) {
     DV_LOG_INFO("Max participants per room: {}", config.server.max_participants_per_room);
     DV_LOG_INFO("Media routing: {}, {} ICE server(s)", options.enable_sfu ? "on" : "off",
                 options.sfu.ice_servers.size());
+    if (options.sfu.port_range_begin != 0) {
+      DV_LOG_INFO("Media UDP port range: {}-{}", options.sfu.port_range_begin,
+                  options.sfu.port_range_end);
+    } else {
+      DV_LOG_INFO("Media UDP ports: ephemeral, one per participant, chosen by the system");
+    }
     DV_LOG_INFO("Press Ctrl+C to stop");
 
     while (!g_stop_requested) {

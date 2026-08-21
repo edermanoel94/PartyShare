@@ -46,6 +46,17 @@ struct NetworkConfig {
   std::string turn_url;
   std::string turn_username;
   std::string turn_password;
+  /// The UDP range the SFU binds its ICE sockets in. Zero on both, the
+  /// default, leaves the choice to the system's ephemeral range, which is what
+  /// the server did before this setting existed.
+  ///
+  /// A range exists so a firewall can open something narrower than the whole
+  /// ephemeral range. One port is taken per participant, so it has to hold
+  /// server.max_participants_per_room times the number of rooms running at
+  /// once. Note that 1024 to 65535 is the one range that means nothing:
+  /// libdatachannel reads it as its own default and falls back to ephemeral.
+  std::uint16_t ice_port_range_begin = 0;
+  std::uint16_t ice_port_range_end = 0;
   int reconnect_initial_delay_ms = 500;
   int reconnect_max_delay_ms = 30000;
 };

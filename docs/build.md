@@ -295,6 +295,10 @@ Section 17 of the SPEC forbids it in production, and the server logs a warning o
 Environment variables use the `DV_` prefix, for example `DV_SIGNALING_URL`, `DV_LOG_LEVEL`, `DV_VIDEO_FPS`.
 The complete list is in `shared/src/config/config.cpp`.
 
+`--ice-port-range=50000-50100` pins the UDP ports the SFU binds media in, which is what makes a firewall rule
+possible: without it the system picks an ephemeral port per participant.
+The ports section of [requirements.md](requirements.md) covers how to size the range.
+
 ## Formatting and static analysis
 
 ```sh

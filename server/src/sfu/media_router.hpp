@@ -53,6 +53,11 @@ class MediaRouter : public MediaSignals {
     /// STUN and TURN URLs, in libdatachannel form, for example
     /// stun:stun.l.google.com:19302.
     std::vector<std::string> ice_servers;
+    /// The UDP range ICE binds in. Zero on both means the system's ephemeral
+    /// range, which is what happened before this option existed. See
+    /// dv::config::NetworkConfig for what a range costs and buys.
+    std::uint16_t port_range_begin = 0;
+    std::uint16_t port_range_end = 0;
     /// Opus at 48 kHz, as section 9 of SPEC.md requires. 111 is the payload
     /// type every browser and libwebrtc build uses for it.
     int opus_payload_type = 111;

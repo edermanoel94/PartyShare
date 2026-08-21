@@ -113,6 +113,46 @@ Other presets: `linux-debug`, `linux-asan`, `linux-make` (Unix Makefiles, for ma
 | Client only | `-DDV_BUILD_SERVER=OFF` |
 | Faster iteration | `-DDV_BUILD_TESTS=OFF` |
 
+#### Only the server
+
+Two ways, and which one is right depends on whether the machine has Qt on it at all.
+
+In a build tree that already exists, name the target. The executable target is `dv_server`;
+`partyshare-server` is only the name it is written under, so `--target partyshare-server` is not a thing:
+
+```sh
+cmake --build build/linux-release --target dv_server
+```
+
+That builds the shared library, the server library and the executable, and stops: no Qt, no client, no
+tests. It is the one to use while working on the server, because it is incremental against a tree that is
+already configured.
+
+On a machine with no Qt, or a CI runner that has no reason to install it, configure a tree that never
+mentions the client:
+
+```sh
+cmake -S . -B build/server-only \
+  -DDV_BUILD_CLIENT=OFF -DDV_BUILD_TESTS=OFF \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build/server-only
+```
+
+Windows, from a shell that has sourced `vcvars64.bat`:
+
+```
+cmake -S . -B build\server-only -G Ninja ^
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+  -DDV_BUILD_CLIENT=OFF -DDV_BUILD_TESTS=OFF ^
+  -DCMAKE_TOOLCHAIN_FILE=%CD%\.vcpkg\scripts\buildsystems\vcpkg.cmake
+cmake --build build\server-only
+```
+
+The presets are not used here on purpose: each one fixes its own `binaryDir`, so `--preset windows-release`
+with the client turned off would overwrite the full tree rather than sit beside it.
+
+Either way the binary lands in `<build tree>/bin/partyshare-server`, and section 3 runs it from there.
+
 ## 3. Run the server
 
 The server needs accounts before anyone can log in. For a first run, a development account list is enough.

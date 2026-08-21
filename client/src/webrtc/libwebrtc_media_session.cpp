@@ -84,6 +84,22 @@ class Engine {
     return engine;
   }
 
+  /// Whether the platform offers an echo canceller of its own.
+  ///
+  /// When it does, libwebrtc uses it and switches AEC3 off - see
+  /// media/engine/webrtc_voice_engine.cc, "Disabling EC since built-in EC will
+  /// be used instead". Windows reaches this and Linux does not, which is why
+  /// the same call reports echo cancellation differently on the two.
+  [[nodiscard]] bool built_in_aec_available() {
+    if (audio_device_ == nullptr) {
+      return false;
+    }
+    bool available = false;
+    worker_thread_->BlockingCall(
+        [this, &available] { available = audio_device_->BuiltInAECIsAvailable(); });
+    return available;
+  }
+
   [[nodiscard]] webrtc::PeerConnectionFactoryInterface* factory() const { return factory_.get(); }
   [[nodiscard]] const std::string& failure() const { return failure_; }
 
@@ -987,6 +1003,18 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // AudioTrackInterface::GetSignalLevel looks like the obvious way to ask,
     // but a local track's source never implements it, so it answers false for
     // every call and an indicator built on it stays at zero forever.
+    // Two ways for this to be true, and only one of them leaves a number.
+    //
+    // AEC3 reports echo return loss while it runs, and that is the evidence on
+    // a platform without an echo canceller of its own. Where the operating
+    // system has one - Windows does - libwebrtc enables it and switches AEC3
+    // off, so there is no ERL to read and the cancellation is happening all the
+    // same. Reading only the first would report "no echo cancellation" on a
+    // machine that is cancelling echo, which is worse than reporting nothing.
+    if (options_.echo_cancellation && Engine::instance().built_in_aec_available()) {
+      collected.echo_cancellation_active = true;
+    }
+
     for (const auto* source : report->GetStatsOfType<webrtc::RTCAudioSourceStats>()) {
       if (source->echo_return_loss.has_value()) {
         collected.echo_cancellation_active = true;

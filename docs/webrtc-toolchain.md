@@ -326,11 +326,12 @@ macOS is still unmeasured. Nothing here says which of the two shapes it will hav
       linked and interoperating. It also found a missing `dwmapi` in this file's own Windows library list.
 - [ ] Spike running on macOS ARM64.
 - [x] Media layer running on Windows x64, over a source build.
-      24 of the 25 media tests pass. `MediaEndToEndTest.TheEchoCancellerRunsOnTheCapturedAudio`
-      does not: the call connects and the audio flows, with a round trip of 1 ms and no loss,
-      but `RTCAudioSourceStats::echo_return_loss` never gets a value, so AEC3 does not report
-      itself as running. Whether Windows delegates that to Core Audio, or whether nothing is
-      really being captured, has not been established.
+      All 25 media tests pass. The one that did not, `TheEchoCancellerRunsOnTheCapturedAudio`,
+      was reporting a real difference and not a defect: Windows has an echo canceller of its
+      own, libwebrtc enables it and switches AEC3 off - `media/engine/webrtc_voice_engine.cc`
+      logs *"Disabling EC since built-in EC will be used instead"* - and `echo_return_loss` is
+      an AEC3 metric. Echo cancellation was running the whole time; the metric that proves it
+      on Linux does not exist here. `AudioStats::echo_cancellation_active` now answers for both.
       `TheAudioPipelineWorksOnAVirtualDevice` skips, because `scripts/virtual_audio.sh` is Linux.
 
 macOS x64 stays out: the distribution publishes no such build.

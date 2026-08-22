@@ -41,10 +41,14 @@ The SFU forwards RTP between participants without decoding anything.
 Accounts carry a **role**, either `user` or `admin`.
 A user joins and creates rooms and shares a screen; an administrator can also remove and mute other participants, and manage the accounts and the rooms from a panel in the client.
 Every administrative action is checked on the server, against the role read from the account store at that moment rather than the one the session logged in with, and every one of them is written to an audit log.
-Section 4.6 of [docs/protocol.md](docs/protocol.md) is the normative list.
+Section 4.7 of [docs/protocol.md](docs/protocol.md) is the normative list.
 
-Accounts, roles, persistent rooms and the audit log are persisted in **MongoDB**, which is optional at build time.
-Without it the server keeps all four in memory and behaves as it did before persistence existed.
+Each room has a **chat**, kept by the server and sent to whoever joins, so that somebody arriving late reads what was already said.
+A room's conversation lives exactly as long as the room: a persistent room keeps it across restarts, an ordinary one is forgotten when it empties.
+Section 4.5 of [docs/protocol.md](docs/protocol.md) is the normative description.
+
+Accounts, roles, persistent rooms, the conversations and the audit log are persisted in **MongoDB**, which is optional at build time.
+Without it the server keeps them all in memory and behaves as it did before persistence existed.
 
 The **shared code** (`shared/`) holds the protocol, the models and the configuration.
 The protocol is defined in [docs/protocol.md](docs/protocol.md), and the C++ implementation follows that document rather than the other way around.

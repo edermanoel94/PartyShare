@@ -4,7 +4,9 @@
 #include <cmath>
 
 #include <dv/logging/logger.hpp>
+#include <dv/models/chat.hpp>
 
+#include <QAbstractItemView>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
@@ -23,6 +25,7 @@
 #include <QMetaObject>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStackedWidget>
@@ -49,6 +52,24 @@ constexpr int kAdminPage = 3;
 /// Where the participant's plain name is kept on a list item, next to the
 /// user id in Qt::UserRole. The visible text carries the state as well.
 constexpr int kNameRole = Qt::UserRole + 1;
+
+/// One line of the conversation as it is shown: when it was said, by whom, and
+/// what.
+///
+/// Built where the message arrives, on the signaling thread, because a QString
+/// crosses to the interface thread without a registered metatype and a
+/// models::ChatMessage would not.
+[[nodiscard]] QString to_chat_line(const models::ChatMessage& message) {
+  const QString name =
+      QString::fromStdString(message.display_name.empty() ? message.user_id : message.display_name);
+  const QString text = QString::fromStdString(message.text);
+  if (message.timestamp_seconds <= 0) {
+    return QStringLiteral("%1: %2").arg(name, text);
+  }
+  const QString when =
+      QDateTime::fromSecsSinceEpoch(message.timestamp_seconds).toString(QStringLiteral("HH:mm"));
+  return QStringLiteral("[%1] %2: %3").arg(when, name, text);
+}
 
 [[nodiscard]] QString to_display(client::app::CallSession::State state) {
   switch (state) {
@@ -306,6 +327,48 @@ void MainWindow::build_room_page() {
   people_column->addWidget(participants_);
   people_column->addLayout(volume_row);
 
+  auto* chat = new QGroupBox(QStringLiteral("Chat"), page);
+  auto* chat_column = new QVBoxLayout(chat);
+  chat_view_ = new QListWidget(chat);
+  // Wrapped, and with no alternating rows: a message is a paragraph rather
+  // than a cell, and a long one has to be readable without a horizontal
+  // scrollbar under it.
+  chat_view_->setWordWrap(true);
+  chat_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  // Selectable, because copying what somebody pasted into the room is half of
+  // what a chat in a screen sharing call is for.
+  chat_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  chat_view_->setTextElideMode(Qt::ElideNone);
+
+  auto* chat_row = new QHBoxLayout();
+  chat_input_ = new QLineEdit(chat);
+  chat_input_->setPlaceholderText(QStringLiteral("Message"));
+  // A coarse guard and not the rule. The limit is bytes, and this counts
+  // characters, so a line of accented text can still be refused by the server
+  // at a length this field allowed. It is here to stop a paste of a whole
+  // document dead rather than to decide anything: send_chat checks the real
+  // limit, and what it answers reaches the same place every other error does.
+  chat_input_->setMaxLength(static_cast<int>(models::kMaxChatTextBytes));
+  chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
+  chat_row->addWidget(chat_input_, 1);
+  chat_row->addWidget(chat_send_);
+
+  chat_column->addWidget(chat_view_, 1);
+  chat_column->addLayout(chat_row);
+
+  // The screen is what the call is about, so it takes the room that is left
+  // over; the sidebar keeps a width that fits a name and a sentence.
+  auto* body = new QHBoxLayout();
+  auto* sidebar = new QVBoxLayout();
+  sidebar->addWidget(people);
+  sidebar->addWidget(chat, 1);
+  body->addWidget(screen_view_, 1);
+  body->addLayout(sidebar);
+  people->setMinimumWidth(260);
+  people->setMaximumWidth(320);
+  chat->setMinimumWidth(260);
+  chat->setMaximumWidth(320);
+
   auto* controls = new QHBoxLayout();
   mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
   mute_button_->setCheckable(true);
@@ -323,12 +386,15 @@ void MainWindow::build_room_page() {
   controls->addWidget(leave_button_);
 
   column->addLayout(header);
-  column->addWidget(screen_view_, 1);
-  column->addWidget(people);
+  column->addLayout(body, 1);
   column->addLayout(controls);
 
   connect(participants_, &QListWidget::customContextMenuRequested, this,
           &MainWindow::on_participant_menu);
+  connect(chat_send_, &QPushButton::clicked, this, &MainWindow::on_send_chat);
+  // Return sends, which is what everybody expects of a field next to a Send
+  // button and what nobody wants to reach for the mouse for.
+  connect(chat_input_, &QLineEdit::returnPressed, this, &MainWindow::on_send_chat);
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
@@ -427,6 +493,21 @@ void MainWindow::wire_session() {
           [this](const std::string& user_id) {
             QMetaObject::invokeMethod(this, "apply_screen_share", Qt::QueuedConnection,
                                       Q_ARG(QString, QString::fromStdString(user_id)));
+          },
+      .on_chat_message =
+          [this](const models::ChatMessage& message) {
+            QMetaObject::invokeMethod(this, "apply_chat_message", Qt::QueuedConnection,
+                                      Q_ARG(QString, to_chat_line(message)));
+          },
+      .on_chat_history =
+          [this](const std::vector<models::ChatMessage>& messages) {
+            QStringList lines;
+            lines.reserve(static_cast<qsizetype>(messages.size()));
+            for (const models::ChatMessage& message : messages) {
+              lines.push_back(to_chat_line(message));
+            }
+            QMetaObject::invokeMethod(this, "apply_chat_history", Qt::QueuedConnection,
+                                      Q_ARG(QStringList, lines));
           },
       .on_user_list =
           [this](const std::vector<protocol::UserSummary>& users) {
@@ -567,8 +648,30 @@ void MainWindow::on_leave_room() {
   }
   screen_view_->clear();
   sharing_label_->clear();
+  // The conversation belongs to the room that was just left. Leaving it on
+  // screen would put one room's messages above the next room's history.
+  chat_view_->clear();
+  chat_input_->clear();
   refresh_controls();
   show_page();
+}
+
+void MainWindow::on_send_chat() {
+  const QString text = chat_input_->text().trimmed();
+  if (text.isEmpty()) {
+    return;
+  }
+
+  if (const auto sent = session_.send_chat(text.toStdString()); !sent) {
+    apply_error(QString::fromStdString(sent.error().code),
+                QString::fromStdString(sent.error().message));
+    return;
+  }
+
+  // Emptied as soon as it is sent rather than when it comes back, so the field
+  // is ready for the next line. Nothing is displayed from here either way:
+  // what appears in the list is the copy the server broadcast.
+  chat_input_->clear();
 }
 
 void MainWindow::on_toggle_mute() {
@@ -906,10 +1009,40 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   }
 }
 
+void MainWindow::apply_chat_message(const QString& line) {
+  append_chat_line(line);
+}
+
+void MainWindow::apply_chat_history(const QStringList& lines) {
+  // Replaced and not appended: this arrives once per join, and a reconnection
+  // that rejoins the same room would otherwise show every message twice.
+  chat_view_->clear();
+  for (const QString& line : lines) {
+    chat_view_->addItem(line);
+  }
+  chat_view_->scrollToBottom();
+}
+
+void MainWindow::append_chat_line(const QString& line) {
+  // Follow the conversation only when it was already being followed. Somebody
+  // who has scrolled up to read something keeps their place, which is the
+  // difference between a chat pane and one that snatches the page away every
+  // time anybody says anything.
+  const QScrollBar* scroll = chat_view_->verticalScrollBar();
+  const bool was_at_bottom = scroll->value() >= scroll->maximum();
+
+  chat_view_->addItem(line);
+  if (was_at_bottom) {
+    chat_view_->scrollToBottom();
+  }
+}
+
 void MainWindow::apply_kicked(const QString& reason) {
   // The session has already left the room and cleared its media by the time
   // this runs, so there is nothing to undo here: only to say what happened and
   // to go back.
+  chat_view_->clear();
+  chat_input_->clear();
   refresh_controls();
   show_page();
 
@@ -975,6 +1108,11 @@ void MainWindow::refresh_controls() {
   share_button_->setEnabled(in_call && !someone_else_is_sharing);
   share_button_->setChecked(sharing);
   share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
+
+  // There is nobody to say anything to outside a room, and a field that
+  // accepts a line it cannot send is a field that loses it.
+  chat_input_->setEnabled(in_call);
+  chat_send_->setEnabled(in_call);
 }
 
 }  // namespace dv::ui

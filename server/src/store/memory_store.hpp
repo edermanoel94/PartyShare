@@ -2,9 +2,11 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "store/audit_log.hpp"
+#include "store/chat_store.hpp"
 #include "store/room_store.hpp"
 #include "store/user_store.hpp"
 
@@ -44,6 +46,33 @@ class MemoryRoomStore final : public RoomStore {
 
  private:
   std::vector<RoomRecord> rooms_;
+};
+
+/// A map here, where the other three use a vector, because every operation is
+/// scoped to one room: appending, reading the end, and forgetting a room whole.
+/// A flat list would make each of those a scan over every other room's
+/// conversation as well.
+class MemoryChatStore final : public ChatStore {
+ public:
+  /// Per room, oldest dropped first. The reason the audit log has a cap
+  /// applies twice over here: this is the product on a server without a
+  /// database, and a persistent room that nobody ever closes is otherwise a
+  /// process that grows for as long as people keep talking in it.
+  ///
+  /// Above kMaxLimit, so that asking for the largest window the protocol
+  /// allows still returns messages rather than the whole of what is kept.
+  static constexpr std::size_t kCapacityPerRoom = 1000;
+
+  [[nodiscard]] Result<models::ChatMessage> append(models::ChatMessage message) override;
+  [[nodiscard]] std::vector<models::ChatMessage> list(const std::string& room_id,
+                                                      int limit) const override;
+  [[nodiscard]] std::optional<Error> clear(const std::string& room_id) override;
+
+ private:
+  /// Oldest first within each room, so appending is a push_back and trimming
+  /// is one erase at the front.
+  std::unordered_map<std::string, std::vector<models::ChatMessage>> rooms_;
+  std::uint64_t next_id_ = 1;
 };
 
 class MemoryAuditLog final : public AuditLog {

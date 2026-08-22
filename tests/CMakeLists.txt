@@ -17,6 +17,7 @@ set(dv_unit_sources
   unit/test_permissions.cpp
   unit/test_hub_admin.cpp
   unit/test_user_store.cpp
+  unit/test_chat_store.cpp
   unit/test_video_feedback.cpp
   unit/test_bandwidth_estimator.cpp
 )

@@ -62,6 +62,7 @@ class MainWindow : public QMainWindow {
   void on_participant_selected();
   void on_participant_menu(const QPoint& where);
   void on_volume_changed(int value);
+  void on_send_chat();
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
@@ -73,6 +74,10 @@ class MainWindow : public QMainWindow {
   void apply_screen_share(const QString& user_id);
   void apply_kicked(const QString& reason);
   void apply_forced_mute(const QString& name, const QString& by_name, bool muted);
+  void apply_chat_message(const QString& line);
+  /// Replaces what is on screen rather than adding to it. See
+  /// CallSession::Callbacks::on_chat_history for why.
+  void apply_chat_history(const QStringList& lines);
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
   // needs as its own specifier, and these members are not slots.
@@ -84,6 +89,9 @@ class MainWindow : public QMainWindow {
   void build_admin_page();
   void wire_session();
   void refresh_controls();
+  /// Adds one line and keeps the view at the bottom, which is where a
+  /// conversation is read from.
+  void append_chat_line(const QString& line);
   void update_volume_label(const QString& participant, int volume);
   void show_page();
 
@@ -118,6 +126,13 @@ class MainWindow : public QMainWindow {
   QPushButton* settings_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
+
+  // Chat. A list of plain text items rather than a rich text view: what goes
+  // in it is typed by other people, and a widget that renders no markup cannot
+  // be made to render theirs.
+  QListWidget* chat_view_ = nullptr;
+  QLineEdit* chat_input_ = nullptr;
+  QPushButton* chat_send_ = nullptr;
 
   // Administration.
   AdminPanel* admin_panel_ = nullptr;

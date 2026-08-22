@@ -290,6 +290,7 @@ int main(int argc, char* argv[]) {
     // the interfaces and not to the implementation.
     dv::server::store::UserStore* user_store = nullptr;
     dv::server::store::RoomStore* room_store = nullptr;
+    dv::server::store::ChatStore* chat_store = nullptr;
     dv::server::store::AuditLog* audit_log = nullptr;
 #ifdef DV_HAS_MONGO
     // Outlives the server, which holds references into it.
@@ -310,6 +311,7 @@ int main(int argc, char* argv[]) {
       database = std::move(opened).take();
       user_store = &database->users();
       room_store = &database->rooms();
+      chat_store = &database->chat();
       audit_log = &database->audit();
 #else
       DV_LOG_ERROR(
@@ -338,6 +340,7 @@ int main(int argc, char* argv[]) {
     options.hub.heartbeat_timeout = std::chrono::milliseconds(config.server.heartbeat_timeout_ms);
     options.hub.users = user_store;
     options.hub.rooms = room_store;
+    options.hub.chat = chat_store;
     options.hub.audit = audit_log;
 
     // ICE for the SFU's own connections. TURN only matters once a participant is

@@ -12,6 +12,7 @@
 #include <dv/models/room.hpp>
 #include <dv/models/user.hpp>
 
+#include "store/chat_store.hpp"
 #include "store/room_store.hpp"
 
 namespace dv::server {
@@ -34,6 +35,15 @@ class RoomManager {
     /// the process, which is what the server did before there was a database
     /// and what it still does without one.
     store::RoomStore* store = nullptr;
+    /// Where what was said in each room is written.
+    ///
+    /// Here rather than only in the Hub, which is the one that writes the
+    /// messages, because this class is what decides that a room has stopped
+    /// existing. A history outlives its room only until somebody is handed
+    /// that six character identifier again, and then it is a stranger's
+    /// conversation on their screen. Keeping the two lifetimes in one place is
+    /// what makes forgetting impossible to forget.
+    store::ChatStore* chat = nullptr;
   };
 
   /// Defined out of line: the default member initializers of Options are
@@ -107,6 +117,12 @@ class RoomManager {
 
  private:
   [[nodiscard]] std::string generate_room_id();
+
+  /// Called from the two places a room stops existing, and from nowhere else.
+  ///
+  /// Const because it changes nothing here: the room is already gone from the
+  /// map by the time it runs, and what is left to do is in the store.
+  void forget(const std::string& room_id) const;
 
   Options options_;
   std::mt19937 random_;

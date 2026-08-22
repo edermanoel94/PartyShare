@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/protocol.md must match.
-constexpr std::array<TypeMapping, 31> kTypeMappings{{
+constexpr std::array<TypeMapping, 34> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -32,6 +32,9 @@ constexpr std::array<TypeMapping, 31> kTypeMappings{{
     {.type = MessageType::ScreenShareStopped, .name = "screen_share_stopped"},
     {.type = MessageType::Mute, .name = "mute"},
     {.type = MessageType::Unmute, .name = "unmute"},
+    {.type = MessageType::ChatMessage, .name = "chat_message"},
+    {.type = MessageType::ListChat, .name = "list_chat"},
+    {.type = MessageType::ChatHistory, .name = "chat_history"},
     {.type = MessageType::Error, .name = "error"},
     {.type = MessageType::Ping, .name = "ping"},
     {.type = MessageType::Pong, .name = "pong"},
@@ -170,6 +173,31 @@ class FieldReader {
     return value;
   }
 
+  /// Reads a nested object, building a `T` from it through `read`, which is
+  /// handed a reader over that object.
+  ///
+  /// A failure inside is reported against the object's own key, so that a
+  /// malformed chat message says "message ..." rather than naming a field the
+  /// sender cannot place.
+  template <typename T, typename Read>
+  T object(std::string_view key, Read read) {
+    const json* field = require(key);
+    if (field == nullptr) {
+      return {};
+    }
+    if (!field->is_object()) {
+      fail("invalid_type", key, "expected an object");
+      return {};
+    }
+    FieldReader nested(*field);
+    T value = read(nested);
+    if (!nested.ok()) {
+      fail(nested.error().code, key, nested.error().message);
+      return {};
+    }
+    return value;
+  }
+
   /// Reads an array of objects, building one `T` per element through `read`,
   /// which is handed a reader over that element.
   ///
@@ -282,6 +310,26 @@ RoomSummary room_summary_from(FieldReader& reader) {
   return value;
 }
 
+json chat_message_to_json(const models::ChatMessage& message) {
+  return json{{"id", message.id},           {"room_id", message.room_id},
+              {"user_id", message.user_id}, {"display_name", message.display_name},
+              {"text", message.text},       {"timestamp_seconds", message.timestamp_seconds}};
+}
+
+models::ChatMessage chat_message_from(FieldReader& reader) {
+  models::ChatMessage value;
+  // Only the three fields a client has to provide are required. The rest are
+  // the server's to fill in, so a message on its way up carries them empty and
+  // is not refused for it.
+  value.id = reader.optional_string("id");
+  value.room_id = reader.string("room_id");
+  value.user_id = reader.string("user_id");
+  value.display_name = reader.optional_string("display_name");
+  value.text = reader.string("text");
+  value.timestamp_seconds = reader.optional_integer("timestamp_seconds");
+  return value;
+}
+
 json audit_entry_to_json(const models::AuditEntry& entry) {
   return json{{"id", entry.id},
               {"actor_id", entry.actor_id},
@@ -386,6 +434,15 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, Unmute>) {
           return MessageType::Unmute;
         }
+        if constexpr (std::is_same_v<T, ChatMessage>) {
+          return MessageType::ChatMessage;
+        }
+        if constexpr (std::is_same_v<T, ListChat>) {
+          return MessageType::ListChat;
+        }
+        if constexpr (std::is_same_v<T, ChatHistory>) {
+          return MessageType::ChatHistory;
+        }
         if constexpr (std::is_same_v<T, ErrorMessage>) {
           return MessageType::Error;
         }
@@ -486,6 +543,18 @@ std::string serialize(const Message& message) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
           root["by_user_id"] = value.by_user_id;
+        } else if constexpr (std::is_same_v<T, ChatMessage>) {
+          root["message"] = chat_message_to_json(value.message);
+        } else if constexpr (std::is_same_v<T, ListChat>) {
+          root["room_id"] = value.room_id;
+          root["limit"] = value.limit;
+        } else if constexpr (std::is_same_v<T, ChatHistory>) {
+          root["room_id"] = value.room_id;
+          json messages = json::array();
+          for (const models::ChatMessage& message : value.messages) {
+            messages.push_back(chat_message_to_json(message));
+          }
+          root["messages"] = std::move(messages);
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {
           root["code"] = value.code;
           root["message"] = value.message;
@@ -678,6 +747,23 @@ Result<Message> parse(std::string_view json_text) {
       value.room_id = reader.string("room_id");
       value.user_id = reader.string("user_id");
       value.by_user_id = reader.optional_string("by_user_id");
+      return finish(reader, value);
+    }
+    case MessageType::ChatMessage: {
+      ChatMessage value;
+      value.message = reader.object<models::ChatMessage>("message", chat_message_from);
+      return finish(reader, value);
+    }
+    case MessageType::ListChat: {
+      ListChat value;
+      value.room_id = reader.string("room_id");
+      value.limit = static_cast<int>(reader.optional_integer("limit"));
+      return finish(reader, value);
+    }
+    case MessageType::ChatHistory: {
+      ChatHistory value;
+      value.room_id = reader.string("room_id");
+      value.messages = reader.array<models::ChatMessage>("messages", chat_message_from);
       return finish(reader, value);
     }
     case MessageType::Error: {

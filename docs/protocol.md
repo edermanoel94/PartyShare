@@ -56,7 +56,7 @@ A persistent room outlives its last participant, so its identifier keeps working
 Only an administrator may ask for one, and anyone else asking is answered with `forbidden` rather than quietly given an ordinary room.
 
 `authenticate` has to be the first message on the connection.
-Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.5.
+Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.6.
 `ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.
 Without that exception the two rules contradict each other, and a connection that failed to authenticate is told `unauthorized` once per heartbeat interval for as long as it stays open.
 
@@ -172,7 +172,7 @@ From the client to the server, they are a request.
 From the server to the clients, they are the confirmation, relayed to every other participant in the room.
 
 In the client to server direction `user_id` has to be the sender's own.
-A participant asking to mute somebody else is answered with `unauthorized`; the way an administrator does it is `force_mute`, in section 4.6.
+A participant asking to mute somebody else is answered with `unauthorized`; the way an administrator does it is `force_mute`, in section 4.7.
 
 `by_user_id` is empty or absent when somebody muted themselves, and carries the administrator's identifier when the server produced the message from a `force_mute`.
 It is ignored on the way in: a participant does not get to claim who muted them.
@@ -180,7 +180,62 @@ It is ignored on the way in: a participant does not get to claim who muted them.
 A client should update its own UI only after receiving the server's confirmation, and not when sending the request.
 Otherwise two people can simultaneously believe they are sharing their screen.
 
-### 4.5 Transport level
+### 4.5 Chat
+
+| Type | Direction | Mandatory fields | Optional fields |
+| --- | --- | --- | --- |
+| `chat_message` | both | `message` | |
+| `list_chat` | client to server | `room_id` | `limit` |
+| `chat_history` | server to client | `room_id`, `messages` | |
+
+`message` and every element of `messages` is an object of this shape:
+
+```json
+{
+  "id": "6890f2...",
+  "room_id": "8F42A1",
+  "user_id": "user123",
+  "display_name": "Ana",
+  "text": "the build is green",
+  "timestamp_seconds": 1755676800
+}
+```
+
+`room_id`, `user_id` and `text` are the only ones a client has to send.
+`id`, `display_name` and `timestamp_seconds` belong to the server: they are ignored on the way in, and a client that fills them gets the server's values back, not its own.
+That is the same rule `by_user_id` follows in section 4.4, and for the same reason.
+A participant does not decide when their message was sent, what it is called, or whose name is on it.
+
+The payload is a nested object rather than fields on the envelope so that a live `chat_message` and an element of `chat_history` are the same object, and a client needs one reader for both.
+
+`user_id` has to be the sender's own, as everywhere else in this protocol.
+The sender also has to be in `room_id`, and is answered `not_in_room` otherwise.
+
+`text` is between one and 2000 bytes once the whitespace around it has been removed, and the server stores it trimmed.
+Anything outside that is answered with `invalid_value` rather than truncated, because a message that arrives cut in half is worse than one that never arrived.
+
+The server writes the message before it announces it, and a store that refuses it stops the message.
+That is the opposite of what the audit log does in section 4.6, and the difference is the point: an audit entry records something that happened elsewhere, while here the store *is* the message.
+Broadcasting one that was not written produces a conversation everybody present saw and nobody who reconnects can find.
+
+What the server broadcasts goes to the whole room, the sender included.
+A client displays that copy and never its own draft, which is what makes every participant read the same messages, in the same order, with the same identifiers.
+
+`chat_history` is the newest `limit` messages of one room, **oldest first**, so that the last element is the most recent thing said and no client has to reverse it.
+`limit` is clamped by the server, and zero or absent asks for its default.
+
+It is sent unasked to a participant as they join, right after the sequence in section 7, so that somebody joining a persistent room arrives into the conversation rather than into an empty panel.
+`list_chat` asks for it again, which is how a client reads further back than the default window.
+
+A conversation is readable by the people it happened in front of.
+`list_chat` from somebody who is not in that room is answered `not_in_room`, whatever their role: administration is section 4.7, and what people said to each other is not in it.
+Without that rule any account could read any room by trying six characters at a time.
+
+A room's conversation lives exactly as long as the room.
+An ordinary room is deleted when it empties and its messages go with it; a persistent room keeps both.
+This is not housekeeping: room identifiers are six characters and are handed out again, so a history that outlived its room would one day be shown to whoever is given that identifier next.
+
+### 4.6 Transport level
 
 | Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
@@ -191,7 +246,7 @@ The server sends `ping` every `heartbeat_interval_ms`.
 The client answers `pong` with the same `nonce`.
 A client that does not answer within `heartbeat_timeout_ms` is considered disconnected and removed from the room.
 
-### 4.6 Administration
+### 4.7 Administration
 
 Every message in this section is refused with `forbidden` unless the connection authenticated as an account whose role is `admin`.
 
@@ -291,14 +346,17 @@ An empty or absent `actor_id` means every actor.
 
 Ordinary participation is not recorded: joining, leaving, sharing a screen and muting yourself produce no entry, because a log full of them is a log nobody reads.
 
-### 4.7 Who may send what
+### 4.8 Who may send what
 
 | Role | May send |
 | --- | --- |
-| `user` | `authenticate`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `ping`, `pong` |
-| `admin` | everything above, plus every message in section 4.6 |
+| `user` | `authenticate`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `ping`, `pong` |
+| `admin` | everything above, plus every message in section 4.7 |
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_list`, `room_list`, `audit_list` and `error`.
+This table says what a role may send, not who they may send it about.
+Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
+
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
@@ -394,6 +452,7 @@ The `user_joined` referring to the user themselves arrives last and is the signa
 That saves the client from needing a separate snapshot message.
 
 If some participant is sharing their screen, the server sends `screen_share_started` to C right after the sequence above.
+Then comes `chat_history`, so that every message it carries is about somebody C has already been told about.
 
 After that, with media routing enabled, comes the negotiation with the SFU described in section 4.3:
 

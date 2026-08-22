@@ -39,6 +39,9 @@ TEST(MessageType, NamesRoundTrip) {
       MessageType::ScreenShareStopped,
       MessageType::Mute,
       MessageType::Unmute,
+      MessageType::ChatMessage,
+      MessageType::ListChat,
+      MessageType::ChatHistory,
       MessageType::Error,
       MessageType::Ping,
       MessageType::Pong,
@@ -164,6 +167,63 @@ TEST(RoundTrip, ScreenShareStartedAndStopped) {
 TEST(RoundTrip, MuteAndUnmute) {
   EXPECT_EQ(round_trip(Mute{"8F42A1", "user1"}), (Mute{"8F42A1", "user1"}));
   EXPECT_EQ(round_trip(Unmute{"8F42A1", "user1"}), (Unmute{"8F42A1", "user1"}));
+}
+
+TEST(RoundTrip, ChatMessage) {
+  const ChatMessage original{.message = {.id = "42",
+                                         .room_id = "8F42A1",
+                                         .user_id = "user1",
+                                         .display_name = "Ana",
+                                         .text = "the build is green",
+                                         .timestamp_seconds = 1755676800}};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, ChatHistory) {
+  const ChatHistory original{.room_id = "8F42A1",
+                             .messages = {
+                                 {.id = "1",
+                                  .room_id = "8F42A1",
+                                  .user_id = "user1",
+                                  .display_name = "Ana",
+                                  .text = "morning",
+                                  .timestamp_seconds = 1755676800},
+                                 {.id = "2",
+                                  .room_id = "8F42A1",
+                                  .user_id = "user2",
+                                  .display_name = "Bruno",
+                                  .text = "morning",
+                                  .timestamp_seconds = 1755676860},
+                             }};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, AChatMessageCarriesEmoji) {
+  // Not a curiosity: this is the first field of the protocol somebody types
+  // for fun rather than for the server, so it is the one that will be full of
+  // characters outside the basic plane. Four bytes each in UTF-8 and a
+  // surrogate pair in UTF-16, which is where a JSON library that escapes on
+  // its own initiative would show up.
+  const ChatMessage original{.message = {.id = "42",
+                                         .room_id = "8F42A1",
+                                         .user_id = "user1",
+                                         .display_name = "Ana 🌟",
+                                         .text = "deploy feito 🚀🎉 tudo verde ✅",
+                                         .timestamp_seconds = 1755676800}};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, AnEmptyChatHistoryStaysAnArray) {
+  // A room where nobody has spoken yet. The field has to survive as an empty
+  // array rather than disappearing, because a client that finds it missing
+  // would answer `missing_field` to a perfectly ordinary reply.
+  const ChatHistory original{.room_id = "8F42A1"};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, ListChat) {
+  const ListChat original{.room_id = "8F42A1", .limit = 25};
+  EXPECT_EQ(round_trip(original), original);
 }
 
 TEST(RoundTrip, ErrorMessage) {
@@ -302,6 +362,9 @@ TEST(TypeOf, MatchesTheAlternativeHeld) {
   EXPECT_EQ(type_of(Message{ScreenShareStopped{}}), MessageType::ScreenShareStopped);
   EXPECT_EQ(type_of(Message{Mute{}}), MessageType::Mute);
   EXPECT_EQ(type_of(Message{Unmute{}}), MessageType::Unmute);
+  EXPECT_EQ(type_of(Message{ChatMessage{}}), MessageType::ChatMessage);
+  EXPECT_EQ(type_of(Message{ListChat{}}), MessageType::ListChat);
+  EXPECT_EQ(type_of(Message{ChatHistory{}}), MessageType::ChatHistory);
   EXPECT_EQ(type_of(Message{ErrorMessage{}}), MessageType::Error);
   EXPECT_EQ(type_of(Message{Ping{}}), MessageType::Ping);
   EXPECT_EQ(type_of(Message{Pong{}}), MessageType::Pong);
@@ -315,6 +378,43 @@ TEST(Protocol, ForceMuteRequiresADirection) {
       dv::protocol::parse(R"({"type":"force_mute","room_id":"8F42A1","user_id":"user123"})");
   ASSERT_FALSE(parsed.ok());
   EXPECT_EQ(parsed.error().code, "missing_field");
+}
+
+TEST(Protocol, AChatMessageNeedsItsPayload) {
+  const auto parsed = parse(R"({"type":"chat_message"})");
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, "missing_field");
+  EXPECT_EQ(parsed.error().message, "message is required");
+}
+
+TEST(Protocol, AChatMessageWithoutTextIsRefused) {
+  const auto parsed =
+      parse(R"({"type":"chat_message","message":{"room_id":"8F42A1","user_id":"user1"}})");
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, "missing_field");
+  // Reported against the nested object's own key, which is the one the sender
+  // can place. See FieldReader::object.
+  EXPECT_EQ(parsed.error().message, "message text is required");
+}
+
+TEST(Protocol, AChatMessageMayOmitWhatTheServerFillsIn) {
+  // What a client actually sends: a room, itself, and what it wants to say.
+  // The identifier, the name and the time are the server's.
+  const auto parsed = parse(
+      R"({"type":"chat_message","message":{"room_id":"8F42A1","user_id":"user1","text":"hi"}})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+
+  const auto& chat = std::get<ChatMessage>(parsed.value());
+  EXPECT_EQ(chat.message.text, "hi");
+  EXPECT_TRUE(chat.message.id.empty());
+  EXPECT_TRUE(chat.message.display_name.empty());
+  EXPECT_EQ(chat.message.timestamp_seconds, 0);
+}
+
+TEST(Protocol, AChatPayloadThatIsNotAnObjectIsRefused) {
+  const auto parsed = parse(R"({"type":"chat_message","message":"hello"})");
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, "invalid_type");
 }
 
 }  // namespace

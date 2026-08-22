@@ -1,5 +1,8 @@
+#include <string>
+
 #include <gtest/gtest.h>
 
+#include <dv/models/chat.hpp>
 #include <dv/models/room.hpp>
 #include <dv/models/user.hpp>
 
@@ -84,6 +87,67 @@ TEST(RoomId, RejectsLowercaseAndNonHexCharacters) {
 TEST(User, ComparesByValue) {
   EXPECT_EQ((User{"1", "Ana", ""}), (User{"1", "Ana", ""}));
   EXPECT_NE((User{"1", "Ana", ""}), (User{"2", "Ana", ""}));
+}
+
+TEST(ChatText, TrimsTheWhitespaceAround) {
+  EXPECT_EQ(dv::models::trim_chat_text("  hello  "), "hello");
+  EXPECT_EQ(dv::models::trim_chat_text("\n\thello\r\n"), "hello");
+  // Only around. What somebody typed in the middle of a sentence is theirs.
+  EXPECT_EQ(dv::models::trim_chat_text("  a  b  "), "a  b");
+}
+
+TEST(ChatText, RejectsWhatIsOnlyWhitespace) {
+  EXPECT_FALSE(dv::models::is_valid_chat_text(""));
+  EXPECT_FALSE(dv::models::is_valid_chat_text("   "));
+  EXPECT_FALSE(dv::models::is_valid_chat_text("\n\t\r"));
+  EXPECT_TRUE(dv::models::is_valid_chat_text(" x "));
+}
+
+TEST(ChatText, MeasuresTheLimitAfterTrimming) {
+  const std::string at_the_limit(dv::models::kMaxChatTextBytes, 'x');
+  EXPECT_TRUE(dv::models::is_valid_chat_text(at_the_limit));
+  EXPECT_FALSE(dv::models::is_valid_chat_text(at_the_limit + "x"));
+
+  // Padded past the limit with spaces that will be thrown away. Checking the
+  // length before trimming would refuse a message that is going to fit.
+  EXPECT_TRUE(dv::models::is_valid_chat_text("   " + at_the_limit + "   "));
+}
+
+TEST(ChatText, LeavesMultibyteCharactersAlone) {
+  // Trimming walks bytes, so this is the case that would break if a
+  // continuation byte were ever mistaken for whitespace.
+  const std::string text = "  Ana Ferrão diz olá  ";
+  EXPECT_EQ(dv::models::trim_chat_text(text), "Ana Ferrão diz olá");
+}
+
+TEST(ChatText, AcceptsEmojiAndDoesNotCutThemInHalf) {
+  // Four bytes each, and the last one sits right where the trim starts
+  // walking backwards. A trim that mistook a continuation byte for whitespace
+  // would leave half a character behind, which is not a string any more.
+  const std::string text = "  deploy feito 🚀🎉  ";
+  EXPECT_TRUE(dv::models::is_valid_chat_text(text));
+  EXPECT_EQ(dv::models::trim_chat_text(text), "deploy feito 🚀🎉");
+
+  // A message that is nothing but an emoji is a message. Nobody has to write
+  // words to say something.
+  EXPECT_TRUE(dv::models::is_valid_chat_text("👍"));
+  EXPECT_EQ(dv::models::trim_chat_text(" 👍 "), "👍");
+}
+
+TEST(ChatText, TheLimitIsBytesSoEmojiCostFourOfThem) {
+  // Worth pinning rather than discovering: the limit is bytes, so the number
+  // of characters that fit depends on what they are. 2000 emoji do not fit,
+  // 500 do, and both of those are the rule working rather than a bug.
+  const std::string one = "🚀";
+  ASSERT_EQ(one.size(), 4U);
+
+  std::string exactly_full;
+  for (std::size_t i = 0; i < dv::models::kMaxChatTextBytes / one.size(); ++i) {
+    exactly_full += one;
+  }
+  EXPECT_EQ(exactly_full.size(), dv::models::kMaxChatTextBytes);
+  EXPECT_TRUE(dv::models::is_valid_chat_text(exactly_full));
+  EXPECT_FALSE(dv::models::is_valid_chat_text(exactly_full + one));
 }
 
 }  // namespace

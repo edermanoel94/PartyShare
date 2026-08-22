@@ -43,6 +43,12 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::ScreenShareStopped:
     case protocol::MessageType::Mute:
     case protocol::MessageType::Unmute:
+    // Talking in a room and reading what was said in it. Open to everybody who
+    // has logged in, and narrowed to the room's own participants by the
+    // handlers: this table says what a role may send, not who they may send it
+    // about.
+    case protocol::MessageType::ChatMessage:
+    case protocol::MessageType::ListChat:
     case protocol::MessageType::Ping:
     case protocol::MessageType::Pong:
       return Access::Authenticated;
@@ -66,6 +72,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserJoined:
     case protocol::MessageType::UserLeft:
     case protocol::MessageType::UserKicked:
+    case protocol::MessageType::ChatHistory:
     case protocol::MessageType::UserList:
     case protocol::MessageType::RoomList:
     case protocol::MessageType::AuditList:

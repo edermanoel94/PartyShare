@@ -145,7 +145,36 @@ Two consequences worth stating:
 - The connection string may carry credentials. `config::to_json` writes it back with them replaced by asterisks, for the same reason `turn_password` is omitted there.
 - Deleting an account revokes its tokens immediately (`Authenticator::revoke_tokens_of`) rather than letting a token issued a minute earlier live out its eight hours.
 
-## 9. A packet that took the server down
+## 9. What the room chat stores, and who may read it
+
+**Status: covered.**
+
+Chat is the first thing this project keeps that a person wrote for other people rather than for the server, so it is worth being explicit about where it goes.
+
+**Who may read it.**
+The conversation of a room is readable by the participants of that room and by nobody else.
+`list_chat` from anybody outside is answered `not_in_room`, and that includes administrators: an administrator manages accounts, rooms and who is in them, and reading what people said to each other is not one of those powers.
+Without the rule, a six character identifier would be the only thing between any account and every conversation on the server, which is a search of sixteen million rather than a wall.
+
+**How long it lives.**
+Exactly as long as its room.
+An ordinary room is deleted the moment it empties and its messages are deleted with it; a persistent room keeps both.
+This is a correctness rule and not housekeeping: room identifiers are six characters and are handed out again, so a history that outlived its room would eventually be shown to whoever is given that identifier next.
+`RoomManager` is what deletes rooms, so it is also what clears the history, rather than the Hub, which writes it: one owner of the lifetime means one place that can forget to forget.
+
+**What is not written to the log.**
+The text of a message never reaches a log file.
+The Hub records the identifier, the sender and the size, which is what an operator needs to explain a rate or a failure, and nothing an operator has any business reading.
+
+**What is refused rather than trimmed.**
+Text over 2000 bytes, and text that is empty once trimmed, are answered with `invalid_value`.
+The limit exists because the server broadcasts each message to the whole room and writes it to a database, and an unbounded field is a way to make it do both with a megabyte.
+
+**What is not solved here.**
+Messages are stored as they were typed, without encryption at rest beyond whatever the database is configured with, and an operator with the database has them.
+That is the same position the audit log is in, and section 4 of this document applies unchanged: this project encrypts what crosses the network, not what a server was deliberately asked to remember.
+
+## 10. A packet that took the server down
 
 Not requested by section 17, and found while task 3 of M8 was measuring bitrate adaptation.
 
@@ -171,6 +200,7 @@ While it is there, no extension that makes libwebrtc probe bandwidth may be nego
 | Unencrypted media | - | Covered, verified by a test |
 | Privilege escalation | - | Covered, one gate, role re-read per action, verified by tests |
 | Audit of administrative actions | - | Covered, and not erasable from the application |
+| Reading another room's chat | - | Covered, participants only, administrators included |
 | Stream storage | - | Covered, nothing is written |
 | Password hash without cost | High | Fixed in this review, scrypt |
 | Padded packet took the server down | High | Fixed, the SFU drops the packet |

@@ -2,6 +2,7 @@ add_library(dv_shared STATIC
   src/diagnostics/crash_reporter.cpp
   src/logging/logger.cpp
   src/config/config.cpp
+  src/models/chat.cpp
   src/models/room.cpp
   src/models/user.cpp
   src/protocol/message.cpp

@@ -6,22 +6,24 @@
 #include <dv/core/result.hpp>
 
 #include "store/audit_log.hpp"
+#include "store/chat_store.hpp"
 #include "store/room_store.hpp"
 #include "store/user_store.hpp"
 
 namespace dv::server::store {
 
-/// The three stores backed by one MongoDB database.
+/// The stores backed by one MongoDB database.
 ///
-/// A single object rather than three, because they share a connection pool and
-/// a lifetime: the driver has one global instance per process, and handing out
-/// three independent stores would mean three places that have to agree about
-/// when it is created and destroyed.
+/// A single object rather than one per store, because they share a connection
+/// pool and a lifetime: the driver has one global instance per process, and
+/// handing out independent stores would mean several places that have to agree
+/// about when it is created and destroyed.
 ///
 /// Collections, all in the database named in the configuration:
 ///
 ///   users    one document per account, unique index on `username`
 ///   rooms    one document per persistent room, unique index on `id`
+///   chat     one document per message, index on `room_id` and time
 ///   audit    one document per administrative action, index on `timestamp`
 ///
 /// Every call is synchronous and happens with the server's lock held. That is
@@ -51,6 +53,7 @@ class MongoStores {
 
   [[nodiscard]] UserStore& users() noexcept;
   [[nodiscard]] RoomStore& rooms() noexcept;
+  [[nodiscard]] ChatStore& chat() noexcept;
   [[nodiscard]] AuditLog& audit() noexcept;
 
  private:

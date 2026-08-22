@@ -551,8 +551,12 @@ std::string serialize(const Message& message) {
         } else if constexpr (std::is_same_v<T, ChatHistory>) {
           root["room_id"] = value.room_id;
           json messages = json::array();
-          for (const models::ChatMessage& message : value.messages) {
-            messages.push_back(chat_message_to_json(message));
+          // `line` and not `message`, which is the name of the parameter this
+          // lambda sits inside. GCC calls that a shadow and the build treats
+          // it as an error; Clang says nothing, because the lambda does not
+          // capture the parameter, so this only ever fails on the Linux job.
+          for (const models::ChatMessage& line : value.messages) {
+            messages.push_back(chat_message_to_json(line));
           }
           root["messages"] = std::move(messages);
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {

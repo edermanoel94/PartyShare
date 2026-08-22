@@ -9,6 +9,7 @@
 
 #include <dv/core/result.hpp>
 #include <dv/models/audit.hpp>
+#include <dv/models/chat.hpp>
 #include <dv/models/user.hpp>
 
 /// Signaling protocol, section 13 of SPEC.md.
@@ -50,6 +51,10 @@ enum class MessageType : std::uint8_t {
   ScreenShareStopped,
   Mute,
   Unmute,
+  // The room's conversation, section 4.5 of docs/protocol.md.
+  ChatMessage,
+  ListChat,
+  ChatHistory,
   Error,
   Ping,
   Pong,
@@ -212,6 +217,55 @@ struct Unmute {
   std::string by_user_id;
 
   friend bool operator==(const Unmute&, const Unmute&) = default;
+};
+
+// --- chat --------------------------------------------------------------------
+
+/// One line of the room's conversation.
+///
+/// Travels in both directions, like the state changes above. From a client it
+/// is a request; what the server broadcasts to the whole room, the sender
+/// included, is the confirmation, and only then does anybody display it. That
+/// is what makes every participant see the same messages in the same order,
+/// with the same identifiers, rather than each client's own guess at both.
+///
+/// `message.id`, `message.display_name` and `message.timestamp_seconds` belong
+/// to the server. They are ignored on the way in, for the same reason
+/// `by_user_id` is on a mute: a participant does not get to decide when their
+/// message was sent, what it is called, or whose name is on it.
+///
+/// The payload is a nested object rather than flat fields so that a live
+/// message and one read back out of `chat_history` are the same object, and a
+/// client needs one reader for both.
+struct ChatMessage {
+  models::ChatMessage message;
+
+  friend bool operator==(const ChatMessage&, const ChatMessage&) = default;
+};
+
+/// Asks for what was said in a room. Open to any participant of that room, and
+/// refused with `not_in_room` to anybody else: a conversation is readable by
+/// the people it happened in front of.
+struct ListChat {
+  std::string room_id;
+  /// How many of the most recent messages, capped by the server. Zero or
+  /// absent asks for the default.
+  int limit = 0;
+
+  friend bool operator==(const ListChat&, const ListChat&) = default;
+};
+
+/// The answer to `list_chat`, and what a participant is sent as they join, so
+/// that they arrive into a conversation rather than into an empty panel.
+///
+/// Oldest first, which is the order it is read in. The window is the newest
+/// `limit` messages of the room, so the last element is always the most recent
+/// thing said.
+struct ChatHistory {
+  std::string room_id;
+  std::vector<models::ChatMessage> messages;
+
+  friend bool operator==(const ChatHistory&, const ChatHistory&) = default;
 };
 
 // --- administration ----------------------------------------------------------
@@ -380,9 +434,9 @@ struct Pong {
 using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
-                 ScreenShareStopped, Mute, Unmute, ErrorMessage, Ping, Pong, KickUser, UserKicked,
-                 ForceMute, ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms,
-                 RoomList, DeleteRoom, ListAudit, AuditList>;
+                 ScreenShareStopped, Mute, Unmute, ChatMessage, ListChat, ChatHistory, ErrorMessage,
+                 Ping, Pong, KickUser, UserKicked, ForceMute, ListUsers, UserList, CreateUser,
+                 UpdateUser, DeleteUser, ListRooms, RoomList, DeleteRoom, ListAudit, AuditList>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

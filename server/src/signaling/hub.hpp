@@ -15,6 +15,7 @@
 #include "rooms/room_manager.hpp"
 #include "signaling/authenticator.hpp"
 #include "store/audit_log.hpp"
+#include "store/chat_store.hpp"
 #include "store/room_store.hpp"
 #include "store/user_store.hpp"
 
@@ -74,11 +75,12 @@ class Hub {
     /// Fixing this makes room identifiers reproducible in tests.
     std::optional<std::uint32_t> room_id_seed;
 
-    /// Persistence. All three are null by default, and the Hub then creates
+    /// Persistence. All four are null by default, and the Hub then creates
     /// in-memory ones and owns them, which is the server without a database.
     /// A caller that provides one has to keep it alive longer than the Hub.
     store::UserStore* users = nullptr;
     store::RoomStore* rooms = nullptr;
+    store::ChatStore* chat = nullptr;
     store::AuditLog* audit = nullptr;
   };
 
@@ -99,6 +101,7 @@ class Hub {
   [[nodiscard]] Authenticator& authenticator() noexcept { return authenticator_; }
   [[nodiscard]] const RoomManager& rooms() const noexcept { return rooms_; }
   [[nodiscard]] RoomManager& rooms() noexcept { return rooms_; }
+  [[nodiscard]] store::ChatStore& chat() noexcept { return *chat_; }
   [[nodiscard]] store::AuditLog& audit() noexcept { return *audit_; }
 
   void on_connect(ConnectionId connection, Clock::time_point now);
@@ -187,6 +190,14 @@ class Hub {
   void handle_screen_share(std::vector<Outgoing>& out, Connection& connection,
                            const std::string& room_id, const std::string& user_id, bool sharing);
 
+  void handle_chat(std::vector<Outgoing>& out, Connection& connection,
+                   const protocol::ChatMessage& message);
+  void handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
+                        const protocol::ListChat& message);
+
+  /// What was said in `room_id`, as the message that carries it.
+  [[nodiscard]] protocol::ChatHistory chat_history(const std::string& room_id, int limit) const;
+
   // Administration. Each one starts at administrator() above.
   void handle_kick(std::vector<Outgoing>& out, Connection& connection,
                    const protocol::KickUser& message);
@@ -215,12 +226,15 @@ class Hub {
   MediaSignals* media_signals_ = nullptr;
 
   // Declared before everything that uses them, so they are destroyed last.
-  // Null when the caller supplied its own, and `users_`, `room_store_` and
-  // `audit_` are what the rest of the class talks to either way.
+  // Null when the caller supplied its own, and `users_`, `chat_` and `audit_`
+  // are what the rest of the class talks to either way. The room store has no
+  // pointer of its own here because nothing but the RoomManager reads it.
   std::unique_ptr<store::UserStore> owned_users_;
   std::unique_ptr<store::RoomStore> owned_rooms_;
+  std::unique_ptr<store::ChatStore> owned_chat_;
   std::unique_ptr<store::AuditLog> owned_audit_;
   store::UserStore* users_;
+  store::ChatStore* chat_;
   store::AuditLog* audit_;
 
   RoomManager rooms_;

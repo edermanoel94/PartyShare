@@ -1,10 +1,13 @@
 #include <chrono>
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include <dv/models/chat.hpp>
 #include <dv/protocol/message.hpp>
 
 #include "signaling/hub.hpp"
@@ -392,6 +395,309 @@ TEST_F(HubTest, DroppingWhileSharingReleasesTheScreen) {
   const auto out = hub_.on_disconnect(ana, now_);
   EXPECT_TRUE(find<proto::ScreenShareStopped>(out, bruno).has_value());
   EXPECT_EQ(hub_.rooms().find(room)->screen_sharer(), nullptr);
+}
+
+// --- chat --------------------------------------------------------------------
+
+namespace {
+
+/// What a client sends: a room, itself, and the text. Everything else on a
+/// chat message belongs to the server.
+proto::ChatMessage said(const std::string& room_id, const std::string& user_id,
+                        const std::string& text) {
+  return proto::ChatMessage{.message = {.room_id = room_id, .user_id = user_id, .text = text}};
+}
+
+}  // namespace
+
+TEST_F(HubTest, AMessageReachesTheWholeRoomIncludingItsSender) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const auto out = send(ana, said(room, ana_user.id, "the build is green"));
+
+  // The sender included: nobody displays anything until the server has agreed
+  // to it, which is what keeps the order the same on every screen.
+  const auto to_ana = find<proto::ChatMessage>(out, ana);
+  const auto to_bruno = find<proto::ChatMessage>(out, bruno);
+  ASSERT_TRUE(to_ana.has_value());
+  ASSERT_TRUE(to_bruno.has_value());
+  EXPECT_EQ(to_ana->message.text, "the build is green");
+  EXPECT_EQ(to_ana->message, to_bruno->message);
+}
+
+TEST_F(HubTest, TheServerFillsInTheIdentifierTheNameAndTheTime) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+
+  const auto out = send(ana, said(room, ana_user.id, "hello"));
+  const auto chat = find<proto::ChatMessage>(out, ana);
+
+  ASSERT_TRUE(chat.has_value());
+  EXPECT_FALSE(chat->message.id.empty());
+  EXPECT_GT(chat->message.timestamp_seconds, 0);
+  EXPECT_EQ(chat->message.display_name, "Ana");
+  EXPECT_EQ(chat->message.room_id, room);
+}
+
+TEST_F(HubTest, TheSenderCannotSignSomebodyElsesName) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+
+  proto::ChatMessage forged = said(room, ana_user.id, "I am not who I say");
+  forged.message.display_name = "Bruno";
+  const auto out = send(ana, forged);
+
+  const auto chat = find<proto::ChatMessage>(out, bruno);
+  ASSERT_TRUE(chat.has_value());
+  // The name the room knows them by, not the one they asked for.
+  EXPECT_EQ(chat->message.display_name, "Ana");
+  EXPECT_EQ(chat->message.user_id, ana_user.id);
+}
+
+TEST_F(HubTest, AMessageSentUnderSomeoneElsesUserIdIsRejected) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const auto out = send(ana, said(room, bruno_user.id, "not mine to say"));
+  const auto error = find<proto::ErrorMessage>(out, ana);
+
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unauthorized");
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
+}
+
+TEST_F(HubTest, SpeakingIntoARoomYouAreNotInIsRejected) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  const auto out = send(bruno, said(room, bruno_user.id, "let me in"));
+  const auto error = find<proto::ErrorMessage>(out, bruno);
+
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "not_in_room");
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
+}
+
+TEST_F(HubTest, AnEmptyMessageIsRefusedRatherThanStored) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  const auto out = send(ana, said(room, ana_user.id, "   \n  "));
+  const auto error = find<proto::ErrorMessage>(out, ana);
+
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
+}
+
+TEST_F(HubTest, AMessageBeyondTheLimitIsRefusedRatherThanTruncated) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  const std::string too_long(dv::models::kMaxChatTextBytes + 1, 'x');
+  const auto out = send(ana, said(room, ana_user.id, too_long));
+  const auto error = find<proto::ErrorMessage>(out, ana);
+
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+  // Half a message is worse than none: nothing was written.
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
+}
+
+TEST_F(HubTest, WhatIsStoredIsTrimmed) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  const auto out = send(ana, said(room, ana_user.id, "  hello  "));
+  const auto chat = find<proto::ChatMessage>(out, ana);
+
+  ASSERT_TRUE(chat.has_value());
+  EXPECT_EQ(chat->message.text, "hello");
+  // The same text on the wire and in the store, so the copy read back later is
+  // the copy the room saw.
+  const auto stored = hub_.chat().list(room, 0);
+  ASSERT_EQ(stored.size(), 1U);
+  EXPECT_EQ(stored.front().text, "hello");
+}
+
+TEST_F(HubTest, EmojiSurviveTheStoreAndTheBroadcast) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+
+  const std::string text = "deploy feito 🚀🎉 tudo verde ✅";
+  const auto out = send(ana, said(room, ana_user.id, text));
+
+  // The whole path: parsed off the wire, trimmed, written, read back and
+  // serialized again. Anything on it that counted characters instead of bytes
+  // would hand back half of one.
+  const auto chat = find<proto::ChatMessage>(out, ana);
+  ASSERT_TRUE(chat.has_value());
+  EXPECT_EQ(chat->message.text, text);
+
+  const auto stored = hub_.chat().list(room, 0);
+  ASSERT_EQ(stored.size(), 1U);
+  EXPECT_EQ(stored.front().text, text);
+}
+
+TEST_F(HubTest, AMessageOfNothingButEmojiIsAMessage) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+
+  const auto out = send(ana, said(room, ana_user.id, "  👍  "));
+
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, ana).has_value());
+  const auto chat = find<proto::ChatMessage>(out, ana);
+  ASSERT_TRUE(chat.has_value());
+  EXPECT_EQ(chat->message.text, "👍");
+}
+
+TEST_F(HubTest, AJoinerIsSentWhatWasAlreadySaid) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "morning"));
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+
+  const auto history = find<proto::ChatHistory>(out, bruno);
+  ASSERT_TRUE(history.has_value());
+  EXPECT_EQ(history->room_id, room);
+  ASSERT_EQ(history->messages.size(), 1U);
+  EXPECT_EQ(history->messages.front().text, "morning");
+  EXPECT_EQ(history->messages.front().display_name, "Ana");
+}
+
+TEST_F(HubTest, AJoinerLearnsWhoIsThereBeforeWhatWasSaid) {
+  // The history names people, so it has to arrive after the participant list
+  // it names them from. See section 7 of docs/protocol.md.
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "morning"));
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+
+  std::optional<std::size_t> last_joined;
+  std::optional<std::size_t> history_at;
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    if (out[i].connection != bruno) {
+      continue;
+    }
+    if (std::holds_alternative<proto::UserJoined>(out[i].message)) {
+      last_joined = i;
+    }
+    if (std::holds_alternative<proto::ChatHistory>(out[i].message)) {
+      history_at = i;
+    }
+  }
+  ASSERT_TRUE(last_joined.has_value());
+  ASSERT_TRUE(history_at.has_value());
+  EXPECT_LT(*last_joined, *history_at);
+}
+
+TEST_F(HubTest, ListChatAnswersAParticipantWithTheNewestMessages) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  for (const char* text : {"one", "two", "three"}) {
+    (void)send(ana, said(room, ana_user.id, text));
+  }
+
+  const auto out = send(ana, proto::ListChat{.room_id = room, .limit = 2});
+  const auto history = find<proto::ChatHistory>(out, ana);
+
+  ASSERT_TRUE(history.has_value());
+  ASSERT_EQ(history->messages.size(), 2U);
+  EXPECT_EQ(history->messages.front().text, "two");
+  EXPECT_EQ(history->messages.back().text, "three");
+}
+
+TEST_F(HubTest, ListChatIsRefusedToSomebodyOutsideTheRoom) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "between us"));
+
+  // Authenticated, and knows the identifier, and still is not entitled to the
+  // conversation. Six characters is a guess, not a credential.
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::ListChat{.room_id = room});
+
+  const auto error = find<proto::ErrorMessage>(out, bruno);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "not_in_room");
+  EXPECT_FALSE(find<proto::ChatHistory>(out, bruno).has_value());
+}
+
+TEST_F(HubTest, AnOrdinaryRoomForgetsItsConversationWhenItEmpties) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "between us"));
+  ASSERT_EQ(hub_.chat().list(room, 0).size(), 1U);
+
+  (void)send(ana, proto::LeaveRoom{room, ana_user.id});
+
+  // The room is gone, and identifiers are handed out again. A history that
+  // outlived its room would end up on the screen of whoever is given these six
+  // characters next.
+  EXPECT_EQ(hub_.rooms().find(room), nullptr);
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
+}
+
+TEST_F(HubTest, APersistentRoomKeepsItsConversationWhenItEmpties) {
+  const auto [ana, ana_user] = login("ana");
+  const auto created = hub_.rooms().create_room("standup", ana_user.id, true);
+  ASSERT_TRUE(created.ok());
+  const std::string room = created.value();
+
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "notes from today"));
+  (void)send(ana, proto::LeaveRoom{room, ana_user.id});
+
+  // The room survived its last participant, and so did what was said in it:
+  // that is the whole point of an identifier worth writing down.
+  ASSERT_NE(hub_.rooms().find(room), nullptr);
+  ASSERT_EQ(hub_.chat().list(room, 0).size(), 1U);
+  EXPECT_EQ(hub_.chat().list(room, 0).front().text, "notes from today");
+}
+
+TEST_F(HubTest, ARoomThatIsClosedForgetsItsConversation) {
+  const auto [ana, ana_user] = login("ana");
+  const auto created = hub_.rooms().create_room("standup", ana_user.id, true);
+  ASSERT_TRUE(created.ok());
+  const std::string room = created.value();
+
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(ana, said(room, ana_user.id, "notes from today"));
+
+  const auto removed = hub_.rooms().remove_room(room);
+  ASSERT_TRUE(removed.ok());
+  EXPECT_TRUE(hub_.chat().list(room, 0).empty());
 }
 
 // --- malformed input and heartbeat -------------------------------------------

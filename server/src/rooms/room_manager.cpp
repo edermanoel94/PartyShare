@@ -4,6 +4,8 @@
 #include <string_view>
 #include <utility>
 
+#include <dv/logging/logger.hpp>
+
 namespace dv::server {
 namespace {
 
@@ -32,6 +34,20 @@ std::string RoomManager::generate_room_id() {
     character = kHexDigits[digit(random_)];
   }
   return id;
+}
+
+void RoomManager::forget(const std::string& room_id) const {
+  if (options_.chat == nullptr) {
+    return;
+  }
+  // Logged and carried on with, rather than turned into a refusal. The room is
+  // already gone from the live map by the time this runs, so there is nothing
+  // left to undo, and the alternative is a `leave` that fails after having
+  // succeeded. What stays behind is a history whose room no longer exists, and
+  // the log is where somebody finds out about it.
+  if (auto failure = options_.chat->clear(room_id)) {
+    DV_LOG_ERROR("The conversation of room {} was not cleared: {}", room_id, failure->message);
+  }
 }
 
 Result<std::string> RoomManager::create_room(std::string name, std::string owner_id,
@@ -101,6 +117,7 @@ Result<std::vector<std::string>> RoomManager::remove_room(const std::string& roo
       if (auto failure = options_.store->remove(room_id)) {
         return Result<std::vector<std::string>>::failure(*failure);
       }
+      forget(room_id);
       return std::vector<std::string>{};
     }
     return Result<std::vector<std::string>>::failure("room_not_found",
@@ -120,6 +137,7 @@ Result<std::vector<std::string>> RoomManager::remove_room(const std::string& roo
     // not written is not a failure worth reporting to whoever closed the room.
     (void)options_.store->remove(room_id);
   }
+  forget(room_id);
   return removed;
 }
 
@@ -166,10 +184,12 @@ std::optional<Error> RoomManager::leave(const std::string& room_id, const std::s
   room.participants.erase(participant);
   user_to_room_.erase(user_id);
 
-  // A persistent room stays, empty. That is the whole difference between the
-  // two kinds, and the reason an identifier is worth writing down.
+  // A persistent room stays, empty, and keeps what was said in it. That is the
+  // whole difference between the two kinds, and the reason an identifier is
+  // worth writing down.
   if (room.participants.empty() && !room.persistent) {
     rooms_.erase(it);
+    forget(room_id);
   }
   return std::nullopt;
 }

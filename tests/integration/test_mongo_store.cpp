@@ -1,10 +1,13 @@
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <dv/models/chat.hpp>
 #include <dv/models/user.hpp>
 
 #include "signaling/authenticator.hpp"
@@ -76,6 +79,22 @@ class MongoStoreTest : public ::testing::Test {
     for (const RoomRecord& room : stores_->rooms().list()) {
       (void)stores_->rooms().remove(room.id);
     }
+    // By identifier, because ChatStore has no way to enumerate rooms and
+    // should not: these are the only two any test here writes into.
+    for (const char* room_id : {"8F42A1", "B00B00"}) {
+      (void)stores_->chat().clear(room_id);
+    }
+  }
+
+  static dv::models::ChatMessage chat_message(const std::string& room_id, const std::string& text,
+                                              std::int64_t when) {
+    dv::models::ChatMessage value;
+    value.room_id = room_id;
+    value.user_id = "id-ana";
+    value.display_name = "Ana";
+    value.text = text;
+    value.timestamp_seconds = when;
+    return value;
   }
 
   static Account account(const std::string& username, Role role = Role::User) {
@@ -188,6 +207,82 @@ TEST_F(MongoStoreTest, TheAuditLogComesBackNewestFirst) {
   const auto filtered = stores_->audit().list(0, "id-ana");
   ASSERT_EQ(filtered.size(), 1U);
   EXPECT_EQ(filtered.front().action, "kick");
+}
+
+TEST_F(MongoStoreTest, AConversationComesBackOldestFirst) {
+  for (const auto& [text, when] : {std::pair{"one", 1000}, {"two", 2000}, {"three", 3000}}) {
+    ASSERT_TRUE(stores_->chat().append(chat_message("8F42A1", text, when)).ok());
+  }
+
+  const auto messages = stores_->chat().list("8F42A1", 0);
+  ASSERT_EQ(messages.size(), 3U);
+  EXPECT_EQ(messages.front().text, "one");
+  EXPECT_EQ(messages.back().text, "three");
+  EXPECT_FALSE(messages.front().id.empty());
+}
+
+TEST_F(MongoStoreTest, AppendReportsTheIdentifierTheDatabaseAssigned) {
+  // What comes back is what the room is shown, so it has to be the row that
+  // exists. An identifier invented here would be one `list` never reports.
+  const auto written = stores_->chat().append(chat_message("8F42A1", "hello", 1000));
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto messages = stores_->chat().list("8F42A1", 0);
+  ASSERT_EQ(messages.size(), 1U);
+  EXPECT_EQ(messages.front().id, written.value().id);
+}
+
+TEST_F(MongoStoreTest, TheWindowIsTheNewestMessagesInOrder) {
+  for (const auto& [text, when] : {std::pair{"one", 1000}, {"two", 2000}, {"three", 3000}}) {
+    ASSERT_TRUE(stores_->chat().append(chat_message("8F42A1", text, when)).ok());
+  }
+
+  const auto messages = stores_->chat().list("8F42A1", 2);
+  ASSERT_EQ(messages.size(), 2U);
+  EXPECT_EQ(messages.front().text, "two");
+  EXPECT_EQ(messages.back().text, "three");
+}
+
+TEST_F(MongoStoreTest, MessagesSentInTheSameSecondKeepTheirOrder) {
+  // A conversation is faster than the resolution of its timestamps, so the
+  // identifier is what breaks the tie. Without that the order of two lines
+  // typed a moment apart would be whatever the database felt like.
+  for (const char* text : {"one", "two", "three"}) {
+    ASSERT_TRUE(stores_->chat().append(chat_message("8F42A1", text, 1000)).ok());
+  }
+
+  const auto messages = stores_->chat().list("8F42A1", 0);
+  ASSERT_EQ(messages.size(), 3U);
+  EXPECT_EQ(messages.front().text, "one");
+  EXPECT_EQ(messages.back().text, "three");
+}
+
+TEST_F(MongoStoreTest, ClearingOneRoomLeavesTheOthersAlone) {
+  ASSERT_TRUE(stores_->chat().append(chat_message("8F42A1", "ours", 1000)).ok());
+  ASSERT_TRUE(stores_->chat().append(chat_message("B00B00", "theirs", 1000)).ok());
+
+  EXPECT_FALSE(stores_->chat().clear("8F42A1").has_value());
+  EXPECT_TRUE(stores_->chat().list("8F42A1", 0).empty());
+  EXPECT_EQ(stores_->chat().list("B00B00", 0).size(), 1U);
+
+  // A room where nobody spoke has nothing to forget, and that is not an error:
+  // it is the ordinary case every time a room closes.
+  EXPECT_FALSE(stores_->chat().clear("CCCCCC").has_value());
+}
+
+TEST_F(MongoStoreTest, AConversationSurvivesTheProcessThatWroteIt) {
+  const char* uri = std::getenv("DV_TEST_MONGO_URI");
+  ASSERT_NE(uri, nullptr);
+
+  ASSERT_TRUE(stores_->chat().append(chat_message("8F42A1", "notes from today", 1000)).ok());
+
+  // A second connection that shares nothing with the first but the server.
+  auto reopened = MongoStores::open(uri, database_, 2000);
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+
+  const auto messages = reopened.value()->chat().list("8F42A1", 0);
+  ASSERT_EQ(messages.size(), 1U);
+  EXPECT_EQ(messages.front().text, "notes from today");
 }
 
 TEST_F(MongoStoreTest, AnAccountSurvivesTheProcessThatCreatedIt) {

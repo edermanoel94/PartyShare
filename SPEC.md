@@ -612,7 +612,6 @@ Do not implement initially:
 
 * Call recording.
 * File sharing.
-* Chat.
 * Public streaming.
 * More than 5 participants.
 * Webcam video.
@@ -622,6 +621,9 @@ Do not implement initially:
 * Virtual microphone.
 * Advanced AI based noise suppression.
 * Mobile applications.
+
+Chat was on this list and is not any more.
+It is implemented, persisted with the rooms, and described in section 4.5 of docs/protocol.md.
 
 These may be added later.
 

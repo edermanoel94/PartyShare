@@ -31,13 +31,16 @@ Hub::Hub(Options options)
       // audit log that goes away with the process.
       owned_users_(options.users == nullptr ? std::make_unique<store::MemoryUserStore>() : nullptr),
       owned_rooms_(options.rooms == nullptr ? std::make_unique<store::MemoryRoomStore>() : nullptr),
+      owned_chat_(options.chat == nullptr ? std::make_unique<store::MemoryChatStore>() : nullptr),
       owned_audit_(options.audit == nullptr ? std::make_unique<store::MemoryAuditLog>() : nullptr),
       users_(options.users != nullptr ? options.users : owned_users_.get()),
+      chat_(options.chat != nullptr ? options.chat : owned_chat_.get()),
       audit_(options.audit != nullptr ? options.audit : owned_audit_.get()),
       rooms_(RoomManager::Options{
           .max_participants_per_room = options.max_participants_per_room,
           .id_seed = options.room_id_seed,
-          .store = options.rooms != nullptr ? options.rooms : owned_rooms_.get()}),
+          .store = options.rooms != nullptr ? options.rooms : owned_rooms_.get(),
+          .chat = chat_}),
       authenticator_(Authenticator::Options{}, *users_) {
   // Rooms somebody wrote down have to still exist after a restart.
   if (const std::size_t loaded = rooms_.load_persistent(); loaded > 0) {
@@ -148,7 +151,7 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
 
   // Authentication is the only thing an unauthenticated connection may do, and
   // the heartbeat is the exception, because it is not something the connection
-  // is doing. Section 4.5 of docs/protocol.md is titled "Transport level" for
+  // is doing. Section 4.6 of docs/protocol.md is titled "Transport level" for
   // that reason: the server pings every connection it holds, authenticated or
   // not, and a pong is the socket saying it is still there.
   //
@@ -239,6 +242,12 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
 
         } else if constexpr (std::is_same_v<T, protocol::ScreenShareStopped>) {
           handle_screen_share(out, *state, value.room_id, value.user_id, false);
+
+        } else if constexpr (std::is_same_v<T, protocol::ChatMessage>) {
+          handle_chat(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::ListChat>) {
+          handle_list_chat(out, *state, value);
 
         } else if constexpr (std::is_same_v<T, protocol::Ping>) {
           out.push_back(Outgoing{.connection = state->id, .message = protocol::Pong{value.nonce}});
@@ -420,6 +429,15 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
                                                                    .user_id = sharer->user.id}});
   }
 
+  // What was already said, so that somebody joining a persistent room arrives
+  // into the conversation rather than into an empty panel and a room that
+  // apparently has nothing to say. Sent without being asked, because a client
+  // that had to ask would show the empty panel first either way.
+  //
+  // After the participant list, so that every message it carries is about
+  // somebody the client has already been told about.
+  out.push_back(Outgoing{.connection = connection.id, .message = chat_history(message.room_id, 0)});
+
   broadcast(out, message.room_id, protocol::UserJoined{.room_id = message.room_id, .user = user},
             user.id);
   DV_LOG_INFO("User {} joined room {} ({} participants)", user.id, message.room_id, room->size());
@@ -570,6 +588,107 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
     DV_LOG_INFO("User {} stopped sharing in room {}", user_id, room_id);
     broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});
   }
+}
+
+// --- chat --------------------------------------------------------------------
+
+protocol::ChatHistory Hub::chat_history(const std::string& room_id, int limit) const {
+  return protocol::ChatHistory{.room_id = room_id, .messages = chat_->list(room_id, limit)};
+}
+
+void Hub::handle_chat(std::vector<Outgoing>& out, Connection& connection,
+                      const protocol::ChatMessage& message) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (message.message.user_id != user->id) {
+    reply_error(out, connection.id, unauthorized("user_id does not match this session"));
+    return;
+  }
+
+  const std::string& room_id = message.message.room_id;
+  const models::Room* room = rooms_.find(room_id);
+  if (room == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + room_id});
+    return;
+  }
+  const models::Participant* participant = room->find(user->id);
+  if (participant == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "sender is not in " + room_id});
+    return;
+  }
+
+  if (!models::is_valid_chat_text(message.message.text)) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "invalid_value",
+              .message = "a message is between 1 and " + std::to_string(models::kMaxChatTextBytes) +
+                         " bytes once trimmed"});
+    return;
+  }
+
+  models::ChatMessage written;
+  written.room_id = room_id;
+  written.user_id = user->id;
+  // The name the room knows them by, and not the one the sender put in the
+  // message. A client that could choose it per message could sign somebody
+  // else's name to what it says.
+  written.display_name = participant->user.display_name;
+  written.text = models::trim_chat_text(message.message.text);
+
+  // Stored before it is announced, and a failure stops it here. That is the
+  // opposite of what an administrative action does with the audit log, and the
+  // reason is in ChatStore: a message everybody saw and nobody can find again
+  // is worse than one the sender was told about.
+  auto appended = chat_->append(std::move(written));
+  if (!appended) {
+    DV_LOG_ERROR("A message from {} in room {} was not stored: {}", user->id, room_id,
+                 appended.error().message);
+    reply_error(out, connection.id, appended.error());
+    return;
+  }
+  const models::ChatMessage stored = std::move(appended).take();
+
+  // The whole room, the sender included, and everybody displays the server's
+  // copy: same identifier, same timestamp, same order on every screen.
+  //
+  // The size and not the text. What people say to each other has no business
+  // in an operator's log file, and a message is the one field of this protocol
+  // that is written by a person for other people rather than for the server.
+  DV_LOG_DEBUG("Message {} from {} in room {}, {} bytes", stored.id, stored.user_id, room_id,
+               stored.text.size());
+  broadcast(out, room_id, protocol::ChatMessage{.message = stored});
+}
+
+void Hub::handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
+                           const protocol::ListChat& message) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+
+  const models::Room* room = rooms_.find(message.room_id);
+  if (room == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + message.room_id});
+    return;
+  }
+  // A conversation is readable by the people it happened in front of, and this
+  // is what says so. Without it any account could read any room by trying six
+  // characters at a time, which is a search of sixteen million and not a wall.
+  // An administrator is not excepted: administration is in section 4.7 of
+  // docs/protocol.md, and reading what people said to each other is not in it.
+  if (!room->contains(user->id)) {
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "you are not in " + message.room_id});
+    return;
+  }
+
+  out.push_back(Outgoing{.connection = connection.id,
+                         .message = chat_history(message.room_id, message.limit)});
 }
 
 std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_point /*now*/) {

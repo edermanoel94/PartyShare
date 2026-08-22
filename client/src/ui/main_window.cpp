@@ -4,12 +4,15 @@
 #include <cmath>
 
 #include <dv/logging/logger.hpp>
+#include <dv/models/chat.hpp>
 
+#include <QAbstractItemView>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFont>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -23,8 +26,10 @@
 #include <QMetaObject>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
@@ -49,6 +54,71 @@ constexpr int kAdminPage = 3;
 /// Where the participant's plain name is kept on a list item, next to the
 /// user id in Qt::UserRole. The visible text carries the state as well.
 constexpr int kNameRole = Qt::UserRole + 1;
+
+/// How many emoji the picker puts on a row. Eight of them at 34 pixels plus
+/// the spacing is about 290 wide, which fits under a sidebar that is 260 to
+/// 320 and does not hang off the side of the window.
+constexpr int kEmojiColumns = 8;
+
+/// What the picker offers.
+///
+/// Forty, chosen and not generated. The system picker already does the whole
+/// of Unicode with a search box, skin tones and a list of recents, and it will
+/// know about emoji that do not exist yet; competing with it would be a worse
+/// copy that goes out of date. What it cannot do is put the handful somebody
+/// reaches for during a call one click away, and that is what this is.
+///
+/// Ctrl+Cmd+Space on macOS and Win+. on Windows open the system one in this
+/// same field, so nothing here is a ceiling on what can be sent.
+[[nodiscard]] const QStringList& quick_emoji() {
+  // A function local static: a QStringList has a non-trivial constructor and
+  // cannot be constexpr, which is the case client/src/ui/.clang-tidy's naming
+  // rules call out.
+  // clang-format off
+  //
+  // Laid out eight to a line because that is how many go on a row of the
+  // picker, so the source has the shape of the thing on screen, and written as
+  // the characters themselves so that what is on offer can be read here rather
+  // than decoded. clang-format measures a line in bytes and an emoji is four
+  // of them, so left alone it reflows this to one per line and the grid goes.
+  static const QStringList kQuickEmoji = {
+      // Answers, which is most of what a chat during a call is for.
+      QStringLiteral("👍"), QStringLiteral("👎"), QStringLiteral("👌"), QStringLiteral("🙌"),
+      QStringLiteral("👏"), QStringLiteral("🙏"), QStringLiteral("💪"), QStringLiteral("🤝"),
+      // Faces.
+      QStringLiteral("😀"), QStringLiteral("😄"), QStringLiteral("😅"), QStringLiteral("😂"),
+      QStringLiteral("🙂"), QStringLiteral("😉"), QStringLiteral("😍"), QStringLiteral("🤔"),
+      QStringLiteral("😐"), QStringLiteral("😴"), QStringLiteral("😭"), QStringLiteral("😱"),
+      QStringLiteral("😡"), QStringLiteral("🤯"), QStringLiteral("🤦"), QStringLiteral("🤷"),
+      // How it went.
+      QStringLiteral("🎉"), QStringLiteral("🎊"), QStringLiteral("🔥"), QStringLiteral("⭐"),
+      QStringLiteral("✨"), QStringLiteral("💡"), QStringLiteral("✅"), QStringLiteral("❌"),
+      // The work itself.
+      QStringLiteral("🚀"), QStringLiteral("🐛"), QStringLiteral("🔧"), QStringLiteral("📌"),
+      QStringLiteral("⏰"), QStringLiteral("☕"), QStringLiteral("👀"), QStringLiteral("❤️"),
+  };
+  // clang-format on
+
+  return kQuickEmoji;
+}
+
+/// One line of the conversation as it is shown: when it was said, by whom, and
+/// what.
+///
+/// Built where the message arrives, on the signaling thread, because a QString
+/// crosses to the interface thread without a registered metatype and a
+/// models::ChatMessage would not.
+[[nodiscard]] QString to_chat_line(const models::ChatMessage& message) {
+  const QString name =
+      QString::fromStdString(message.display_name.empty() ? message.user_id : message.display_name);
+  const QString text = QString::fromStdString(message.text);
+  if (message.timestamp_seconds <= 0) {
+    return QStringLiteral("%1: %2").arg(name, text);
+  }
+  const QString when =
+      QDateTime::fromSecsSinceEpoch(message.timestamp_seconds).toString(QStringLiteral("HH:mm"));
+  return QStringLiteral("[%1] %2: %3").arg(when, name, text);
+}
 
 [[nodiscard]] QString to_display(client::app::CallSession::State state) {
   switch (state) {
@@ -306,6 +376,75 @@ void MainWindow::build_room_page() {
   people_column->addWidget(participants_);
   people_column->addLayout(volume_row);
 
+  auto* chat = new QGroupBox(QStringLiteral("Chat"), page);
+  auto* chat_column = new QVBoxLayout(chat);
+  chat_view_ = new QListWidget(chat);
+  // Wrapped, and with no alternating rows: a message is a paragraph rather
+  // than a cell, and a long one has to be readable without a horizontal
+  // scrollbar under it.
+  chat_view_->setWordWrap(true);
+  chat_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  // Selectable, because copying what somebody pasted into the room is half of
+  // what a chat in a screen sharing call is for.
+  chat_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  chat_view_->setTextElideMode(Qt::ElideNone);
+
+  auto* chat_row = new QHBoxLayout();
+  chat_input_ = new QLineEdit(chat);
+  chat_input_->setPlaceholderText(QStringLiteral("Message"));
+  // A coarse guard and not the rule. The limit is bytes, and this counts
+  // characters, so a line of accented text can still be refused by the server
+  // at a length this field allowed. It is here to stop a paste of a whole
+  // document dead rather than to decide anything: send_chat checks the real
+  // limit, and what it answers reaches the same place every other error does.
+  chat_input_->setMaxLength(static_cast<int>(models::kMaxChatTextBytes));
+
+  chat_emoji_ = new QPushButton(QStringLiteral("🙂"), chat);
+  chat_emoji_->setToolTip(QStringLiteral("Insert an emoji"));
+  // Square and small: it sits in a sidebar that is 260 pixels wide at its
+  // narrowest, and every pixel it takes is one the message field does not get.
+  chat_emoji_->setFixedWidth(34);
+
+  chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
+  chat_row->addWidget(chat_input_, 1);
+  chat_row->addWidget(chat_emoji_);
+  chat_row->addWidget(chat_send_);
+
+  chat_column->addWidget(chat_view_, 1);
+  chat_column->addLayout(chat_row);
+
+  // A splitter and not a fixed division, because how much room the conversation
+  // deserves is not something this code knows. Somebody reading a long paste
+  // wants it wide; somebody watching a screen share wants it out of the way.
+  //
+  // It also fixes a real problem with the fixed version: the sidebar was capped
+  // at 320, so the message field stayed about 150 pixels wide no matter how
+  // large the window got.
+  auto* sidebar_widget = new QWidget(page);
+  auto* sidebar = new QVBoxLayout(sidebar_widget);
+  sidebar->setContentsMargins(0, 0, 0, 0);
+  sidebar->addWidget(people);
+  sidebar->addWidget(chat, 1);
+
+  auto* body = new QSplitter(Qt::Horizontal, page);
+  body->addWidget(screen_view_);
+  body->addWidget(sidebar_widget);
+
+  // Neither side may be dragged out of existence. A collapsed pane leaves a
+  // handle at the very edge of the window as the only way back, which is a
+  // thing to discover rather than a thing to see, and collapsing the sidebar
+  // takes the participants and the chat with it.
+  body->setChildrenCollapsible(false);
+  screen_view_->setMinimumWidth(320);
+  sidebar_widget->setMinimumWidth(240);
+
+  // Growing the window widens the screen, not the sidebar: the sidebar holds
+  // names and lines of text, and neither reads better for being stretched.
+  // Dragging still overrides this, which is the point of the splitter.
+  body->setStretchFactor(0, 1);
+  body->setStretchFactor(1, 0);
+  body->setSizes({640, 300});
+
   auto* controls = new QHBoxLayout();
   mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
   mute_button_->setCheckable(true);
@@ -323,12 +462,16 @@ void MainWindow::build_room_page() {
   controls->addWidget(leave_button_);
 
   column->addLayout(header);
-  column->addWidget(screen_view_, 1);
-  column->addWidget(people);
+  column->addWidget(body, 1);
   column->addLayout(controls);
 
   connect(participants_, &QListWidget::customContextMenuRequested, this,
           &MainWindow::on_participant_menu);
+  connect(chat_send_, &QPushButton::clicked, this, &MainWindow::on_send_chat);
+  connect(chat_emoji_, &QPushButton::clicked, this, &MainWindow::on_open_emoji_picker);
+  // Return sends, which is what everybody expects of a field next to a Send
+  // button and what nobody wants to reach for the mouse for.
+  connect(chat_input_, &QLineEdit::returnPressed, this, &MainWindow::on_send_chat);
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
@@ -427,6 +570,21 @@ void MainWindow::wire_session() {
           [this](const std::string& user_id) {
             QMetaObject::invokeMethod(this, "apply_screen_share", Qt::QueuedConnection,
                                       Q_ARG(QString, QString::fromStdString(user_id)));
+          },
+      .on_chat_message =
+          [this](const models::ChatMessage& message) {
+            QMetaObject::invokeMethod(this, "apply_chat_message", Qt::QueuedConnection,
+                                      Q_ARG(QString, to_chat_line(message)));
+          },
+      .on_chat_history =
+          [this](const std::vector<models::ChatMessage>& messages) {
+            QStringList lines;
+            lines.reserve(static_cast<qsizetype>(messages.size()));
+            for (const models::ChatMessage& message : messages) {
+              lines.push_back(to_chat_line(message));
+            }
+            QMetaObject::invokeMethod(this, "apply_chat_history", Qt::QueuedConnection,
+                                      Q_ARG(QStringList, lines));
           },
       .on_user_list =
           [this](const std::vector<protocol::UserSummary>& users) {
@@ -567,8 +725,89 @@ void MainWindow::on_leave_room() {
   }
   screen_view_->clear();
   sharing_label_->clear();
+  // The conversation belongs to the room that was just left. Leaving it on
+  // screen would put one room's messages above the next room's history.
+  chat_view_->clear();
+  chat_input_->clear();
   refresh_controls();
   show_page();
+}
+
+void MainWindow::on_send_chat() {
+  const QString text = chat_input_->text().trimmed();
+  if (text.isEmpty()) {
+    return;
+  }
+
+  if (const auto sent = session_.send_chat(text.toStdString()); !sent) {
+    apply_error(QString::fromStdString(sent.error().code),
+                QString::fromStdString(sent.error().message));
+    return;
+  }
+
+  // Emptied as soon as it is sent rather than when it comes back, so the field
+  // is ready for the next line. Nothing is displayed from here either way:
+  // what appears in the list is the copy the server broadcast.
+  chat_input_->clear();
+}
+
+void MainWindow::on_open_emoji_picker() {
+  // A window of its own with Qt::Popup, and not a QMenu holding one widget.
+  //
+  // The QMenu route was written first and looks right: it draws the grid, it
+  // closes on a click outside, and it needs no lifetime handling. It also
+  // never delivers a click to a single one of those buttons on macOS. The menu
+  // keeps the mouse grab for itself and the presses die inside it, so the
+  // picker opened, showed forty emoji, and did nothing at all.
+  //
+  // Qt::Popup gives the same behaviour a picker needs, closing on a click
+  // outside and on escape, and what is inside it stays an ordinary widget that
+  // sees ordinary events. WA_DeleteOnClose is what disposes of it, because
+  // every one of those ways out ends in close().
+  auto* popup = new QWidget(chat_emoji_, Qt::Popup);
+  popup->setAttribute(Qt::WA_DeleteOnClose);
+
+  auto* grid = new QGridLayout(popup);
+  grid->setContentsMargins(4, 4, 4, 4);
+  grid->setSpacing(2);
+
+  int row = 0;
+  int column = 0;
+  for (const QString& emoji : quick_emoji()) {
+    auto* button = new QPushButton(emoji, popup);
+    button->setFlat(true);
+    button->setFixedSize(34, 34);
+    connect(button, &QPushButton::clicked, popup, [this, emoji, popup] {
+      insert_emoji(emoji);
+      // Closed after one pick. Somebody who wants a second one presses the
+      // button again, which is a click either way, and a picker that stays
+      // open over the field it is typing into is one that has to be dismissed.
+      popup->close();
+    });
+    grid->addWidget(button, row, column);
+    if (++column == kEmojiColumns) {
+      column = 0;
+      ++row;
+    }
+  }
+
+  // Above the button and lined up with its right edge. The row it sits on is
+  // at the bottom of the window, so a picker dropped downwards would open off
+  // the screen and be moved back over the field it is meant to fill.
+  popup->adjustSize();
+  popup->move(
+      chat_emoji_->mapToGlobal(QPoint(chat_emoji_->width() - popup->width(), -popup->height())));
+  popup->show();
+}
+
+void MainWindow::insert_emoji(const QString& emoji) {
+  // At the cursor, replacing whatever is selected, which is what typing the
+  // character would have done. QLineEdit::insert honours the field's maximum
+  // as well, so this cannot get past the guard that typing respects.
+  chat_input_->insert(emoji);
+  // Back to the field, so the next thing typed continues the message instead
+  // of going to a button.
+  chat_input_->setFocus();
 }
 
 void MainWindow::on_toggle_mute() {
@@ -906,10 +1145,40 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   }
 }
 
+void MainWindow::apply_chat_message(const QString& line) {
+  append_chat_line(line);
+}
+
+void MainWindow::apply_chat_history(const QStringList& lines) {
+  // Replaced and not appended: this arrives once per join, and a reconnection
+  // that rejoins the same room would otherwise show every message twice.
+  chat_view_->clear();
+  for (const QString& line : lines) {
+    chat_view_->addItem(line);
+  }
+  chat_view_->scrollToBottom();
+}
+
+void MainWindow::append_chat_line(const QString& line) {
+  // Follow the conversation only when it was already being followed. Somebody
+  // who has scrolled up to read something keeps their place, which is the
+  // difference between a chat pane and one that snatches the page away every
+  // time anybody says anything.
+  const QScrollBar* scroll = chat_view_->verticalScrollBar();
+  const bool was_at_bottom = scroll->value() >= scroll->maximum();
+
+  chat_view_->addItem(line);
+  if (was_at_bottom) {
+    chat_view_->scrollToBottom();
+  }
+}
+
 void MainWindow::apply_kicked(const QString& reason) {
   // The session has already left the room and cleared its media by the time
   // this runs, so there is nothing to undo here: only to say what happened and
   // to go back.
+  chat_view_->clear();
+  chat_input_->clear();
   refresh_controls();
   show_page();
 
@@ -975,6 +1244,12 @@ void MainWindow::refresh_controls() {
   share_button_->setEnabled(in_call && !someone_else_is_sharing);
   share_button_->setChecked(sharing);
   share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
+
+  // There is nobody to say anything to outside a room, and a field that
+  // accepts a line it cannot send is a field that loses it.
+  chat_input_->setEnabled(in_call);
+  chat_emoji_->setEnabled(in_call);
+  chat_send_->setEnabled(in_call);
 }
 
 }  // namespace dv::ui

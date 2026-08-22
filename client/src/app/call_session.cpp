@@ -203,6 +203,46 @@ bool CallSession::muted() const {
   return muted_;
 }
 
+Result<std::monostate> CallSession::send_chat(const std::string& text) {
+  std::string user_id;
+  std::string room;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    user_id = local_user_.id;
+    room = room_id_;
+  }
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room", "this session is not in a room");
+  }
+
+  // Checked here as well as on the server, against the same rule in the same
+  // shared function. Not a trust boundary, and the server would refuse it
+  // anyway: it is so that pressing return on an empty line does nothing at all
+  // rather than making a round trip to be told so.
+  if (!models::is_valid_chat_text(text)) {
+    return Result<std::monostate>::failure(
+        "invalid_value", "a message is between 1 and " + std::to_string(models::kMaxChatTextBytes) +
+                             " bytes once trimmed");
+  }
+
+  // The display name and the time are left empty: they belong to the server,
+  // and what it broadcasts back is what gets displayed.
+  return signaling_.send(protocol::ChatMessage{
+      .message = models::ChatMessage{.room_id = room, .user_id = user_id, .text = text}});
+}
+
+Result<std::monostate> CallSession::list_chat(int limit) {
+  std::string room;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    room = room_id_;
+  }
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room", "this session is not in a room");
+  }
+  return signaling_.send(protocol::ListChat{.room_id = room, .limit = limit});
+}
+
 Result<std::monostate> CallSession::start_screen_share(const std::string& monitor_id) {
   std::string user_id;
   std::string room;
@@ -768,6 +808,30 @@ void CallSession::handle_signal(protocol::Message message) {
       handlers.on_screen_share(std::string{});
     }
     publish_participants();
+    return;
+  }
+
+  if (const auto* chat = std::get_if<protocol::ChatMessage>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_chat_message) {
+      handlers.on_chat_message(chat->message);
+    }
+    return;
+  }
+
+  if (const auto* history = std::get_if<protocol::ChatHistory>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_chat_history) {
+      handlers.on_chat_history(history->messages);
+    }
     return;
   }
 

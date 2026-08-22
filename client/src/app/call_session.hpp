@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <dv/core/result.hpp>
+#include <dv/models/chat.hpp>
 #include <dv/models/user.hpp>
 #include <dv/protocol/message.hpp>
 
@@ -84,6 +85,20 @@ class CallSession {
     /// track carries whoever holds the floor.
     std::function<void(std::string user_id)> on_screen_share;
 
+    /// One line of the room's conversation, as the server confirmed it. This
+    /// is also how a message this session sent comes back: nothing is
+    /// displayed until the server has agreed to it, so every participant reads
+    /// the same messages in the same order.
+    std::function<void(models::ChatMessage message)> on_chat_message;
+
+    /// What was said in the room before now: on joining, and again as the
+    /// answer to `list_chat`.
+    ///
+    /// It replaces whatever is on screen rather than adding to it. It arrives
+    /// once per join, and after a reconnection the same messages would
+    /// otherwise be appended a second time.
+    std::function<void(std::vector<models::ChatMessage> messages)> on_chat_history;
+
     // --- administration ---
     //
     // Only ever called on a session that authenticated as an administrator,
@@ -143,6 +158,21 @@ class CallSession {
 
   [[nodiscard]] Result<std::monostate> set_muted(bool muted);
   [[nodiscard]] bool muted() const;
+
+  /// Says something in the room this session is in.
+  ///
+  /// Reports nothing back beyond having sent it: the message reaches the
+  /// interface through `on_chat_message`, once the server has stored it and
+  /// broadcast it to everybody. Fails locally with `not_in_room` when there is
+  /// no room, and with `invalid_value` for text the server would refuse
+  /// anyway, so an empty line does not become a round trip.
+  [[nodiscard]] Result<std::monostate> send_chat(const std::string& text);
+
+  /// Asks for the room's conversation again, up to `limit` messages, answered
+  /// through `on_chat_history`. Zero asks for the server's default.
+  ///
+  /// Not needed to see the conversation on joining, which arrives on its own.
+  [[nodiscard]] Result<std::monostate> list_chat(int limit = 0);
 
   /// Starts sharing `monitor_id`, or the primary monitor when empty.
   ///

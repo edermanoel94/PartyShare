@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <dv/models/chat.hpp>
+
 #include "app/call_session.hpp"
 #include "signaling/server.hpp"
 
@@ -288,6 +290,19 @@ class Client {
               const std::lock_guard<std::mutex> lock(mutex_);
               sharer_ = std::move(user_id);
             },
+        .on_chat_message =
+            [this](dv::models::ChatMessage message) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              chat_.push_back(std::move(message));
+            },
+        .on_chat_history =
+            [this](std::vector<dv::models::ChatMessage> messages) {
+              // Replaces, exactly as the interface does. See
+              // CallSession::Callbacks::on_chat_history.
+              const std::lock_guard<std::mutex> lock(mutex_);
+              chat_ = std::move(messages);
+              ++histories_;
+            },
     });
     session_->on_room_created([this](std::string room_id) {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -388,6 +403,14 @@ class Client {
     const std::lock_guard<std::mutex> lock(mutex_);
     return errors_;
   }
+  [[nodiscard]] std::vector<dv::models::ChatMessage> chat() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return chat_;
+  }
+  [[nodiscard]] std::uint64_t histories() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return histories_;
+  }
   [[nodiscard]] CallSession::State last_state() const { return last_state_.load(); }
   [[nodiscard]] double local_level() const { return local_level_.load(); }
   [[nodiscard]] bool local_speaking() const { return local_speaking_.load(); }
@@ -405,6 +428,8 @@ class Client {
   std::mutex mutex_;
   std::vector<Participant> participants_;
   std::vector<dv::Error> errors_;
+  std::vector<dv::models::ChatMessage> chat_;
+  std::uint64_t histories_ = 0;
   std::string created_room_;
   std::atomic<CallSession::State> last_state_{CallSession::State::Idle};
   std::atomic<std::uint64_t> metrics_reports_{0};
@@ -763,6 +788,97 @@ TEST_F(CallSessionTest, LevelsMarkWhoIsSpeaking) {
   // The local microphone is reported apart from the participant list: it is
   // not something the server knows about.
   EXPECT_TRUE(wait_until([&] { return ana.local_speaking() && ana.local_level() == 0.7; }));
+}
+
+TEST_F(CallSessionTest, AMessageTypedInOneClientArrivesInTheOther) {
+  Client& ana = add("ana");
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(bruno.login());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.session().send_chat("the build is green").ok());
+
+  // Both ends, the sender included, and both showing what the server stored.
+  EXPECT_TRUE(wait_until([&] { return !bruno.chat().empty(); }));
+  EXPECT_TRUE(wait_until([&] { return !ana.chat().empty(); }));
+
+  const auto received = bruno.chat().back();
+  EXPECT_EQ(received.text, "the build is green");
+  EXPECT_EQ(received.display_name, "ana");
+  EXPECT_EQ(received.user_id, ana.session().local_user().id);
+  EXPECT_FALSE(received.id.empty());
+  EXPECT_GT(received.timestamp_seconds, 0);
+  EXPECT_EQ(ana.chat().back().id, received.id);
+}
+
+TEST_F(CallSessionTest, EmojiArriveAtTheOtherEndIntact) {
+  Client& ana = add("ana");
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(bruno.login());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(bruno.join(room));
+
+  // Over a real socket, through the JSON on the wire and back out of it.
+  const std::string text = "deploy feito 🚀🎉 tudo verde ✅";
+  ASSERT_TRUE(ana.session().send_chat(text).ok());
+
+  EXPECT_TRUE(wait_until([&] { return !bruno.chat().empty(); }));
+  EXPECT_EQ(bruno.chat().back().text, text);
+}
+
+TEST_F(CallSessionTest, SomebodyJoiningLaterIsSentTheConversation) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.session().send_chat("morning").ok());
+  ASSERT_TRUE(wait_until([&] { return !ana.chat().empty(); }));
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  // Without being asked for it: a client that had to request the history would
+  // show an empty panel first either way.
+  EXPECT_TRUE(wait_until([&] { return bruno.histories() > 0; }));
+  ASSERT_EQ(bruno.chat().size(), 1U);
+  EXPECT_EQ(bruno.chat().front().text, "morning");
+}
+
+TEST_F(CallSessionTest, AnEmptyMessageNeverLeavesTheClient) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  // Refused here rather than by the server, so that pressing return on an
+  // empty line costs nothing at all.
+  const auto sent = ana.session().send_chat("   \n ");
+  ASSERT_FALSE(sent.ok());
+  EXPECT_EQ(sent.error().code, "invalid_value");
+  EXPECT_TRUE(ana.chat().empty());
+}
+
+TEST_F(CallSessionTest, SpeakingOutsideARoomIsRefusedBeforeItIsSent) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+
+  const auto sent = ana.session().send_chat("anybody there");
+  ASSERT_FALSE(sent.ok());
+  EXPECT_EQ(sent.error().code, "not_in_room");
 }
 
 TEST_F(CallSessionTest, AServerErrorReachesTheApplication) {

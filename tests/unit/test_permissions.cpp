@@ -28,6 +28,8 @@ TEST(Permissions, AnOrdinaryUserCanDoEverythingACallNeeds) {
            proto::MessageType::ScreenShareStopped,
            proto::MessageType::Mute,
            proto::MessageType::Unmute,
+           proto::MessageType::ChatMessage,
+           proto::MessageType::ListChat,
            proto::MessageType::Ping,
            proto::MessageType::Pong,
        }) {
@@ -64,6 +66,7 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
            proto::MessageType::UserJoined,
            proto::MessageType::UserLeft,
            proto::MessageType::UserKicked,
+           proto::MessageType::ChatHistory,
            proto::MessageType::UserList,
            proto::MessageType::RoomList,
            proto::MessageType::AuditList,
@@ -73,6 +76,16 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
     EXPECT_FALSE(is_allowed(Role::User, type)) << proto::type_name(type);
     EXPECT_FALSE(is_allowed(Role::Admin, type)) << proto::type_name(type);
   }
+}
+
+TEST(Permissions, ReadingAConversationIsNotAnAdministrativePower) {
+  // An administrator manages accounts, rooms and who is in them. What people
+  // said to each other is not on that list, and `list_chat` is answered for
+  // participants of the room and refused to everybody else regardless of role.
+  // The table only says the message may be sent; Hub::handle_list_chat is what
+  // narrows it, and this is the half that belongs here.
+  EXPECT_EQ(access_for(proto::MessageType::ListChat), Access::Authenticated);
+  EXPECT_EQ(access_for(proto::MessageType::ChatMessage), Access::Authenticated);
 }
 
 TEST(Permissions, AValueOutsideTheEnumGrantsNothing) {

@@ -123,6 +123,45 @@ std::optional<Error> MemoryRoomStore::remove(const std::string& room_id) {
   return std::nullopt;
 }
 
+// --- chat --------------------------------------------------------------------
+
+Result<models::ChatMessage> MemoryChatStore::append(models::ChatMessage message) {
+  message.id = std::to_string(next_id_++);
+  if (message.timestamp_seconds == 0) {
+    message.timestamp_seconds = unix_seconds_now();
+  }
+
+  std::vector<models::ChatMessage>& room = rooms_[message.room_id];
+  room.push_back(message);
+
+  if (room.size() > kCapacityPerRoom) {
+    room.erase(room.begin(),
+               room.begin() + static_cast<std::ptrdiff_t>(room.size() - kCapacityPerRoom));
+  }
+  return message;
+}
+
+std::vector<models::ChatMessage> MemoryChatStore::list(const std::string& room_id,
+                                                       int limit) const {
+  const auto it = rooms_.find(room_id);
+  if (it == rooms_.end()) {
+    return {};
+  }
+
+  const std::vector<models::ChatMessage>& room = it->second;
+  const auto wanted = static_cast<std::size_t>(clamp_chat_limit(limit));
+  const std::size_t skipped = room.size() > wanted ? room.size() - wanted : 0;
+
+  // A window from the end, still in order: the vector is oldest first, and so
+  // is what the contract asks for, so the tail is the answer as it stands.
+  return {room.begin() + static_cast<std::ptrdiff_t>(skipped), room.end()};
+}
+
+std::optional<Error> MemoryChatStore::clear(const std::string& room_id) {
+  rooms_.erase(room_id);
+  return std::nullopt;
+}
+
 // --- audit -------------------------------------------------------------------
 
 std::optional<Error> MemoryAuditLog::append(models::AuditEntry entry) {

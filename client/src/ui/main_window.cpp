@@ -29,6 +29,7 @@
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
@@ -412,18 +413,37 @@ void MainWindow::build_room_page() {
   chat_column->addWidget(chat_view_, 1);
   chat_column->addLayout(chat_row);
 
-  // The screen is what the call is about, so it takes the room that is left
-  // over; the sidebar keeps a width that fits a name and a sentence.
-  auto* body = new QHBoxLayout();
-  auto* sidebar = new QVBoxLayout();
+  // A splitter and not a fixed division, because how much room the conversation
+  // deserves is not something this code knows. Somebody reading a long paste
+  // wants it wide; somebody watching a screen share wants it out of the way.
+  //
+  // It also fixes a real problem with the fixed version: the sidebar was capped
+  // at 320, so the message field stayed about 150 pixels wide no matter how
+  // large the window got.
+  auto* sidebar_widget = new QWidget(page);
+  auto* sidebar = new QVBoxLayout(sidebar_widget);
+  sidebar->setContentsMargins(0, 0, 0, 0);
   sidebar->addWidget(people);
   sidebar->addWidget(chat, 1);
-  body->addWidget(screen_view_, 1);
-  body->addLayout(sidebar);
-  people->setMinimumWidth(260);
-  people->setMaximumWidth(320);
-  chat->setMinimumWidth(260);
-  chat->setMaximumWidth(320);
+
+  auto* body = new QSplitter(Qt::Horizontal, page);
+  body->addWidget(screen_view_);
+  body->addWidget(sidebar_widget);
+
+  // Neither side may be dragged out of existence. A collapsed pane leaves a
+  // handle at the very edge of the window as the only way back, which is a
+  // thing to discover rather than a thing to see, and collapsing the sidebar
+  // takes the participants and the chat with it.
+  body->setChildrenCollapsible(false);
+  screen_view_->setMinimumWidth(320);
+  sidebar_widget->setMinimumWidth(240);
+
+  // Growing the window widens the screen, not the sidebar: the sidebar holds
+  // names and lines of text, and neither reads better for being stretched.
+  // Dragging still overrides this, which is the point of the splitter.
+  body->setStretchFactor(0, 1);
+  body->setStretchFactor(1, 0);
+  body->setSizes({640, 300});
 
   auto* controls = new QHBoxLayout();
   mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
@@ -442,7 +462,7 @@ void MainWindow::build_room_page() {
   controls->addWidget(leave_button_);
 
   column->addLayout(header);
-  column->addLayout(body, 1);
+  column->addWidget(body, 1);
   column->addLayout(controls);
 
   connect(participants_, &QListWidget::customContextMenuRequested, this,

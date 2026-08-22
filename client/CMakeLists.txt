@@ -27,6 +27,8 @@ add_library(dv_client_core STATIC
   src/media/network_impairment.hpp
   src/network/signaling_client.cpp
   src/network/signaling_client.hpp
+  src/network/transport_globals.cpp
+  src/network/transport_globals.hpp
   src/video/frame_queue.hpp
   src/video/frame_size.hpp
   src/video/screen_capturer.cpp
@@ -174,6 +176,25 @@ set_target_properties(dv_client PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
   MACOSX_BUNDLE_ICON_FILE "partyshare.icns"
 )
+
+# The bundle carries its own Info.plist rather than CMake's, for one key that
+# the default template has no place for: NSMicrophoneUsageDescription. macOS
+# refuses the microphone outright to a bundle that does not carry it, without
+# asking anybody, and a voice room then runs on silence with nothing in any log
+# to say why. Configured here so the identity keys cannot drift from the
+# properties above. See assets/Info.plist.in.
+if(APPLE)
+  set(MACOSX_BUNDLE_BUNDLE_NAME "PartyShare")
+  set(MACOSX_BUNDLE_GUI_IDENTIFIER "dev.partyshare.client")
+  set(MACOSX_BUNDLE_EXECUTABLE_NAME "partyshare")
+  set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+  set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+  set(MACOSX_BUNDLE_ICON_FILE "partyshare.icns")
+  configure_file(${CMAKE_SOURCE_DIR}/assets/Info.plist.in
+    ${CMAKE_CURRENT_BINARY_DIR}/Info.plist @ONLY)
+  set_target_properties(dv_client PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/Info.plist)
+endif()
 
 dv_set_target_warnings(dv_client)
 dv_enable_sanitizers(dv_client)

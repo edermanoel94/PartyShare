@@ -373,7 +373,16 @@ int main(int argc, char* argv[]) {
       DV_LOG_INFO("Media UDP port range: {}-{}", options.sfu.port_range_begin,
                   options.sfu.port_range_end);
     } else {
-      DV_LOG_INFO("Media UDP ports: ephemeral, one per participant, chosen by the system");
+      // A warning rather than a note: on a machine with a firewall in front of
+      // it, which is every machine on the public internet, this setting is the
+      // difference between a call and a room where nobody hears anybody. The
+      // signaling port alone is not enough, and nothing else says so until two
+      // people are already looking at each other's silence.
+      DV_LOG_WARN(
+          "Media UDP ports: ephemeral, one per participant, chosen by the system. Any "
+          "firewall in front of this server has to allow the whole ephemeral range, or no "
+          "media will connect at all. --ice-port-range=A-B narrows it to something an "
+          "operator can open; see docs/requirements.md");
     }
     DV_LOG_INFO("Press Ctrl+C to stop");
 

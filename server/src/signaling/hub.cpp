@@ -53,6 +53,11 @@ models::Role Hub::current_role(const std::string& user_id) const {
   return account.has_value() ? account->user.role : models::Role::User;
 }
 
+models::Restrictions Hub::restrictions_of(const std::string& user_id) const {
+  const auto account = users_->find_by_id(user_id);
+  return account.has_value() ? account->user.restrictions : models::Restrictions{};
+}
+
 void Hub::record(const models::User& actor, std::string action, std::string target_id,
                  std::string room_id, std::string detail) {
   models::AuditEntry entry;
@@ -261,6 +266,9 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else if constexpr (std::is_same_v<T, protocol::ForceMute>) {
           handle_force_mute(out, *state, value);
 
+        } else if constexpr (std::is_same_v<T, protocol::RestrictUser>) {
+          handle_restrict_user(out, *state, value);
+
         } else if constexpr (std::is_same_v<T, protocol::ListUsers>) {
           handle_list_users(out, *state);
 
@@ -398,12 +406,42 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
     user.display_name = message.display_name;
   }
 
+  // Read from the store rather than taken from the identity this connection
+  // logged in with, for the reason restrictions_of gives: a restriction
+  // applied while somebody was connected has to be true of the room they are
+  // about to walk into. The cached copy is from login time, and the copy that
+  // goes out in `user_joined` is what every other client renders them from.
+  user.restrictions = restrictions_of(user.id);
+  authenticated_user->restrictions = user.restrictions;
+  if (user.restrictions.banned) {
+    // Unreachable while banning revokes the tokens and drops the connection.
+    // Here because a room is the one place a banned account being present
+    // would be visible to other people, and the cost of the check is a lookup
+    // that has already happened.
+    reply_error(out, connection.id,
+                Error{.code = "account_banned",
+                      .message = "this account has been suspended by an administrator"});
+    return;
+  }
+
   if (const auto failure = rooms_.join(message.room_id, user)) {
     reply_error(out, connection.id, *failure);
     return;
   }
   connection.room_id = message.room_id;
   authenticated_user->display_name = user.display_name;
+
+  // Applied before anybody is told about the joiner, so that the first thing
+  // the room learns about them is already correct. `by_admin` is what makes it
+  // hold: without it the participant's own client would release it with the
+  // first click on a microphone that turned itself off.
+  //
+  // Nothing is broadcast for it. The restrictions travel on the user object of
+  // `user_joined`, which every client in the room reads anyway, and a second
+  // announcement of the same fact is a second thing to keep in step.
+  if (user.restrictions.muted) {
+    (void)rooms_.set_muted(message.room_id, user.id, true, true);
+  }
 
   const models::Room* room = rooms_.find(message.room_id);
 
@@ -574,6 +612,16 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
     return;
   }
 
+  // Only on the way in. Stopping is never refused: a share that an
+  // administrator has just blocked has to be stoppable by the person running
+  // it, and by the server on their behalf, or the frames keep coming.
+  if (sharing && restrictions_of(user_id).screen_share_blocked) {
+    reply_error(out, connection.id,
+                Error{.code = "forbidden",
+                      .message = "an administrator has blocked screen sharing for this account"});
+    return;
+  }
+
   const auto failure = sharing ? rooms_.start_screen_share(room_id, user_id)
                                : rooms_.stop_screen_share(room_id, user_id);
   if (failure) {
@@ -618,6 +666,23 @@ void Hub::handle_chat(std::vector<Outgoing>& out, Connection& connection,
   if (participant == nullptr) {
     reply_error(out, connection.id,
                 Error{.code = "not_in_room", .message = "sender is not in " + room_id});
+    return;
+  }
+
+  // Before the text is validated, so that somebody who may not speak is told
+  // that rather than being told their message was the wrong length.
+  //
+  // Read from the store on every message rather than from the copy the room
+  // holds, which is the one place in this class where that costs something: a
+  // chat message is not rare. It buys the thing tools/dbadmin's README claims,
+  // that a restriction written straight into the database takes effect on the
+  // account's next message and not on its next login. The message is already
+  // one synchronous store write below this line, so the lookup is a share of
+  // what this handler costs rather than a new kind of cost.
+  if (restrictions_of(user->id).silenced) {
+    reply_error(out, connection.id,
+                Error{.code = "forbidden",
+                      .message = "an administrator has silenced this account in chat"});
     return;
   }
 
@@ -833,6 +898,22 @@ void Hub::handle_force_mute(std::vector<Outgoing>& out, Connection& connection,
   if (actor == nullptr) {
     return;
   }
+
+  // A forced unmute is about this room; the account restriction is about the
+  // account, and it is the stronger statement of the two. Letting the room
+  // level one win would hand the microphone back to somebody an administrator
+  // muted everywhere, and the only sign of it would be them talking.
+  //
+  // Refused rather than quietly lifting the restriction as well: an
+  // administrator who meant that has a control that says so, and one who did
+  // not would be undoing a decision this message never mentioned.
+  if (!message.muted && restrictions_of(message.user_id).muted) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target",
+                      .message = "this account is muted by a restriction, lift that instead"});
+    return;
+  }
+
   if (const auto failure =
           rooms_.set_muted(message.room_id, message.user_id, message.muted, true)) {
     reply_error(out, connection.id, *failure);
@@ -853,6 +934,197 @@ void Hub::handle_force_mute(std::vector<Outgoing>& out, Connection& connection,
     broadcast(out, message.room_id,
               protocol::Unmute{
                   .room_id = message.room_id, .user_id = message.user_id, .by_user_id = actor->id});
+  }
+}
+
+void Hub::handle_restrict_user(std::vector<Outgoing>& out, Connection& connection,
+                               const protocol::RestrictUser& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  auto account = users_->find_by_id(message.user_id);
+  if (!account.has_value()) {
+    reply_error(out, connection.id,
+                Error{.code = "user_not_found", .message = "no account with that identifier"});
+    return;
+  }
+  // The same refusal delete_user and the self kick give, and for the strongest
+  // version of the same reason: an administrator who bans themselves has taken
+  // away the account that would have to lift it.
+  if (account->user.id == actor->id) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target",
+                      .message = "an administrator cannot restrict their own account"});
+    return;
+  }
+
+  const models::Restrictions before = account->user.restrictions;
+  models::Restrictions after = before;
+  // Absent means unchanged, which is what makes two administrators working at
+  // once safe: unmuting somebody does not quietly lift the ban a colleague
+  // applied while this panel was open.
+  if (message.banned.has_value()) {
+    after.banned = *message.banned;
+  }
+  if (message.muted.has_value()) {
+    after.muted = *message.muted;
+  }
+  if (message.silenced.has_value()) {
+    after.silenced = *message.silenced;
+  }
+  if (message.screen_share_blocked.has_value()) {
+    after.screen_share_blocked = *message.screen_share_blocked;
+  }
+
+  if (after == before) {
+    // Nothing written, nothing recorded, nothing announced. A form submitted
+    // with the boxes it already had ticked is not an administrative action,
+    // and an audit log full of those is a log nobody reads. The answer is
+    // still the list, so the panel that asked ends up in a known state.
+    out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+    return;
+  }
+
+  // The third way to end up with a system nobody can administer, next to
+  // deleting the last administrator and demoting them.
+  if (after.banned && !before.banned && account->user.role == models::Role::Admin &&
+      users_->count_with_role(models::Role::Admin) <= 1) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "last_administrator", .message = "the last administrator cannot be banned"});
+    return;
+  }
+
+  account->user.restrictions = after;
+  if (auto failure = users_->update(*account)) {
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  // Named field by field with what it became, in the vocabulary update_user
+  // already writes: "banned=true muted=false" reads the same way "role=admin
+  // password" does, and says which of the four moved rather than only what the
+  // account is now under.
+  std::string detail;
+  const auto note = [&detail](std::string_view name, bool value) {
+    if (!detail.empty()) {
+      detail += ' ';
+    }
+    detail += name;
+    detail += value ? "=true" : "=false";
+  };
+  if (after.banned != before.banned) {
+    note("banned", after.banned);
+  }
+  if (after.muted != before.muted) {
+    note("muted", after.muted);
+  }
+  if (after.silenced != before.silenced) {
+    note("silenced", after.silenced);
+  }
+  if (after.screen_share_blocked != before.screen_share_blocked) {
+    note("screen_share_blocked", after.screen_share_blocked);
+  }
+  // The reason goes into the log as well as to the person. A moderation
+  // entry that records what was done and not why is the half of the record
+  // that nobody has to be told twice.
+  if (!message.reason.empty()) {
+    detail += " reason=" + message.reason;
+  }
+
+  DV_LOG_INFO("{} restricted {}: {}", actor->id, message.user_id, detail);
+  record(*actor, "restrict_user", message.user_id, rooms_.room_of(message.user_id).value_or(""),
+         detail);
+
+  enforce(out, *actor, account->user, before, message.reason);
+  out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
+}
+
+void Hub::enforce(std::vector<Outgoing>& out, const models::User& actor, const models::User& target,
+                  const models::Restrictions& before, const std::string& reason) {
+  const std::string& user_id = target.id;
+  const models::Restrictions& after = target.restrictions;
+  const std::optional<std::string> room_id = rooms_.room_of(user_id);
+
+  const protocol::UserRestricted announcement{.user_id = user_id,
+                                              .restrictions = after,
+                                              .by_user_id = actor.id,
+                                              .reason = reason,
+                                              .room_id = room_id.value_or("")};
+
+  // The person it is about first, and while they still have a session to be
+  // told on. A ban that closed the connection first would leave them the only
+  // one who never heard why.
+  if (const auto target_connection = connection_of_user(user_id)) {
+    out.push_back(Outgoing{.connection = *target_connection, .message = announcement});
+  }
+  if (room_id.has_value()) {
+    broadcast(out, *room_id, announcement, user_id);
+  }
+
+  // The cached identity on their connection, so that the next message they
+  // send is checked against what is now true without waiting for the store
+  // lookup each handler does anyway to disagree with what the panel showed.
+  if (const auto target_connection = connection_of_user(user_id)) {
+    if (Connection* state = find_connection(*target_connection);
+        state != nullptr && state->user.has_value()) {
+      state->user->restrictions = after;
+    }
+  }
+
+  if (after.banned && !before.banned) {
+    // Out of the room first, then the tokens, exactly as delete_user does it:
+    // nobody is left talking to somebody the server has stopped accepting.
+    if (room_id.has_value()) {
+      evict(out, *room_id, user_id, reason.empty() ? "the account was suspended" : reason);
+    }
+    authenticator_.revoke_tokens_of(user_id);
+    if (const auto target_connection = connection_of_user(user_id)) {
+      if (Connection* state = find_connection(*target_connection)) {
+        state->user.reset();
+        state->room_id.reset();
+      }
+      user_to_connection_.erase(user_id);
+    }
+    // Everything below is about a room this account is no longer in.
+    return;
+  }
+
+  if (!room_id.has_value()) {
+    return;
+  }
+
+  if (after.muted != before.muted) {
+    // Announced as an ordinary mute carrying who did it, the same shape a
+    // force_mute produces, so a client that knows nothing about restrictions
+    // still draws the microphone correctly.
+    if (const auto failure = rooms_.set_muted(*room_id, user_id, after.muted, true); !failure) {
+      if (after.muted) {
+        broadcast(out, *room_id,
+                  protocol::Mute{.room_id = *room_id, .user_id = user_id, .by_user_id = actor.id});
+      } else {
+        broadcast(
+            out, *room_id,
+            protocol::Unmute{.room_id = *room_id, .user_id = user_id, .by_user_id = actor.id});
+      }
+    }
+  }
+
+  if (after.screen_share_blocked && !before.screen_share_blocked) {
+    const models::Room* room = rooms_.find(*room_id);
+    const models::Participant* participant = room == nullptr ? nullptr : room->find(user_id);
+    if (participant != nullptr && participant->sharing_screen) {
+      // A block that waited for the next attempt would leave whatever is
+      // already on everybody's screen there, which is the one thing the
+      // administrator was reaching for the control to stop.
+      if (const auto failure = rooms_.stop_screen_share(*room_id, user_id); !failure) {
+        DV_LOG_INFO("{} stopped the share of {} in room {}", actor.id, user_id, *room_id);
+        broadcast(out, *room_id,
+                  protocol::ScreenShareStopped{.room_id = *room_id, .user_id = user_id});
+      }
+    }
   }
 }
 

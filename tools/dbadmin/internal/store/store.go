@@ -384,6 +384,91 @@ func changes(current, updated Account) string {
 	return strings.Join(parts, " ")
 }
 
+// SetRestrictions writes what an administrator has taken away from an account,
+// and records which of the four flags moved.
+//
+// The whole set is written, because that is what the caller decided: the form
+// this comes from shows all four at once and the operator has just looked at
+// each of them. That is the difference from the client's per participant
+// shortcuts, which send one flag and leave the rest absent so as not to lift
+// somebody else's decision by accident.
+//
+// The last administrator cannot be banned, for the reason they cannot be
+// deleted or demoted: this program is the hand that recovers a system nobody
+// can administer, and it should not be the hand that creates one. The other
+// three are allowed on any account, an administrator's included: an
+// administrator who may not use a microphone can still administer.
+//
+// What it deliberately does not do is what the server does around the same
+// change: end the session, take the microphone, stop a share that is running.
+// A running server holds all three in memory and a database tool reaches none
+// of them. The consequence is stated on the screen rather than hidden here.
+// The restriction itself is read back by the server on the account's next
+// message, so it takes effect either way.
+func (s *Store) SetRestrictions(ctx context.Context, userID string, restrictions Restrictions) error {
+	scopedContext, cancel := s.scoped(ctx)
+	defer cancel()
+
+	current, err := s.findAccount(scopedContext, userID)
+	if err != nil {
+		return err
+	}
+
+	if restrictions == current.Restrictions {
+		// Nothing written and nothing recorded. A form submitted with the
+		// boxes it already had ticked is not an administrative action, and an
+		// audit log full of those is a log nobody reads.
+		return nil
+	}
+	if restrictions.Banned && !current.Restrictions.Banned &&
+		current.IsAdmin() && s.countAdmins(scopedContext) <= 1 {
+		return ErrLastAdmin
+	}
+
+	result, err := s.users.UpdateOne(scopedContext,
+		bson.D{{Key: "user_id", Value: userID}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "restrictions", Value: restrictions}}}})
+	if err != nil {
+		return fmt.Errorf("could not update the restrictions: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return ErrUserNotFound
+	}
+
+	return s.record(scopedContext, ActionRestrictUser, userID,
+		restrictionChanges(current.Restrictions, restrictions))
+}
+
+// restrictionChanges names the flags that moved and what they became, in the
+// vocabulary the server writes: "banned=true muted=false" reads the same way
+// "role=admin username" does, whichever program wrote it.
+func restrictionChanges(current, updated Restrictions) string {
+	var parts []string
+	if updated.Banned != current.Banned {
+		parts = append(parts, "banned="+boolText(updated.Banned))
+	}
+	if updated.Muted != current.Muted {
+		parts = append(parts, "muted="+boolText(updated.Muted))
+	}
+	if updated.Silenced != current.Silenced {
+		parts = append(parts, "silenced="+boolText(updated.Silenced))
+	}
+	if updated.ScreenShareBlocked != current.ScreenShareBlocked {
+		parts = append(parts, "screen_share_blocked="+boolText(updated.ScreenShareBlocked))
+	}
+	if len(parts) == 0 {
+		return "no change"
+	}
+	return strings.Join(parts, " ")
+}
+
+func boolText(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
 // SetPassword derives a fresh salt and hash and writes both.
 //
 // One write and not two, so that a failure cannot leave an account whose salt

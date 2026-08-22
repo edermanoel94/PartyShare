@@ -1,5 +1,6 @@
 #include "ui/admin_panel.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
@@ -97,19 +98,22 @@ QWidget* AdminPanel::build_users_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
 
-  users_ = make_table({QStringLiteral("Username"), QStringLiteral("Name"), QStringLiteral("Role"),
-                       QStringLiteral("Created"), QStringLiteral("Online")},
-                      page);
+  users_ = make_table(
+      {QStringLiteral("Username"), QStringLiteral("Name"), QStringLiteral("Role"),
+       QStringLiteral("Created"), QStringLiteral("Online"), QStringLiteral("Restricted")},
+      page);
   column->addWidget(users_, 1);
 
   auto* controls = new QHBoxLayout();
   create_user_ = new QPushButton(QStringLiteral("New account"), page);
   change_role_ = new QPushButton(QStringLiteral("Change role"), page);
   reset_password_ = new QPushButton(QStringLiteral("Reset password"), page);
+  restrict_user_ = new QPushButton(QStringLiteral("Restrictions"), page);
   delete_user_ = new QPushButton(QStringLiteral("Delete"), page);
   controls->addWidget(create_user_);
   controls->addWidget(change_role_);
   controls->addWidget(reset_password_);
+  controls->addWidget(restrict_user_);
   controls->addStretch();
   controls->addWidget(delete_user_);
   column->addLayout(controls);
@@ -117,6 +121,7 @@ QWidget* AdminPanel::build_users_tab() {
   connect(create_user_, &QPushButton::clicked, this, &AdminPanel::on_create_user);
   connect(change_role_, &QPushButton::clicked, this, &AdminPanel::on_change_role);
   connect(reset_password_, &QPushButton::clicked, this, &AdminPanel::on_reset_password);
+  connect(restrict_user_, &QPushButton::clicked, this, &AdminPanel::on_restrict_user);
   connect(delete_user_, &QPushButton::clicked, this, &AdminPanel::on_delete_user);
   return page;
 }
@@ -278,6 +283,71 @@ void AdminPanel::on_reset_password() {
   change.user_id = user_id.toStdString();
   change.password = password.toStdString();
   (void)send(session_.update_user(change));
+}
+
+void AdminPanel::on_restrict_user() {
+  const QString user_id = selected_id(users_);
+  if (user_id.isEmpty()) {
+    return;
+  }
+
+  const QString username = users_->item(users_->currentRow(), 0)->text();
+  // Column 5 of the users table, which the session filled from
+  // models::describe. Reading the state back off the row rather than keeping a
+  // copy here is the same rule the rest of this panel follows: the widget
+  // holds nothing the server does not.
+  const QString in_force = users_->item(users_->currentRow(), 5) == nullptr
+                               ? QString()
+                               : users_->item(users_->currentRow(), 5)->text();
+  const QStringList current = in_force.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+
+  QDialog dialog(this);
+  dialog.setWindowTitle(QStringLiteral("Restrictions for %1").arg(username));
+  auto* form = new QFormLayout(&dialog);
+
+  form->addRow(new QLabel(QStringLiteral("These stay with the account until they are lifted, "
+                                         "across rooms and across sign ins."),
+                          &dialog));
+
+  auto* banned = new QCheckBox(QStringLiteral("Cannot sign in"), &dialog);
+  auto* muted = new QCheckBox(QStringLiteral("Cannot use the microphone"), &dialog);
+  auto* silenced = new QCheckBox(QStringLiteral("Cannot write in the chat"), &dialog);
+  auto* blocked = new QCheckBox(QStringLiteral("Cannot share their screen"), &dialog);
+  banned->setChecked(current.contains(QStringLiteral("banned")));
+  muted->setChecked(current.contains(QStringLiteral("muted")));
+  silenced->setChecked(current.contains(QStringLiteral("silenced")));
+  blocked->setChecked(current.contains(QStringLiteral("screen_share_blocked")));
+
+  form->addRow(banned);
+  form->addRow(muted);
+  form->addRow(silenced);
+  form->addRow(blocked);
+
+  auto* reason = new QLineEdit(&dialog);
+  reason->setPlaceholderText(QStringLiteral("Shown to %1").arg(username));
+  form->addRow(QStringLiteral("Reason"), reason);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  form->addRow(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+
+  // Every box is sent, because this dialog is the one place all four are
+  // decided together and the administrator has just looked at each of them.
+  // The per participant shortcuts in the room send one flag at a time, which
+  // is the case where leaving the rest absent matters.
+  protocol::RestrictUser change;
+  change.user_id = user_id.toStdString();
+  change.banned = banned->isChecked();
+  change.muted = muted->isChecked();
+  change.silenced = silenced->isChecked();
+  change.screen_share_blocked = blocked->isChecked();
+  change.reason = reason->text().toStdString();
+  (void)send(session_.restrict_user(change));
 }
 
 void AdminPanel::on_delete_user() {

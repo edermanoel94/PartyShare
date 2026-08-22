@@ -64,6 +64,8 @@ enum class MessageType : std::uint8_t {
   KickUser,
   UserKicked,
   ForceMute,
+  RestrictUser,
+  UserRestricted,
   ListUsers,
   UserList,
   CreateUser,
@@ -308,6 +310,54 @@ struct ForceMute {
   friend bool operator==(const ForceMute&, const ForceMute&) = default;
 };
 
+/// Takes something away from an account, or gives it back, for longer than the
+/// room they are in lasts. See models::Restrictions.
+///
+/// Every flag is optional and absent means unchanged, for the same reason
+/// `update_user` spells its fields that way: lifting a ban and leaving it alone
+/// have to be different requests, and a message that carried four plain
+/// booleans would make every change a claim about all four. An administrator
+/// who unmutes somebody would silently be lifting the ban a colleague applied a
+/// minute earlier.
+///
+/// The answer is the whole `user_list`, as with the other account changes, plus
+/// a `user_restricted` to the room the account is in and to the account itself.
+struct RestrictUser {
+  std::string user_id;
+  std::optional<bool> banned;
+  std::optional<bool> muted;
+  std::optional<bool> silenced;
+  std::optional<bool> screen_share_blocked;
+  /// Shown to the person it is about. Optional, and empty is fine.
+  std::string reason;
+
+  friend bool operator==(const RestrictUser&, const RestrictUser&) = default;
+};
+
+/// What an account's restrictions became, announced rather than asked about.
+///
+/// Sent to the room the account is in, everybody in it included, so that a
+/// microphone that will not turn back on has a reason next to it rather than
+/// looking broken. Sent to the account's own connection whether or not they are
+/// in a room, because a person told what they may no longer do can stop trying,
+/// and one who is not told is left clicking a button that does nothing.
+///
+/// It carries the whole set and not what changed. A client that missed one of
+/// these while it was reconnecting is then correct again on the next one,
+/// instead of applying a delta to a state nobody agreed on.
+struct UserRestricted {
+  std::string user_id;
+  models::Restrictions restrictions;
+  /// The administrator who did it. Empty is not expected here, but a client
+  /// renders "an administrator" for it rather than nothing.
+  std::string by_user_id;
+  std::string reason;
+  /// Where they were when it happened, and empty when they were in no room.
+  std::string room_id;
+
+  friend bool operator==(const UserRestricted&, const UserRestricted&) = default;
+};
+
 /// An account as an administrator sees it.
 ///
 /// Deliberately not the server's own account record: that one holds the salt
@@ -435,8 +485,9 @@ using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
                  ScreenShareStopped, Mute, Unmute, ChatMessage, ListChat, ChatHistory, ErrorMessage,
-                 Ping, Pong, KickUser, UserKicked, ForceMute, ListUsers, UserList, CreateUser,
-                 UpdateUser, DeleteUser, ListRooms, RoomList, DeleteRoom, ListAudit, AuditList>;
+                 Ping, Pong, KickUser, UserKicked, ForceMute, RestrictUser, UserRestricted,
+                 ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms, RoomList,
+                 DeleteRoom, ListAudit, AuditList>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

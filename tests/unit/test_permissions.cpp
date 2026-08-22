@@ -42,6 +42,7 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
   for (const proto::MessageType type : {
            proto::MessageType::KickUser,
            proto::MessageType::ForceMute,
+           proto::MessageType::RestrictUser,
            proto::MessageType::ListUsers,
            proto::MessageType::CreateUser,
            proto::MessageType::UpdateUser,
@@ -66,6 +67,7 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
            proto::MessageType::UserJoined,
            proto::MessageType::UserLeft,
            proto::MessageType::UserKicked,
+           proto::MessageType::UserRestricted,
            proto::MessageType::ChatHistory,
            proto::MessageType::UserList,
            proto::MessageType::RoomList,

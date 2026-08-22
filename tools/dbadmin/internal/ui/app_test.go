@@ -9,6 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
+
+	"github.com/edermanoel94/PartyShare/tools/dbadmin/internal/store"
 )
 
 // The screens are driven the way a person drives them: a terminal of a known
@@ -455,5 +457,90 @@ func TestEditingAnAccountSendsTheWholeAccount(t *testing.T) {
 	}
 	if updated.Role != "admin" {
 		t.Errorf("the role arrived as %q, want the promoted one", updated.Role)
+	}
+}
+
+func TestRestrictingAnAccountSendsWhatTheFormHolds(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("down") // bruno
+	screen.press("m")
+	screen.awaits(t, "Restrictions for bruno")
+
+	screen.press("tab")   // cannot sign in, left at no
+	screen.press("right") // cannot use the microphone: yes
+	screen.press("tab")
+	screen.press("right") // cannot write in the chat: yes
+	screen.press("tab")   // cannot share their screen, left at no
+	screen.press("enter")
+
+	screen.awaits(t, "is now restricted")
+	final := screen.finish(t)
+
+	if len(database.restricted) != 1 {
+		t.Fatalf("the screen sent %d restrictions, want 1", len(database.restricted))
+	}
+	call := database.restricted[0]
+	if call.userID != "id-bruno" {
+		t.Errorf("the change names %q, want the selected account", call.userID)
+	}
+	want := store.Restrictions{Muted: true, Silenced: true}
+	if call.restrictions != want {
+		t.Errorf("the restrictions arrived as %+v, want %+v", call.restrictions, want)
+	}
+	// The list was read again, so the column shows it rather than the screen
+	// having only said so.
+	if !strings.Contains(final, "mic chat") {
+		t.Errorf("the restrictions column does not show the change:\n%s", final)
+	}
+}
+
+// The form opens on what the account already has, so that saving it unchanged
+// is a no-op rather than a way to lift everything by accident.
+func TestTheRestrictionsFormOpensOnWhatIsInForce(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	database.accounts[1].Restrictions = store.Restrictions{Banned: true, Silenced: true}
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("down") // bruno
+	screen.press("m")
+	screen.awaits(t, "Restrictions for bruno")
+	screen.press("enter")
+
+	screen.awaits(t, "already those")
+	screen.finish(t)
+
+	if len(database.restricted) != 1 {
+		t.Fatalf("the screen sent %d restrictions, want 1", len(database.restricted))
+	}
+	want := store.Restrictions{Banned: true, Silenced: true}
+	if got := database.restricted[0].restrictions; got != want {
+		t.Errorf("submitting the form unchanged sent %+v, want %+v", got, want)
+	}
+}
+
+// A database that cannot be written to has to say so, and has to leave the
+// list showing what is still true rather than what was asked for.
+func TestARefusedRestrictionIsReported(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	database.failure = errDatabaseUnreachable
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("m")
+	screen.awaits(t, "Restrictions for ana")
+	screen.press("right") // cannot sign in: yes
+	screen.press("enter")
+
+	screen.awaits(t, "could not reach the database")
+	final := screen.finish(t)
+	if strings.Contains(final, "ban") {
+		t.Errorf("a refused restriction reached the list:\n%s", final)
 	}
 }

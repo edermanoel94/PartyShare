@@ -602,7 +602,11 @@ void MainWindow::wire_session() {
                      << (summary.created_at > 0 ? QDateTime::fromSecsSinceEpoch(summary.created_at)
                                                       .toString(QStringLiteral("yyyy-MM-dd"))
                                                 : QString())
-                     << (summary.online ? QStringLiteral("yes") : QString());
+                     << (summary.online ? QStringLiteral("yes") : QString())
+                     // Empty for an account with nothing taken away, which is
+                     // most of them, so the column reads as an exception list
+                     // rather than as a column of "none".
+                     << QString::fromStdString(models::describe(summary.user.restrictions));
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             QMetaObject::invokeMethod(admin_panel_, "apply_users", Qt::QueuedConnection,
@@ -665,6 +669,31 @@ void MainWindow::wire_session() {
             QMetaObject::invokeMethod(this, "apply_forced_mute", Qt::QueuedConnection,
                                       Q_ARG(QString, name), Q_ARG(QString, by_name),
                                       Q_ARG(bool, muted));
+          },
+      .on_restrictions_changed =
+          [this](const std::string& user_id, const models::Restrictions& restrictions,
+                 const std::string& by_user_id, const std::string& reason) {
+            // Resolved to names here for the same reason the forced mute is,
+            // and the whole line is built here as well: it is the one thing
+            // the interface has left to do, and a slot taking four arguments
+            // would need three of them registered as metatypes to cross
+            // threads.
+            QString name;
+            QString by_name;
+            for (const client::app::Participant& participant : session_.participants()) {
+              if (participant.user.id == user_id) {
+                name = QString::fromStdString(participant.user.display_name);
+              }
+              if (participant.user.id == by_user_id) {
+                by_name = QString::fromStdString(participant.user.display_name);
+              }
+            }
+            const bool is_us = user_id == session_.local_user().id;
+            QMetaObject::invokeMethod(
+                this, "apply_restrictions", Qt::QueuedConnection, Q_ARG(QString, name),
+                Q_ARG(QString, by_name),
+                Q_ARG(QString, QString::fromStdString(models::describe(restrictions))),
+                Q_ARG(QString, QString::fromStdString(reason)), Q_ARG(bool, is_us));
           },
   });
 
@@ -1103,9 +1132,11 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   // Read from the session rather than from the label, so that the menu offers
   // the action that matches the state the server last reported.
   bool muted = false;
+  models::Restrictions restrictions;
   for (const client::app::Participant& participant : session_.participants()) {
     if (participant.user.id == user_id.toStdString()) {
       muted = participant.muted;
+      restrictions = participant.user.restrictions;
       break;
     }
   }
@@ -1113,6 +1144,22 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   QMenu menu(this);
   QAction* toggle_mute = menu.addAction(muted ? QStringLiteral("Unmute %1").arg(name)
                                               : QStringLiteral("Mute %1").arg(name));
+
+  // The two below are account restrictions and outlive this room, which is why
+  // they sit in their own section: "mute for now" and "may not speak until
+  // somebody says otherwise" are different decisions, and a menu that ran them
+  // together would make the second one easy to take by accident. The
+  // administration panel is where all four are managed together; this is the
+  // shortcut for the two that are usually reached for while a call is going on.
+  menu.addSeparator();
+  QAction* toggle_silence =
+      menu.addAction(restrictions.silenced ? QStringLiteral("Let %1 use the chat again").arg(name)
+                                           : QStringLiteral("Silence %1 in the chat").arg(name));
+  QAction* toggle_share_block =
+      menu.addAction(restrictions.screen_share_blocked
+                         ? QStringLiteral("Let %1 share their screen again").arg(name)
+                         : QStringLiteral("Stop %1 from sharing their screen").arg(name));
+
   menu.addSeparator();
   QAction* kick = menu.addAction(QStringLiteral("Remove %1 from the room").arg(name));
 
@@ -1123,6 +1170,23 @@ void MainWindow::on_participant_menu(const QPoint& where) {
 
   if (chosen == toggle_mute) {
     if (const auto sent = session_.force_mute(user_id.toStdString(), !muted); !sent) {
+      apply_error(QString::fromStdString(sent.error().code),
+                  QString::fromStdString(sent.error().message));
+    }
+    return;
+  }
+
+  if (chosen == toggle_silence || chosen == toggle_share_block) {
+    // One flag per request, and the other three left absent so this cannot
+    // undo a restriction somebody else applied. See protocol::RestrictUser.
+    protocol::RestrictUser change;
+    change.user_id = user_id.toStdString();
+    if (chosen == toggle_silence) {
+      change.silenced = !restrictions.silenced;
+    } else {
+      change.screen_share_blocked = !restrictions.screen_share_blocked;
+    }
+    if (const auto sent = session_.restrict_user(change); !sent) {
       apply_error(QString::fromStdString(sent.error().code),
                   QString::fromStdString(sent.error().message));
     }
@@ -1189,6 +1253,42 @@ void MainWindow::apply_kicked(const QString& reason) {
   QMessageBox::information(this, QStringLiteral("Removed from the room"), text);
 }
 
+void MainWindow::apply_restrictions(const QString& name, const QString& by_name,
+                                    const QString& summary, const QString& reason, bool is_us) {
+  // The controls first. Whether the microphone, the share button and the chat
+  // box are usable is read off the session, and the session is already in step
+  // with the server by the time this runs.
+  refresh_controls();
+
+  const QString who = name.isEmpty() ? QStringLiteral("Somebody") : name;
+  const QString by = by_name.isEmpty() ? QStringLiteral("an administrator") : by_name;
+
+  if (!is_us) {
+    status_->setText(summary.isEmpty()
+                         ? QStringLiteral("%1 lifted the restrictions on %2").arg(by, who)
+                         : QStringLiteral("%1 restricted %2: %3").arg(by, who, summary));
+    return;
+  }
+
+  // Being told about somebody else is a line on the status bar. Being told
+  // about yourself is a window, because it is the answer to the question the
+  // person is about to ask about a control that stopped working.
+  if (summary.isEmpty()) {
+    status_->setText(QStringLiteral("%1 lifted the restrictions on your account").arg(by));
+    QMessageBox::information(this, QStringLiteral("Restrictions lifted"),
+                             QStringLiteral("%1 lifted the restrictions on your account.").arg(by));
+    return;
+  }
+
+  QString text =
+      QStringLiteral("%1 changed what your account may do.\n\nIn force: %2").arg(by, summary);
+  if (!reason.isEmpty()) {
+    text += QStringLiteral("\n\nReason: %1").arg(reason);
+  }
+  status_->setText(QStringLiteral("%1 restricted your account: %2").arg(by, summary));
+  QMessageBox::information(this, QStringLiteral("Your account was restricted"), text);
+}
+
 void MainWindow::apply_forced_mute(const QString& name, const QString& by_name, bool muted) {
   refresh_controls();
 
@@ -1230,9 +1330,22 @@ void MainWindow::refresh_controls() {
   // administrative message. This only decides whether the door is visible.
   admin_button_->setVisible(authenticated && session_.is_admin());
 
+  // What an administrator has taken away from this account, which the session
+  // keeps in step with the server. The server refuses each of these anyway;
+  // what these three do is say so before somebody presses a control and is
+  // told no, and explain the refusal in the tooltip rather than in an error
+  // box that appears a second later.
+  const models::Restrictions& restrictions = session_.local_user().restrictions;
+
   mute_button_->setChecked(session_.muted());
   mute_button_->setText(session_.muted() ? QStringLiteral("Unmute microphone")
                                          : QStringLiteral("Mute microphone"));
+  // A forced mute is not a button that turned itself off: it is one that will
+  // not turn back on. Disabled rather than left clickable and refused, which
+  // would leave the microphone looking like it had failed.
+  mute_button_->setEnabled(!restrictions.muted);
+  mute_button_->setToolTip(
+      restrictions.muted ? QStringLiteral("An administrator has muted this account.") : QString());
 
   const bool sharing = session_.sharing_screen();
   const std::string sharer = session_.screen_sharer();
@@ -1241,15 +1354,28 @@ void MainWindow::refresh_controls() {
   // Section 5.2 of SPEC.md allows one screen at a time, and the server refuses
   // a second one. Saying so with a disabled button beats letting the click
   // through and answering with an error.
-  share_button_->setEnabled(in_call && !someone_else_is_sharing);
+  //
+  // Stopping is never taken away, so a share still running when the block
+  // lands can be ended from here as well as by the server.
+  const bool may_share = !restrictions.screen_share_blocked || sharing;
+  share_button_->setEnabled(in_call && !someone_else_is_sharing && may_share);
   share_button_->setChecked(sharing);
   share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
+  share_button_->setToolTip(
+      restrictions.screen_share_blocked
+          ? QStringLiteral("An administrator has blocked screen sharing for this account.")
+          : QString());
 
   // There is nobody to say anything to outside a room, and a field that
-  // accepts a line it cannot send is a field that loses it.
-  chat_input_->setEnabled(in_call);
-  chat_emoji_->setEnabled(in_call);
-  chat_send_->setEnabled(in_call);
+  // accepts a line it cannot send is a field that loses it. Being silenced is
+  // the same problem with a different cause and gets the same answer.
+  const bool may_speak = in_call && !restrictions.silenced;
+  chat_input_->setEnabled(may_speak);
+  chat_emoji_->setEnabled(may_speak);
+  chat_send_->setEnabled(may_speak);
+  chat_input_->setPlaceholderText(restrictions.silenced
+                                      ? QStringLiteral("An administrator has silenced you")
+                                      : QStringLiteral("Message"));
 }
 
 }  // namespace dv::ui

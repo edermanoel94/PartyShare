@@ -56,6 +56,7 @@ enum class Access : std::uint8_t {
     // Administration.
     case protocol::MessageType::KickUser:
     case protocol::MessageType::ForceMute:
+    case protocol::MessageType::RestrictUser:
     case protocol::MessageType::ListUsers:
     case protocol::MessageType::CreateUser:
     case protocol::MessageType::UpdateUser:
@@ -72,6 +73,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserJoined:
     case protocol::MessageType::UserLeft:
     case protocol::MessageType::UserKicked:
+    case protocol::MessageType::UserRestricted:
     case protocol::MessageType::ChatHistory:
     case protocol::MessageType::UserList:
     case protocol::MessageType::RoomList:

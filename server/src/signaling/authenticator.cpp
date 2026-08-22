@@ -137,6 +137,16 @@ Result<Authenticator::Session> Authenticator::authenticate(const std::string& us
     return Result<Session>::failure(unauthorized());
   }
 
+  // After the password and not before it. The account being banned is a true
+  // thing about it, and answering with it to whoever typed the username would
+  // turn a login form into a way to ask the server which accounts exist. The
+  // person it belongs to has the password and gets the real reason.
+  if (account->user.restrictions.banned) {
+    return Result<Session>::failure(
+        Error{.code = "account_banned",
+              .message = "this account has been suspended by an administrator"});
+  }
+
   Session session;
   session.user = account->user;
   session.token = random_hex(32);
@@ -162,6 +172,15 @@ Result<models::User> Authenticator::validate(const std::string& token, Clock::ti
   if (!account.has_value()) {
     tokens_.erase(it);
     return Result<models::User>::failure("unauthorized", "the account no longer exists");
+  }
+  // Banning revokes the tokens as it is applied, so this is unreachable
+  // through the Hub. It is here because the account is read back on every
+  // validation precisely so that a decision taken after the token was issued
+  // takes effect, and a ban is such a decision: whoever adds the second caller
+  // should not have to know that the first one already cleaned up.
+  if (account->user.restrictions.banned) {
+    tokens_.erase(it);
+    return Result<models::User>::failure("unauthorized", "the account has been suspended");
   }
   return account->user;
 }

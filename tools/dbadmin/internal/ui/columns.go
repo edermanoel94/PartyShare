@@ -17,6 +17,7 @@ const (
 	columnRole
 	columnUserID
 	columnCreated
+	columnRestrictions
 
 	columnTime
 	columnActor

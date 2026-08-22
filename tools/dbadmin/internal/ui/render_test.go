@@ -76,6 +76,7 @@ func TestTheOverlaysFitTheWindow(t *testing.T) {
 		"create":   func(m Model) { m.users.openCreate() },
 		"edit":     func(m Model) { m.users.openEdit(m.users.accounts[0]) },
 		"password": func(m Model) { m.users.openPassword(m.users.accounts[0]) },
+		"restrict": func(m Model) { m.users.openRestrict(m.users.accounts[0]) },
 		"delete": func(m Model) {
 			m.users.target = m.users.accounts[0]
 			m.users.mode = usersDelete
@@ -113,7 +114,9 @@ func TestANarrowWindowKeepsWhatMatters(t *testing.T) {
 	t.Parallel()
 
 	wide := loaded(t, 120, 24).View()
-	for _, want := range []string{"USERNAME", "DISPLAY NAME", "ROLE", "USER ID", "CREATED"} {
+	for _, want := range []string{
+		"USERNAME", "DISPLAY NAME", "ROLE", "RESTRICTED", "USER ID", "CREATED",
+	} {
 		if !strings.Contains(wide, want) {
 			t.Errorf("a wide window is missing the %s column", want)
 		}

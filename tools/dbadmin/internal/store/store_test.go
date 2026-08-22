@@ -58,6 +58,29 @@ func testStore(t *testing.T) *Store {
 	return opened
 }
 
+// subdocument flattens a nested BSON value into a map, whichever of the two
+// shapes the driver produced.
+//
+// A nested object inside a bson.M decodes to bson.D, which is an ordered slice
+// and not a map: reading it by key needs this. The order is not part of what
+// the server reads, so flattening it here is not throwing anything away.
+func subdocument(t *testing.T, value any) map[string]any {
+	t.Helper()
+	switch nested := value.(type) {
+	case bson.M:
+		return nested
+	case bson.D:
+		flat := make(map[string]any, len(nested))
+		for _, element := range nested {
+			flat[element.Key] = element.Value
+		}
+		return flat
+	default:
+		t.Fatalf("expected a subdocument, got %T", value)
+		return nil
+	}
+}
+
 func mustCreate(t *testing.T, database *Store, spec NewAccount) Account {
 	t.Helper()
 	account, err := database.CreateAccount(context.Background(), spec)
@@ -113,10 +136,30 @@ func TestCreateAccountWritesTheDocumentTheServerReads(t *testing.T) {
 		t.Errorf("created_at is %T, want int64", document["created_at"])
 	}
 
+	// Always written, all four flags, even on an account with nothing taken
+	// away. The server's own account_to_document does the same, and the point
+	// is that a reader never has to tell "no restrictions" apart from "written
+	// by a version that did not know about them".
+	restrictions := subdocument(t, document["restrictions"])
+	for _, flag := range []string{"banned", "muted", "silenced", "screen_share_blocked"} {
+		value, isBool := restrictions[flag].(bool)
+		if !isBool {
+			t.Errorf("restrictions.%s is %T, want a bool", flag, restrictions[flag])
+			continue
+		}
+		if value {
+			t.Errorf("a new account arrived with %s already taken away", flag)
+		}
+	}
+	if len(restrictions) != 4 {
+		t.Errorf("restrictions carries %d fields, want the four the server reads", len(restrictions))
+	}
+
 	// Nothing this program invents. An extra field is not read by the server
 	// and is exactly how two writers of one collection drift apart.
 	for key := range document {
-		if _, expected := want[key]; !expected && key != "created_at" && key != "_id" {
+		if _, expected := want[key]; !expected &&
+			key != "created_at" && key != "_id" && key != "restrictions" {
 			t.Errorf("the document carries an unexpected field %q", key)
 		}
 	}
@@ -326,6 +369,184 @@ func TestTheLastAdministratorIsProtected(t *testing.T) {
 	if err := database.UpdateAccount(context.Background(), demoted); !errors.Is(
 		err, ErrLastAdmin) {
 		t.Errorf("after the second one is gone, demoting gave %v, want ErrLastAdmin", err)
+	}
+}
+
+// The restrictions subdocument is what the server reads back through
+// restrictions_from in mongo_store.cpp. A flag renamed here is not a broken
+// test, it is a ban nobody is under: every reader there is tolerant of a
+// missing field and answers false for it.
+func TestSetRestrictionsWritesTheSubdocumentTheServerReads(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	created := mustCreate(t, database, NewAccount{Username: "ana", Password: "one"})
+	want := Restrictions{Banned: true, Silenced: true}
+	if err := database.SetRestrictions(context.Background(), created.UserID, want); err != nil {
+		t.Fatalf("SetRestrictions: %v", err)
+	}
+
+	var document bson.M
+	err := database.users.FindOne(context.Background(),
+		bson.D{{Key: "user_id", Value: created.UserID}}).Decode(&document)
+	if err != nil {
+		t.Fatalf("could not read the document back: %v", err)
+	}
+	restrictions := subdocument(t, document["restrictions"])
+	for flag, value := range map[string]bool{
+		"banned": true, "muted": false, "silenced": true, "screen_share_blocked": false,
+	} {
+		if restrictions[flag] != value {
+			t.Errorf("restrictions.%s is %v, want %v", flag, restrictions[flag], value)
+		}
+	}
+
+	// And it comes back through the reader this program uses, so the form that
+	// opens next shows what is actually in force.
+	back, err := database.FindAccount(context.Background(), created.UserID)
+	if err != nil {
+		t.Fatalf("FindAccount: %v", err)
+	}
+	if back.Restrictions != want {
+		t.Errorf("read back %+v, want %+v", back.Restrictions, want)
+	}
+}
+
+func TestSetRestrictionsRecordsWhatMoved(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	created := mustCreate(t, database, NewAccount{Username: "ana", Password: "one"})
+	if err := database.SetRestrictions(context.Background(), created.UserID,
+		Restrictions{Silenced: true}); err != nil {
+		t.Fatalf("SetRestrictions: %v", err)
+	}
+	// Only the flag that changed, then only the flag that changed back.
+	if err := database.SetRestrictions(context.Background(), created.UserID,
+		Restrictions{Silenced: true, Muted: true}); err != nil {
+		t.Fatalf("SetRestrictions: %v", err)
+	}
+
+	entries, err := database.Audit(context.Background(), AuditQuery{})
+	if err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	// Collected rather than indexed: the log is ordered by a wall clock in
+	// whole seconds, and three writes inside one second have no order between
+	// them. What is being checked is that each change named the flag that
+	// moved and only that flag, which does not depend on which came back
+	// first.
+	var details []string
+	for _, entry := range entries {
+		if entry.Action != ActionRestrictUser {
+			continue
+		}
+		if entry.TargetID != created.UserID {
+			t.Errorf("an entry names %q, want the account", entry.TargetID)
+		}
+		details = append(details, entry.Detail)
+	}
+	slices.Sort(details)
+	if !slices.Equal(details, []string{"muted=true", "silenced=true"}) {
+		t.Errorf("the log recorded %q, want one entry per flag that moved", details)
+	}
+}
+
+// A form submitted with the boxes it already had ticked is not an
+// administrative action, and an audit log full of those is a log nobody reads.
+func TestSetRestrictionsRecordsNothingWhenNothingMoved(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	created := mustCreate(t, database, NewAccount{Username: "ana", Password: "one"})
+	if err := database.SetRestrictions(context.Background(), created.UserID,
+		Restrictions{}); err != nil {
+		t.Fatalf("SetRestrictions: %v", err)
+	}
+
+	entries, err := database.Audit(context.Background(), AuditQuery{})
+	if err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Action != ActionCreateUser {
+		t.Errorf("wrote %d entries, want only the create", len(entries))
+	}
+}
+
+func TestTheLastAdministratorCannotBeBanned(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	only := mustCreate(t, database, NewAccount{
+		Username: "ana", Password: "one", Role: RoleAdmin,
+	})
+	if err := database.SetRestrictions(context.Background(), only.UserID,
+		Restrictions{Banned: true}); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("banning the last administrator gave %v, want ErrLastAdmin", err)
+	}
+
+	// The other three take nothing away that administering needs. An
+	// administrator who may not use a microphone can still administer.
+	if err := database.SetRestrictions(context.Background(), only.UserID,
+		Restrictions{Muted: true, Silenced: true, ScreenShareBlocked: true}); err != nil {
+		t.Errorf("restricting the last administrator otherwise gave %v", err)
+	}
+
+	// And with a second one there, banning the first is allowed.
+	mustCreate(t, database, NewAccount{Username: "carla", Password: "two", Role: RoleAdmin})
+	if err := database.SetRestrictions(context.Background(), only.UserID,
+		Restrictions{Banned: true}); err != nil {
+		t.Errorf("banning one of two administrators gave %v", err)
+	}
+}
+
+func TestSetRestrictionsReportsAMissingAccount(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	err := database.SetRestrictions(context.Background(), "nobody", Restrictions{Banned: true})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("restricting an account that is not there gave %v, want ErrUserNotFound", err)
+	}
+}
+
+// The words this program writes and the words the server writes have to be the
+// same words, because they end up in one audit log and on one screen.
+func TestDescribeIsTheServersVocabulary(t *testing.T) {
+	t.Parallel()
+
+	if got := (Restrictions{}).Describe(); got != "" {
+		t.Errorf("nothing taken away describes as %q, want empty", got)
+	}
+	all := Restrictions{Banned: true, Muted: true, Silenced: true, ScreenShareBlocked: true}
+	if got := all.Describe(); got != "banned muted silenced screen_share_blocked" {
+		t.Errorf("Describe is %q", got)
+	}
+	if !all.Any() || (Restrictions{}).Any() {
+		t.Error("Any does not agree with what is set")
+	}
+}
+
+// An account written before restrictions existed has no subdocument at all,
+// which has to read as "nothing taken away". The opposite reading is an
+// account nobody can log in to after an upgrade.
+func TestAnAccountWithoutRestrictionsHasNothingTakenAway(t *testing.T) {
+	t.Parallel()
+	database := testStore(t)
+
+	created := mustCreate(t, database, NewAccount{Username: "ana", Password: "one"})
+	if _, err := database.users.UpdateOne(context.Background(),
+		bson.D{{Key: "user_id", Value: created.UserID}},
+		bson.D{{Key: "$unset", Value: bson.D{{Key: "restrictions", Value: ""}}}}); err != nil {
+		t.Fatalf("could not remove the subdocument: %v", err)
+	}
+
+	back, err := database.FindAccount(context.Background(), created.UserID)
+	if err != nil {
+		t.Fatalf("FindAccount: %v", err)
+	}
+	if back.Restrictions.Any() {
+		t.Errorf("an account with no subdocument read as %+v", back.Restrictions)
 	}
 }
 

@@ -14,13 +14,13 @@ It writes documents the server reads back unchanged, credentials included, and i
    Users (12)    Audit (348)
  ━━━━━━━━━━━━━━━───────────────────────────────────────────────────────────────────────────
 
-  USERNAME             DISPLAY NAME          ROLE     USER ID         CREATED
+  USERNAME             DISPLAY NAME          ROLE     RESTRICTED    USER ID         CREATED
  ──────────────────────────────────────────────────────────────────────────────────────────
-  ana                  Ana Souza             admin    3f2a91c0d4e5…   2026-08-19 10:12
-  bruno                Bruno Lima            user     aa11bb22cc33…   2026-08-20 09:40
+  ana                  Ana Souza             admin    -             3f2a91c0d4e5…   2026-08-19 10:12
+  bruno                Bruno Lima            user     mic chat      aa11bb22cc33…   2026-08-20 09:40
 
  12 accounts · 2 administrators
- ↑↓ move · enter details · n new · e edit · p password · d delete · / filter · r refresh
+ ↑↓ move · enter details · n new · e edit · p password · m restrictions · d delete · / filter
 ```
 
 ## Running
@@ -64,6 +64,7 @@ A terminal program that clears the screen and then says it cannot reach the data
 | `n` | create an account |
 | `e` | edit the username, display name, avatar and role |
 | `p` | set a password |
+| `m` | restrictions: what the account may no longer do |
 | `d` | delete, after a confirmation |
 | `/` | filter by username, display name or identifier |
 | `r` | read everything again |
@@ -82,19 +83,50 @@ A terminal program that clears the screen and then says it cannot reach the data
 
 ## What it writes
 
-An account is one document of the `users` collection, with the fields `server/src/store/mongo_store.cpp` reads: `user_id`, `username`, `display_name`, `avatar`, `role`, `salt_hex`, `password_hash_hex` and `created_at`.
+An account is one document of the `users` collection, with the fields `server/src/store/mongo_store.cpp` reads: `user_id`, `username`, `display_name`, `avatar`, `role`, `salt_hex`, `password_hash_hex`, `created_at` and `restrictions`.
 Nothing else, because a field the server does not read is how two writers of one collection drift apart.
 
 A password is stored the way the server's `Authenticator` stores it: scrypt with N of 2^14, r of 8, p of 1, a key of 32 bytes, and the salt passed as the hexadecimal text rather than the sixteen bytes it spells.
 Those parameters are not tunable here.
 A password stored under different ones is not a weaker password, it is a password nobody can log in with, and `TestDerivedKeyMatchesTheServer` pins them against vectors produced by OpenSSL through the call the server makes.
 
-Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user` and `delete_user`, with the detail naming what actually moved.
+Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user` and `restrict_user`, with the detail naming what actually moved.
 When the change succeeds and the entry cannot be written, the change stands and the status line says so in the colour of a warning rather than a success.
 Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/security-review.md](../../docs/security-review.md) already states for the server.
 
 The last administrator cannot be deleted or demoted, here as on the server.
 A system with nobody able to administer it is a system that needs the database edited by hand to be recovered, and this program is that hand.
+
+## Restrictions
+
+`m` opens the four things an administrator can take away from an account.
+They are one subdocument, `restrictions`, and the same one the server writes:
+
+| Field | While it is set |
+| --- | --- |
+| `banned` | The account cannot sign in. The lasting form of a kick: a kick ends one visit, this ends access until somebody lifts it |
+| `muted` | The account cannot use a microphone. It arrives in a room already muted, by the administrator rather than by itself, and cannot unmute itself |
+| `silenced` | The account cannot write in a room's chat. Reading it is untouched |
+| `screen_share_blocked` | The account cannot start a screen share, and the server stops one already running when it reads this |
+
+They are account wide and they stay written down, which is why this program can set them at all.
+A kick and a forced mute are about a room a running server holds in memory, and a database tool reaches neither; a restriction is about the account, so the two programs are writing the same thing.
+
+The whole set is written at once, because the form shows all four and whoever has just read them is the one qualified to write them.
+The client's per participant menu is the other case: it sends one flag and leaves the rest alone, so that silencing somebody does not lift a ban a colleague applied a minute earlier.
+
+The last administrator cannot be banned, for the reason they cannot be deleted or demoted.
+The other three are allowed on any account, an administrator's included: an administrator who may not use a microphone can still administer.
+
+A running server re-reads the account on its next message from it, so a restriction written here takes effect there without a restart.
+What it does not do is what the server does in the same breath: end a session already open, take a microphone already on, stop a share already running.
+All three live in the memory of a process this program has no connection to.
+With the server up, use the panel in the client instead.
+
+The list shows what is taken away in a column short enough to fit, `ban mic chat screen`, and the detail card behind `enter` prints the field names in full.
+
+Lifting them is the same form with the answers set back to `no`.
+A form submitted with the answers it already had writes nothing and records nothing, because a form nobody changed is not an administrative action.
 
 ## What it deliberately does not do
 
@@ -105,10 +137,15 @@ Until the server has run once against a database, the unique index on `username`
 It does not manage rooms.
 A room is a thing the server creates and destroys while people are inside it.
 
+It does not kick anybody out of a room, and it does not mute a microphone that is on right now.
+Both are about a room, and a room is memory in a process this program has no connection to.
+Banning and muting an account is the lasting half of the same thing, and that is what the restrictions above are.
+
 It does not reach a running server.
 Deleting an account removes the document; it does not evict that account from its room and does not revoke the tokens it already holds, because both live in the memory of a process this program has no connection to.
 The confirmation screen says so.
-With the server up, remove the account from the client panel instead.
+The same limit applies to banning: the account cannot log in again, and a session it already holds keeps working until it expires.
+With the server up, remove or restrict the account from the client panel instead, where all of it takes effect at once.
 
 ## Tests
 

@@ -572,6 +572,310 @@ TEST_F(HubAdminTest, TheRoomListCountsWhoIsInside) {
   EXPECT_FALSE(list->rooms.front().persistent);
 }
 
+// --- account restrictions ----------------------------------------------------
+
+TEST_F(HubAdminTest, ASilencedAccountCannotSayAnything) {
+  set_up_room();
+
+  proto::RestrictUser silence;
+  silence.user_id = user_.id;
+  silence.silenced = true;
+  (void)send(admin_connection_, silence);
+
+  proto::ChatMessage said;
+  said.message.room_id = room_;
+  said.message.user_id = user_.id;
+  said.message.text = "hello";
+  const auto out = send(user_connection_, said);
+
+  const auto refusal = find<proto::ErrorMessage>(out, user_connection_);
+  ASSERT_TRUE(refusal.has_value());
+  EXPECT_EQ(refusal->code, "forbidden");
+  // Nobody else was told anything, which is the half that matters: a message
+  // refused after it was broadcast is not refused.
+  EXPECT_FALSE(find<proto::ChatMessage>(out, admin_connection_).has_value());
+
+  // And lifting it gives the chat back.
+  proto::RestrictUser lift;
+  lift.user_id = user_.id;
+  lift.silenced = false;
+  (void)send(admin_connection_, lift);
+  EXPECT_TRUE(
+      find<proto::ChatMessage>(send(user_connection_, said), admin_connection_).has_value());
+}
+
+TEST_F(HubAdminTest, ABlockedAccountCannotStartAShare) {
+  set_up_room();
+
+  proto::RestrictUser block;
+  block.user_id = user_.id;
+  block.screen_share_blocked = true;
+  (void)send(admin_connection_, block);
+
+  const auto out = send(user_connection_, proto::ScreenShareStarted{room_, user_.id});
+  const auto refusal = find<proto::ErrorMessage>(out, user_connection_);
+  ASSERT_TRUE(refusal.has_value());
+  EXPECT_EQ(refusal->code, "forbidden");
+  EXPECT_FALSE(find<proto::ScreenShareStarted>(out, admin_connection_).has_value());
+}
+
+TEST_F(HubAdminTest, BlockingSharingStopsTheShareThatIsAlreadyRunning) {
+  set_up_room();
+  (void)send(user_connection_, proto::ScreenShareStarted{room_, user_.id});
+  ASSERT_NE(hub_.rooms().find(room_)->find(user_.id), nullptr);
+  ASSERT_TRUE(hub_.rooms().find(room_)->find(user_.id)->sharing_screen);
+
+  proto::RestrictUser block;
+  block.user_id = user_.id;
+  block.screen_share_blocked = true;
+  const auto out = send(admin_connection_, block);
+
+  // A block that waited for the next attempt would leave whatever is on
+  // everybody's screen there, which is the thing being reached for.
+  EXPECT_FALSE(hub_.rooms().find(room_)->find(user_.id)->sharing_screen);
+  EXPECT_TRUE(find<proto::ScreenShareStopped>(out, admin_connection_).has_value());
+  EXPECT_TRUE(find<proto::ScreenShareStopped>(out, user_connection_).has_value());
+}
+
+TEST_F(HubAdminTest, ARestrictedAccountAndItsRoomAreBothTold) {
+  set_up_room();
+
+  proto::RestrictUser change;
+  change.user_id = user_.id;
+  change.silenced = true;
+  change.reason = "off topic";
+  const auto out = send(admin_connection_, change);
+
+  const auto to_target = find<proto::UserRestricted>(out, user_connection_);
+  ASSERT_TRUE(to_target.has_value());
+  EXPECT_EQ(to_target->user_id, user_.id);
+  EXPECT_TRUE(to_target->restrictions.silenced);
+  EXPECT_EQ(to_target->by_user_id, admin_.id);
+  EXPECT_EQ(to_target->reason, "off topic");
+  EXPECT_EQ(to_target->room_id, room_);
+
+  // Everybody in the room, so that a chat somebody has stopped using has an
+  // explanation next to it.
+  EXPECT_TRUE(find<proto::UserRestricted>(out, admin_connection_).has_value());
+}
+
+TEST_F(HubAdminTest, AMutedAccountArrivesInTheRoomMutedAndStaysThere) {
+  const auto [admin, ana] = login("ana", Role::Admin);
+  const auto [connection, bruno] = login("bruno", Role::User);
+
+  proto::RestrictUser mute;
+  mute.user_id = bruno.id;
+  mute.muted = true;
+  (void)send(admin, mute);
+
+  const auto created =
+      find<proto::RoomCreated>(send(admin, proto::CreateRoom{ana.id, "room"}), admin);
+  ASSERT_TRUE(created.has_value());
+  (void)send(connection, proto::JoinRoom{created->room_id, bruno.id, "Bruno"});
+
+  const dv::models::Participant* participant = hub_.rooms().find(created->room_id)->find(bruno.id);
+  ASSERT_NE(participant, nullptr);
+  EXPECT_TRUE(participant->muted);
+  // By the administrator and not by themselves, which is what makes it hold.
+  EXPECT_TRUE(participant->muted_by_admin);
+
+  const auto refusal = find<proto::ErrorMessage>(
+      send(connection, proto::Unmute{created->room_id, bruno.id, {}}), connection);
+  ASSERT_TRUE(refusal.has_value());
+  EXPECT_EQ(refusal->code, "forbidden");
+}
+
+TEST_F(HubAdminTest, MutingAnAccountTakesTheMicrophoneNow) {
+  set_up_room();
+
+  proto::RestrictUser mute;
+  mute.user_id = user_.id;
+  mute.muted = true;
+  const auto out = send(admin_connection_, mute);
+
+  // Announced as an ordinary mute naming who did it, so a client that knows
+  // nothing about restrictions still draws the microphone correctly.
+  const auto announced = find<proto::Mute>(out, user_connection_);
+  ASSERT_TRUE(announced.has_value());
+  EXPECT_EQ(announced->by_user_id, admin_.id);
+  EXPECT_TRUE(hub_.rooms().find(room_)->find(user_.id)->muted_by_admin);
+}
+
+// A forced unmute is about one room and the restriction is about the account.
+// Without this, the weaker of the two would win and somebody muted everywhere
+// would get their microphone back with one click on the wrong control.
+TEST_F(HubAdminTest, AForcedUnmuteCannotReleaseAnAccountLevelMute) {
+  set_up_room();
+
+  proto::RestrictUser mute;
+  mute.user_id = user_.id;
+  mute.muted = true;
+  (void)send(admin_connection_, mute);
+
+  const auto refusal = find<proto::ErrorMessage>(
+      send(admin_connection_, proto::ForceMute{room_, user_.id, false}), admin_connection_);
+  ASSERT_TRUE(refusal.has_value());
+  EXPECT_EQ(refusal->code, "invalid_target");
+  EXPECT_TRUE(hub_.rooms().find(room_)->find(user_.id)->muted);
+
+  // Lifting the restriction is what gives it back, and it does so on its own.
+  proto::RestrictUser lift;
+  lift.user_id = user_.id;
+  lift.muted = false;
+  const auto out = send(admin_connection_, lift);
+  EXPECT_TRUE(find<proto::Unmute>(out, user_connection_).has_value());
+  EXPECT_FALSE(hub_.rooms().find(room_)->find(user_.id)->muted);
+  EXPECT_FALSE(hub_.rooms().find(room_)->find(user_.id)->muted_by_admin);
+}
+
+TEST_F(HubAdminTest, ABannedAccountLosesItsSessionAndCannotLogInAgain) {
+  set_up_room();
+
+  proto::RestrictUser ban;
+  ban.user_id = user_.id;
+  ban.banned = true;
+  ban.reason = "again";
+  const auto out = send(admin_connection_, ban);
+
+  // Told before being removed: a ban that closed the connection first would
+  // leave the person it is about the only one who never heard why.
+  ASSERT_TRUE(find<proto::UserRestricted>(out, user_connection_).has_value());
+  const auto kicked = find<proto::UserKicked>(out, user_connection_);
+  ASSERT_TRUE(kicked.has_value());
+  EXPECT_EQ(kicked->reason, "again");
+  EXPECT_TRUE(find<proto::UserLeft>(out, admin_connection_).has_value());
+  EXPECT_EQ(hub_.rooms().find(room_)->size(), 1U);
+
+  // The session is gone, not merely emptied out.
+  const auto refused = find<proto::ErrorMessage>(send(user_connection_, proto::ListChat{room_, 0}),
+                                                 user_connection_);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "unauthorized");
+
+  const auto again = send(connect(), proto::Authenticate{"bruno", "password"});
+  ASSERT_EQ(again.size(), 1U);
+  const auto* error = std::get_if<proto::ErrorMessage>(&again.front().message);
+  ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->code, "account_banned");
+}
+
+TEST_F(HubAdminTest, ARestrictionSurvivesIntoTheAccountList) {
+  set_up_room();
+
+  proto::RestrictUser change;
+  change.user_id = user_.id;
+  change.silenced = true;
+  change.screen_share_blocked = true;
+  const auto list = find<proto::UserList>(send(admin_connection_, change), admin_connection_);
+  ASSERT_TRUE(list.has_value());
+
+  bool seen = false;
+  for (const proto::UserSummary& summary : list->users) {
+    if (summary.user.id == user_.id) {
+      seen = true;
+      EXPECT_EQ(dv::models::describe(summary.user.restrictions), "silenced screen_share_blocked");
+    }
+    // The list an administrator receives still carries no secrets, whatever
+    // else was added to the account.
+    EXPECT_FALSE(summary.username.empty());
+  }
+  EXPECT_TRUE(seen);
+}
+
+TEST_F(HubAdminTest, AnAbsentFlagDoesNotLiftARestrictionSomebodyElseApplied) {
+  set_up_room();
+
+  proto::RestrictUser first;
+  first.user_id = user_.id;
+  first.banned = false;
+  first.silenced = true;
+  (void)send(admin_connection_, first);
+
+  // A second administrator unmutes, saying nothing about the silence. The
+  // failure this guards against is silent: the person can talk again and only
+  // the audit log would ever show why.
+  proto::RestrictUser second;
+  second.user_id = user_.id;
+  second.muted = false;
+  const auto list = find<proto::UserList>(send(admin_connection_, second), admin_connection_);
+  ASSERT_TRUE(list.has_value());
+  for (const proto::UserSummary& summary : list->users) {
+    if (summary.user.id == user_.id) {
+      EXPECT_TRUE(summary.user.restrictions.silenced);
+    }
+  }
+}
+
+TEST_F(HubAdminTest, AnAdministratorCannotRestrictThemselves) {
+  set_up_room();
+
+  proto::RestrictUser change;
+  change.user_id = admin_.id;
+  change.banned = true;
+  const auto refusal =
+      find<proto::ErrorMessage>(send(admin_connection_, change), admin_connection_);
+  ASSERT_TRUE(refusal.has_value());
+  EXPECT_EQ(refusal->code, "invalid_target");
+}
+
+TEST_F(HubAdminTest, OneAdministratorCanBanAnother) {
+  set_up_room();
+  const auto [second, carla] = login("carla", Role::Admin);
+
+  // Not the last one, so this is allowed, exactly as deleting them would be.
+  // The refusal that protects the last administrator sits behind the self
+  // check: whoever is sending this is an administrator too, so a target who is
+  // not them is never the only one left.
+  proto::RestrictUser ban;
+  ban.user_id = admin_.id;
+  ban.banned = true;
+  ASSERT_TRUE(find<proto::UserList>(send(second, ban), second).has_value());
+
+  const auto refused = send(connect(), proto::Authenticate{"ana", "password"});
+  ASSERT_EQ(refused.size(), 1U);
+  const auto* error = std::get_if<proto::ErrorMessage>(&refused.front().message);
+  ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->code, "account_banned");
+}
+
+TEST_F(HubAdminTest, AFormSubmittedUnchangedIsNotAnAdministrativeAction) {
+  set_up_room();
+
+  proto::RestrictUser nothing;
+  nothing.user_id = user_.id;
+  nothing.banned = false;
+  nothing.muted = false;
+  nothing.silenced = false;
+  nothing.screen_share_blocked = false;
+  EXPECT_TRUE(
+      find<proto::UserList>(send(admin_connection_, nothing), admin_connection_).has_value());
+
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  EXPECT_TRUE(log->entries.empty()) << "an audit log full of these is a log nobody reads";
+}
+
+TEST_F(HubAdminTest, ARestrictionNamesWhatMovedInTheLog) {
+  set_up_room();
+
+  proto::RestrictUser change;
+  change.user_id = user_.id;
+  change.silenced = true;
+  change.muted = false;
+  (void)send(admin_connection_, change);
+
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  ASSERT_EQ(log->entries.size(), 1U);
+  EXPECT_EQ(log->entries.front().action, "restrict_user");
+  EXPECT_EQ(log->entries.front().target_id, user_.id);
+  EXPECT_EQ(log->entries.front().room_id, room_);
+  // Only `silenced` moved, so only `silenced` is named.
+  EXPECT_EQ(log->entries.front().detail, "silenced=true");
+}
+
 // --- the audit log -----------------------------------------------------------
 
 TEST_F(HubAdminTest, EveryAdministrativeActionIsRecorded) {

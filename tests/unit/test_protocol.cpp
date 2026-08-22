@@ -380,6 +380,77 @@ TEST(Protocol, ForceMuteRequiresADirection) {
   EXPECT_EQ(parsed.error().code, "missing_field");
 }
 
+TEST(RoundTrip, RestrictUser) {
+  RestrictUser original;
+  original.user_id = "user123";
+  original.banned = true;
+  original.silenced = false;
+  original.reason = "reading the room out loud";
+  // `muted` and `screen_share_blocked` are left absent on purpose: the point of
+  // the type is that "leave this alone" survives the wire as a different thing
+  // from "set this to false".
+  const RestrictUser back = round_trip(original);
+  EXPECT_EQ(back, original);
+  EXPECT_FALSE(back.muted.has_value());
+  EXPECT_FALSE(back.screen_share_blocked.has_value());
+  ASSERT_TRUE(back.silenced.has_value());
+  EXPECT_FALSE(*back.silenced);
+}
+
+TEST(Protocol, AnAbsentRestrictionFlagIsNotFalse) {
+  // The failure this guards against is silent: an administrator lifting a mute
+  // would also lift the ban a colleague applied a minute earlier, and the only
+  // sign of it would be somebody being able to log in again.
+  const auto parsed = parse(R"({"type":"restrict_user","user_id":"user123","muted":true})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  const auto& value = std::get<RestrictUser>(parsed.value());
+  ASSERT_TRUE(value.muted.has_value());
+  EXPECT_TRUE(*value.muted);
+  EXPECT_FALSE(value.banned.has_value());
+  EXPECT_FALSE(value.silenced.has_value());
+  EXPECT_FALSE(value.screen_share_blocked.has_value());
+
+  // And what goes out again carries only what was asked about.
+  const std::string text = serialize(parsed.value());
+  EXPECT_NE(text.find("\"muted\":true"), std::string::npos) << text;
+  EXPECT_EQ(text.find("\"banned\""), std::string::npos) << text;
+}
+
+TEST(RoundTrip, UserRestricted) {
+  UserRestricted original;
+  original.user_id = "user123";
+  original.restrictions = dv::models::Restrictions{
+      .banned = false, .muted = true, .silenced = true, .screen_share_blocked = false};
+  original.by_user_id = "admin1";
+  original.reason = "for the rest of the meeting";
+  original.room_id = "8F42A1";
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, AUserCarriesTheirRestrictions) {
+  dv::models::User user{"user123", "Ana", ""};
+  user.restrictions.silenced = true;
+  user.restrictions.screen_share_blocked = true;
+
+  const UserJoined original{"8F42A1", user};
+  const UserJoined back = round_trip(original);
+  EXPECT_EQ(back, original);
+  EXPECT_TRUE(back.user.restrictions.silenced);
+  EXPECT_TRUE(back.user.restrictions.screen_share_blocked);
+  EXPECT_FALSE(back.user.restrictions.banned);
+}
+
+TEST(Protocol, AUserWithoutRestrictionsHasNothingTakenAway) {
+  // What a client or a database from before restrictions existed sends. It
+  // must not acquire a ban by omission, for the same reason omitting `role`
+  // does not make somebody an administrator.
+  const auto parsed = parse(
+      R"({"type":"user_joined","room_id":"8F42A1","user":{"id":"user123","display_name":"Ana"}})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  const auto& value = std::get<UserJoined>(parsed.value());
+  EXPECT_FALSE(value.user.restrictions.any());
+}
+
 TEST(Protocol, AChatMessageNeedsItsPayload) {
   const auto parsed = parse(R"({"type":"chat_message"})");
   ASSERT_FALSE(parsed.ok());

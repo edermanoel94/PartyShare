@@ -28,6 +28,62 @@ enum class Role : std::uint8_t {
 /// is" is the role that can do less.
 [[nodiscard]] Role role_from_string(std::string_view name) noexcept;
 
+/// What an administrator has taken away from an account until they give it
+/// back, section 18 of SPEC.md.
+///
+/// Account wide and written down, which is what separates these from the two
+/// things that already existed. A participant's own mute is theirs to undo, and
+/// a kick ends when the room does. A restriction outlives the room, the session
+/// and the process, because what it is about outlives all three: the person is
+/// the same person the next time they log in, and an administrator who had to
+/// re-apply it after every reconnection would not be moderating anything.
+///
+/// Four flags and no expiry. A restriction that lifts itself needs a clock
+/// every reader agrees on and a rule for what happens to a room while it runs
+/// out. Until somebody wants that, "until an administrator says otherwise" is a
+/// policy that cannot be half applied.
+///
+/// Every flag is false by default, so an account read out of a database written
+/// before this existed is an account with nothing taken away. Same reasoning as
+/// `Role::User` being the zero value: the safe reading of a missing field is
+/// the one that takes nothing away.
+struct Restrictions {
+  /// Cannot log in. The lasting form of a kick: a kick ends one visit, and this
+  /// ends the account's access until somebody lifts it.
+  bool banned = false;
+  /// Cannot transmit audio. They arrive in a room already muted, by the
+  /// administrator rather than by themselves, so the mute holds exactly as
+  /// `Participant::muted_by_admin` holds.
+  bool muted = false;
+  /// Cannot say anything in a room's chat. Reading it is untouched: a
+  /// conversation somebody may not speak in is still one they are sitting in,
+  /// and taking that away as well would only mean they cannot follow what is
+  /// being said about them.
+  bool silenced = false;
+  /// Cannot start a screen share. One already running stops the moment the
+  /// restriction is applied, because a rule that waits for the next attempt is
+  /// not a rule about what is on everybody's screen right now.
+  bool screen_share_blocked = false;
+
+  /// Whether anything at all is taken away, which is what decides between
+  /// drawing a row of badges and drawing nothing.
+  [[nodiscard]] bool any() const noexcept {
+    return banned || muted || silenced || screen_share_blocked;
+  }
+
+  friend bool operator==(const Restrictions&, const Restrictions&) = default;
+};
+
+/// The restrictions as a line of their wire names, "banned muted", and an empty
+/// string when there are none.
+///
+/// The display form, for wherever a set of them has to be shown to a person:
+/// the panel's table, a detail card, a log line. What an audit entry records is
+/// not this but which flags moved, "banned=true muted=false", because a log
+/// that only ever states the resulting set leaves the reader to diff it against
+/// an entry they have to go and find.
+[[nodiscard]] std::string describe(const Restrictions& restrictions);
+
 /// Section 18 of SPEC.md.
 struct User {
   std::string id;
@@ -35,6 +91,11 @@ struct User {
   /// URL or local path. Empty means the client falls back to initials.
   std::string avatar;
   Role role = Role::User;
+  /// What an administrator has taken away. It travels with the user everywhere
+  /// the user does, which is what lets every participant's client explain why
+  /// somebody's microphone is off, and lets a session know at login what it may
+  /// not do rather than finding out by being refused.
+  Restrictions restrictions;
 
   [[nodiscard]] bool is_admin() const noexcept { return role == Role::Admin; }
 

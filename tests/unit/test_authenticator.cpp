@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "signaling/authenticator.hpp"
+#include "store/memory_store.hpp"
 
 namespace {
 
@@ -79,6 +80,42 @@ TEST(Authenticator, AnUnknownUserFailsIdenticallyToAWrongPassword) {
   // Identical replies, so the protocol cannot be used to enumerate accounts.
   EXPECT_EQ(wrong_password.error().code, unknown_user.error().code);
   EXPECT_EQ(wrong_password.error().message, unknown_user.error().message);
+}
+
+TEST(Authenticator, RefusesABannedAccount) {
+  dv::server::store::MemoryUserStore users;
+  Authenticator auth(Authenticator::Options{}, users);
+  const auto registered = auth.add_user("ana", "password", "Ana");
+  ASSERT_TRUE(registered.ok());
+
+  auto account = users.find_by_id(registered.value().id);
+  ASSERT_TRUE(account.has_value());
+  account->user.restrictions.banned = true;
+  ASSERT_FALSE(users.update(*account).has_value());
+
+  const auto session = auth.authenticate("ana", "password", kNow);
+  ASSERT_FALSE(session.ok());
+  EXPECT_EQ(session.error().code, "account_banned");
+}
+
+TEST(Authenticator, ABannedAccountIsStillRefusedIdenticallyOnAWrongPassword) {
+  // The order matters and is easy to get backwards. Answering "banned" to
+  // whoever typed the username would turn a login form into a way to ask which
+  // accounts exist; only the person holding the password gets the real reason.
+  dv::server::store::MemoryUserStore users;
+  Authenticator auth(Authenticator::Options{}, users);
+  const auto registered = auth.add_user("ana", "password", "Ana");
+  ASSERT_TRUE(registered.ok());
+
+  auto account = users.find_by_id(registered.value().id);
+  ASSERT_TRUE(account.has_value());
+  account->user.restrictions.banned = true;
+  ASSERT_FALSE(users.update(*account).has_value());
+
+  const auto wrong = auth.authenticate("ana", "wrong", kNow);
+  ASSERT_FALSE(wrong.ok());
+  EXPECT_EQ(wrong.error().code, "unauthorized");
+  EXPECT_EQ(wrong.error().message, "invalid username or password");
 }
 
 TEST(Authenticator, IssuesADistinctTokenPerLogin) {

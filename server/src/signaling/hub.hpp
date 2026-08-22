@@ -163,6 +163,16 @@ class Hub {
   /// do least.
   [[nodiscard]] models::Role current_role(const std::string& user_id) const;
 
+  /// What an account may not do right now, read from the store rather than
+  /// from the identity the connection logged in with.
+  ///
+  /// The same reasoning as current_role, and the same cost: a restriction
+  /// applied while somebody is mid-call has to hold for their next message,
+  /// not for their next login. An account that has been deleted answers an
+  /// empty set, because there is nothing left to take away from it and the
+  /// handlers that follow will refuse it on other grounds.
+  [[nodiscard]] models::Restrictions restrictions_of(const std::string& user_id) const;
+
   /// Writes one entry, and complains loudly if it cannot.
   ///
   /// The action goes ahead either way: refusing to remove a disruptive
@@ -203,6 +213,24 @@ class Hub {
                    const protocol::KickUser& message);
   void handle_force_mute(std::vector<Outgoing>& out, Connection& connection,
                          const protocol::ForceMute& message);
+  void handle_restrict_user(std::vector<Outgoing>& out, Connection& connection,
+                            const protocol::RestrictUser& message);
+
+  /// Makes a set of restrictions true of a call already in progress, and
+  /// announces it.
+  ///
+  /// The write to the store is what makes a restriction survive; this is what
+  /// makes it mean something before the account next logs in. A ban ends the
+  /// session, a mute takes the microphone, a block on sharing stops a share
+  /// that is running. Without it every restriction would be a promise about
+  /// the future while the thing it was applied over carried on.
+  /// `target` carries the restrictions as they now are; `before` is what they
+  /// were, and only what actually moved between the two is acted on. Without
+  /// that comparison, lifting a ban would also release a forced mute somebody
+  /// applied in the room a minute ago, which is a different administrator's
+  /// decision being undone by a message that said nothing about it.
+  void enforce(std::vector<Outgoing>& out, const models::User& actor, const models::User& target,
+               const models::Restrictions& before, const std::string& reason);
   void handle_list_users(std::vector<Outgoing>& out, Connection& connection);
   void handle_create_user(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::CreateUser& message);

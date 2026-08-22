@@ -310,6 +310,57 @@ TEST_F(MongoStoreTest, AnAccountSurvivesTheProcessThatCreatedIt) {
   EXPECT_FALSE(refused.ok());
 }
 
+TEST_F(MongoStoreTest, ARestrictionSurvivesTheProcessThatAppliedIt) {
+  // The whole reason restrictions are on the account rather than in the room:
+  // a ban that a restart lifts is not a ban, and neither is one that only the
+  // running server remembers. Checked the only way it can be, through a second
+  // connection that shares nothing with the first but the server.
+  std::string user_id;
+  {
+    Authenticator authenticator(Authenticator::Options{}, stores_->users());
+    const auto created = authenticator.add_user("ana", "password", "Ana", Role::User);
+    ASSERT_TRUE(created.ok()) << created.error().message;
+    user_id = created.value().id;
+
+    auto account = stores_->users().find_by_id(user_id);
+    ASSERT_TRUE(account.has_value());
+    account->user.restrictions.banned = true;
+    account->user.restrictions.silenced = true;
+    ASSERT_FALSE(stores_->users().update(*account).has_value());
+  }
+
+  auto reopened = MongoStores::open(std::getenv("DV_TEST_MONGO_URI"), database_, 2000);
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  auto second = std::move(reopened).take();
+
+  const auto account = second->users().find_by_id(user_id);
+  ASSERT_TRUE(account.has_value());
+  EXPECT_TRUE(account->user.restrictions.banned);
+  EXPECT_TRUE(account->user.restrictions.silenced);
+  EXPECT_FALSE(account->user.restrictions.muted);
+  EXPECT_FALSE(account->user.restrictions.screen_share_blocked);
+
+  // And the account cannot log in through it, which is the thing the flag was
+  // written for.
+  Authenticator authenticator(Authenticator::Options{}, second->users());
+  const auto refused = authenticator.authenticate("ana", "password", Authenticator::Clock::now());
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "account_banned");
+}
+
+// An account written before restrictions existed has no `restrictions`
+// subdocument at all, and reading that as a ban would be an upgrade that locks
+// everybody out. There is no test of it here, because there is no way to write
+// such a document through this interface: MongoUserStore always writes all four
+// flags, and an older release is the only other way to produce one.
+//
+// Where it is checked instead: restrictions_from reads through bool_field, the
+// same tolerant reader every other optional field in mongo_store.cpp uses; the
+// wire parser's half is tests/unit/test_protocol.cpp, and the document's half
+// is TestAnAccountWithoutRestrictionsHasNothingTakenAway in
+// tools/dbadmin/internal/store, which strips the field from a real database and
+// reads it back.
+
 TEST_F(MongoStoreTest, APersistentRoomComesBackAfterARestart) {
   const std::string room_id = [this] {
     Hub hub(Hub::Options{

@@ -564,15 +564,23 @@ jobs:
           done < <(find "$app/Contents/PlugIns" -name '*.dylib')
           echo "plugins removed: $removed"
 
-          for lib in "$frameworks"/*.dylib; do
+          # Driven by find rather than by a glob because a bundle with no
+          # loose dylib is normal, not an error: where Qt comes from an
+          # installer instead of from Homebrew, macdeployqt copies .framework
+          # bundles and nothing else, the glob matches nothing, stays literal,
+          # and otool is handed a path with a star in it. The id is built from
+          # the path under Frameworks so a dylib in a subdirectory keeps an id
+          # that still resolves.
+          while IFS= read -r lib; do
             id="$(otool -D "$lib" | tail -1)"
             case "$id" in
               /opt/homebrew/*|/usr/local/*)
-                echo "rewriting id of $(basename "$lib"): $id"
-                install_name_tool -id "@executable_path/../Frameworks/$(basename "$lib")" "$lib"
+                rel="${lib#"$frameworks"/}"
+                echo "rewriting id of $rel: $id"
+                install_name_tool -id "@executable_path/../Frameworks/$rel" "$lib"
                 ;;
             esac
-          done
+          done < <(find "$frameworks" -type f -name '*.dylib' 2>/dev/null)
 
           # Nothing may point outside the bundle. A path that survives here is
           # one that resolves on this runner and on no other machine, which is

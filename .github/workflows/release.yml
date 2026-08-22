@@ -508,7 +508,7 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
-      # The example configuration has to be carried into the bundle by hand.
+      # The configuration file has to be carried into the bundle by hand.
       # install(FILES) puts it under share/doc, which is right for a Unix
       # prefix and is not somewhere a .dmg looks: the image is built from
       # stage/partyshare.app alone, so on macOS the file was installed and then
@@ -521,7 +521,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake --install build/${{ matrix.preset }} --prefix "$PWD/stage"
-          cp stage/share/doc/partyshare/config.example.ini \
+          cp stage/share/doc/partyshare/config.ini \
              stage/partyshare.app/Contents/Resources/
 
       - name: Bundle the Qt runtime
@@ -639,7 +639,7 @@ jobs:
           # Beside the application, where it is read before anything is
           # installed. The copy inside Contents/Resources is the one that
           # survives the drag; this one is the one that gets noticed.
-          cp stage/share/doc/partyshare/config.example.ini dmg/
+          cp stage/share/doc/partyshare/config.ini dmg/
 
           # The icon the mounted volume itself gets in the Finder sidebar. It
           # needs the file, the custom icon attribute, and the directory marked

@@ -159,6 +159,33 @@ qt_add_executable(dv_client
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp
   src/ui/settings_dialog.hpp
+  src/ui/theme.cpp
+  src/ui/theme.hpp
+)
+
+# The chevrons the stylesheet draws into combo boxes and spin boxes, at the
+# three densities Qt looks for. See assets/ui/make_arrows.py.
+set(dv_client_ui_images)
+foreach(dv_chevron chevron-down chevron-up)
+  foreach(dv_density "" "@2x" "@3x")
+    list(APPEND dv_client_ui_images
+      ${CMAKE_SOURCE_DIR}/assets/ui/${dv_chevron}${dv_density}.png)
+  endforeach()
+endforeach()
+
+# The same commented file that gets installed, compiled into the executable.
+#
+# It is what the client writes to the user's configuration directory the first
+# time it runs, and that has to work on a machine where the installed copy is
+# somewhere this process cannot find or cannot read - inside a signed .app, or
+# under a prefix the packager moved. Compiled in, there is one copy of the text
+# and it is always there.
+qt_add_resources(dv_client "dv_client_assets"
+  PREFIX "/"
+  BASE ${CMAKE_SOURCE_DIR}/assets
+  FILES
+    ${CMAKE_SOURCE_DIR}/assets/config.ini
+    ${dv_client_ui_images}
 )
 
 target_link_libraries(dv_client PRIVATE
@@ -223,22 +250,29 @@ install(TARGETS dv_client
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# The commented example of the file the client looks for on its own.
+# The file the client looks for on its own, installed under the name it looks
+# for rather than as an example to be renamed.
 #
-# example and not config.ini, deliberately. The installer owns what it installs:
-# a config.ini shipped here would be replaced on the next upgrade, taking the
-# address of the server with it, and the person who typed it would have no
-# reason to suspect the installer. Renaming a file once is the cheaper rule.
+# It used to be config.example.ini, on the grounds that the installer replaces
+# what it installs and would take somebody's edited config.ini with it. That
+# reasoning was sound and the conclusion was not: the answer is not to ship a
+# file nobody can use without a rename, it is to keep what a person changes out
+# of the installer's reach. Which is now the case - every setting the interface
+# writes goes to the config.ini under the user's own directory, which the client
+# creates on first run and no installer touches.
+#
+# Every line in the shipped file is commented out, so installing it changes no
+# behaviour. It is there to be read and uncommented.
 if(WIN32)
   # Beside the executable, which is the directory the client actually reads.
-  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.example.ini
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.ini
     DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
 else()
   # Not bindir here: that directory is for executables on a Unix system, and
-  # the two people who would look for an example there are outnumbered by the
-  # packaging tools that would complain about it.
-  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.example.ini
+  # the two people who would look for a configuration file there are
+  # outnumbered by the packaging tools that would complain about it.
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/config.ini
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
   )
 endif()

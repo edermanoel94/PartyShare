@@ -1,6 +1,8 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -9,10 +11,14 @@
 #include <dv/logging/logger.hpp>
 
 #include <QApplication>
+#include <QByteArray>
+#include <QFile>
+#include <QIODevice>
 
 #include "app/call_session.hpp"
 #include "media/media_session.hpp"
 #include "ui/main_window.hpp"
+#include "ui/theme.hpp"
 
 namespace {
 
@@ -83,6 +89,57 @@ void print_usage() {
              stdout);
 }
 
+/// Puts a config.ini under this user's own configuration directory, the first
+/// time the client ever runs.
+///
+/// So that the file exists before anybody goes looking for it. Every line in it
+/// is commented out, so it changes nothing on its own; what it does is turn
+/// "where do I put the address of the server" into a file that is already there
+/// with the answer written above the line to uncomment.
+///
+/// This one and not the one beside the executable, which is where an installer
+/// puts its copy: that directory is Program Files, a /usr prefix or the inside
+/// of a signed .app, and on all three a client running as the person at the
+/// keyboard cannot write to it. This one it can, which is also why it is where
+/// the settings dialog saves the audio devices.
+///
+/// Returns what to say about it, or nothing when the file was already there.
+/// It runs before the logger exists, because the configuration it creates has
+/// to be in place before the configuration is read.
+[[nodiscard]] std::string ensure_user_config() {
+  const std::filesystem::path file = dv::config::user_config_file();
+  if (file.empty()) {
+    return "This system does not say where a user's configuration belongs, so none was created.";
+  }
+
+  std::error_code failed;
+  if (std::filesystem::exists(file, failed)) {
+    return {};
+  }
+
+  // From the executable's own copy of assets/config.ini rather than from the
+  // installed one, which may be anywhere or nowhere.
+  QFile source(QStringLiteral(":/config.ini"));
+  if (!source.open(QIODevice::ReadOnly)) {
+    return "Could not read the built in configuration template, so " + file.string() +
+           " was not created.";
+  }
+  const QByteArray text = source.readAll();
+
+  std::filesystem::create_directories(file.parent_path(), failed);
+  if (failed) {
+    return "Could not create " + file.parent_path().string() + ": " + failed.message();
+  }
+
+  std::ofstream output(file, std::ios::binary);
+  output.write(text.constData(), static_cast<std::streamsize>(text.size()));
+  output.flush();
+  if (!output) {
+    return "Could not write " + file.string();
+  }
+  return "Created " + file.string();
+}
+
 /// The whole of the client, so that main() can be nothing but the guard that
 /// stops an exception from escaping into std::terminate.
 ///
@@ -98,6 +155,11 @@ int run(int argc, char* argv[]) {
     print_usage();
     return 0;
   }
+
+  // Before the configuration is loaded rather than after, so that the file this
+  // creates is one of the files that get read, and the log below says "read"
+  // about a file that was.
+  const std::string created_config = ensure_user_config();
 
   // Ignore, not Reject: Qt takes its own options from this command line, so an
   // argument this parser does not know is not an argument nobody knows.
@@ -129,6 +191,9 @@ int run(int argc, char* argv[]) {
   // config_files and not default_config_paths: an explicit --config replaces
   // the cascade, and a log naming files that were not read would send the
   // reader to edit the wrong one.
+  if (!created_config.empty()) {
+    DV_LOG_INFO("{}", created_config);
+  }
   for (const std::filesystem::path& path : dv::config::config_files(argc, argv)) {
     std::error_code failed;
     const bool present = std::filesystem::is_regular_file(path, failed);
@@ -159,10 +224,22 @@ int run(int argc, char* argv[]) {
               config.video.fps, config.video.codec);
   DV_LOG_INFO("Audio: {} Hz, {} channel(s), {} ms frames", config.audio.sample_rate_hz,
               config.audio.channels, config.audio.frame_duration_ms);
+  // Which devices, and not only the format. This is what the settings dialog
+  // writes to config.ini, so it is also the line that answers "it is not using
+  // the microphone I picked" without anybody having to find the file first.
+  DV_LOG_INFO(
+      "Audio devices: capture {}, playback {}",
+      config.audio.input_device.empty() ? "the system default" : config.audio.input_device,
+      config.audio.output_device.empty() ? "the system default" : config.audio.output_device);
 
   QApplication application(argc, argv);
   QApplication::setApplicationName(QStringLiteral("PartyShare"));
   QApplication::setApplicationVersion(QStringLiteral(DV_VERSION));
+
+  // Before the first widget exists. A palette installed afterwards reaches
+  // every widget only because Qt re-polishes them, and the ones that read a
+  // colour in their constructor would already have read the wrong one.
+  dv::ui::theme::apply(application);
 
   dv::client::app::CallSession::Options session_options;
   session_options.signaling_url = config.network.signaling_url;

@@ -2,8 +2,15 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -509,6 +516,260 @@ TEST(ConfigIni, TheNamedFileReplacesTheCascadeRatherThanJoiningIt) {
   const auto both = dv::config::config_files(2, named);
   ASSERT_EQ(both.size(), 1U);
   EXPECT_EQ(both.front(), std::filesystem::path("/tmp/somewhere.ini"));
+}
+
+// --- writing settings back ---------------------------------------------------
+
+/// This process, for a temporary file name nothing else will pick.
+long process_id() {
+#ifdef _WIN32
+  return static_cast<long>(_getpid());
+#else
+  return static_cast<long>(getpid());
+#endif
+}
+
+/// A path in a temporary directory that no test file occupies yet, removed
+/// afterwards along with anything save_ini_settings left beside it.
+class ScopedPath {
+ public:
+  explicit ScopedPath(const std::string& extension = ".ini") {
+    // The process id as well as the counter. ctest gives every test its own
+    // process, so the counter starts at one in each of them, and the day
+    // somebody runs the suite with -j two tests would be writing the same file.
+    static int counter = 0;
+    path_ = std::filesystem::temp_directory_path() / ("dv-save-" + std::to_string(process_id()) +
+                                                      "-" + std::to_string(++counter) + extension);
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+  }
+
+  ScopedPath(const ScopedPath&) = delete;
+  ScopedPath& operator=(const ScopedPath&) = delete;
+  ScopedPath(ScopedPath&&) = delete;
+  ScopedPath& operator=(ScopedPath&&) = delete;
+
+  ~ScopedPath() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    std::filesystem::remove(std::filesystem::path(path_) += ".tmp", ignored);
+  }
+
+  [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+
+  void write(const std::string& text) const { std::ofstream(path_, std::ios::binary) << text; }
+
+  [[nodiscard]] std::string read() const {
+    std::ifstream input(path_, std::ios::binary);
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+dv::config::IniSetting audio(const std::string& key, const std::string& value) {
+  return dv::config::IniSetting{.section = "audio", .key = key, .value = value};
+}
+
+TEST(ConfigSave, CreatesTheFileWhenThereIsNoneYet) {
+  const ScopedPath file;
+  const auto written =
+      dv::config::save_ini_settings(file.path(), {audio("input_device", "Yeti Nano")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().audio.input_device, "Yeti Nano");
+}
+
+TEST(ConfigSave, LeavesEveryOtherLineExactlyWhereItWas) {
+  // The point of writing settings one at a time rather than serialising the
+  // whole Config: the file is edited by hand as well, and a save must not cost
+  // somebody their comments or their ordering.
+  const ScopedPath file;
+  file.write(
+      "; where the server is\n"
+      "[network]\n"
+      "signaling_url = ws://192.168.1.10:8080\n"
+      "\n"
+      "[audio]\n"
+      "; input_device = Microfone (Realtek)\n"
+      "\n"
+      "[logging]\n"
+      "level = debug\n");
+
+  const auto written =
+      dv::config::save_ini_settings(file.path(), {audio("input_device", "Yeti Nano")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  EXPECT_EQ(file.read(),
+            "; where the server is\n"
+            "[network]\n"
+            "signaling_url = ws://192.168.1.10:8080\n"
+            "\n"
+            "[audio]\n"
+            "; input_device = Microfone (Realtek)\n"
+            "input_device = Yeti Nano\n"
+            "\n"
+            "[logging]\n"
+            "level = debug\n");
+}
+
+TEST(ConfigSave, RewritesAKeyWhereItStandsRatherThanAddingASecondOne) {
+  const ScopedPath file;
+  file.write("[audio]\ninput_device = Old\noutput_device = Speakers\n");
+
+  const auto written = dv::config::save_ini_settings(file.path(), {audio("input_device", "New")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_EQ(file.read(), "[audio]\ninput_device = New\noutput_device = Speakers\n");
+}
+
+TEST(ConfigSave, RewritesEveryCopyOfAKeyThatTheFileSetsTwice) {
+  // The parser takes the last one. Rewriting only the first would leave the
+  // stale value winning, and the save would look like it had done nothing.
+  const ScopedPath file;
+  file.write("[audio]\ninput_device = Old\ninput_device = AlsoOld\n");
+
+  const auto written = dv::config::save_ini_settings(file.path(), {audio("input_device", "New")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_EQ(file.read(), "[audio]\ninput_device = New\ninput_device = New\n");
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().audio.input_device, "New");
+}
+
+TEST(ConfigSave, ACommentedLineIsNotTheKeyBeingPresent) {
+  // A shipped config.ini is nothing but commented examples. Overwriting one in
+  // place would leave the line commented, so the file would look changed and
+  // behave exactly as before.
+  const ScopedPath file;
+  file.write("[audio]\n; input_device = Example\n");
+
+  const auto written = dv::config::save_ini_settings(file.path(), {audio("input_device", "Real")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_EQ(file.read(), "[audio]\n; input_device = Example\ninput_device = Real\n");
+}
+
+TEST(ConfigSave, AddsTheSectionWhenTheFileHasNone) {
+  const ScopedPath file;
+  file.write("[network]\nsignaling_url = ws://x:1\n");
+
+  const auto written =
+      dv::config::save_ini_settings(file.path(), {audio("output_device", "Fones")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_EQ(file.read(), "[network]\nsignaling_url = ws://x:1\n\n[audio]\noutput_device = Fones\n");
+}
+
+TEST(ConfigSave, WritesSeveralSettingsInOnePass) {
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(), {audio("input_device", "Mic"), audio("output_device", "Speakers")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().audio.input_device, "Mic");
+  EXPECT_EQ(reloaded.value().audio.output_device, "Speakers");
+}
+
+TEST(ConfigSave, KeepsWindowsLineEndingsWhenTheFileAlreadyHadThem) {
+  const ScopedPath file;
+  file.write("[audio]\r\ninput_device = Old\r\n");
+
+  const auto written = dv::config::save_ini_settings(file.path(), {audio("input_device", "New")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_EQ(file.read(), "[audio]\r\ninput_device = New\r\n");
+}
+
+TEST(ConfigSave, RoundTripsAValueThatWouldNotSurviveUnquoted) {
+  // Empty means the system's own device, and it has to be tellable from a
+  // device whose name is a space.
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(), {audio("input_device", ""), audio("output_device", "  padded  ")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().audio.input_device, "");
+  EXPECT_EQ(reloaded.value().audio.output_device, "  padded  ");
+}
+
+TEST(ConfigSave, RoundTripsADeviceNameFullOfPunctuation) {
+  const ScopedPath file;
+  const std::string awkward = R"(Mic "Pro" #2; = [main])";
+  const auto written = dv::config::save_ini_settings(file.path(), {audio("input_device", awkward)});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().audio.input_device, awkward);
+}
+
+TEST(ConfigSave, RefusesAValueWithALineBreakRatherThanWritingIt) {
+  const ScopedPath file;
+  const auto written =
+      dv::config::save_ini_settings(file.path(), {audio("input_device", "two\nlines")});
+  ASSERT_FALSE(written.ok());
+  EXPECT_EQ(written.error().code, "invalid_value");
+  EXPECT_FALSE(std::filesystem::exists(file.path()));
+}
+
+TEST(ConfigSave, RefusesToWriteAFileThatWouldNotParseBack) {
+  // The guard that matters. An unknown key is a startup error, so a save that
+  // wrote one would not lose a setting, it would stop the client from starting
+  // and there would be nothing to connect the two.
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(),
+      {dv::config::IniSetting{.section = "audio", .key = "no_such_setting", .value = "1"}});
+  ASSERT_FALSE(written.ok());
+  EXPECT_EQ(written.error().code, "config_write_failed");
+  EXPECT_FALSE(std::filesystem::exists(file.path()));
+}
+
+TEST(ConfigSave, RefusesWhenThereIsNoPathToWriteTo) {
+  const auto written = dv::config::save_ini_settings({}, {audio("input_device", "Mic")});
+  ASSERT_FALSE(written.ok());
+  EXPECT_EQ(written.error().code, "config_write_failed");
+}
+
+TEST(ConfigSave, CreatesTheDirectoriesOnTheWayToTheFile) {
+  // First run on a machine that has never started the client: nothing under
+  // the user's configuration directory exists yet, not even the directory.
+  const ScopedPath root("");
+  const std::filesystem::path file = root.path() / "nested" / "config.ini";
+
+  const auto written = dv::config::save_ini_settings(file, {audio("input_device", "Mic")});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_TRUE(std::filesystem::exists(file));
+
+  std::error_code ignored;
+  std::filesystem::remove_all(root.path(), ignored);
+}
+
+TEST(ConfigSave, WritesToTheUsersOwnFileAndNotToTheMachines) {
+  // Never the one beside the executable: on all three platforms that is a
+  // directory the person running the client cannot write to.
+#ifdef _WIN32
+  const ScopedEnv base("LOCALAPPDATA", "C:/dv-test-appdata");
+#elif defined(__APPLE__)
+  const ScopedEnv base("HOME", "/dv-test-home");
+#else
+  const ScopedEnv base("XDG_CONFIG_HOME", "/dv-test-config");
+#endif
+
+  const std::filesystem::path mine = dv::config::user_config_file();
+  ASSERT_FALSE(mine.empty());
+  EXPECT_EQ(mine.filename().string(), "config.ini");
+  EXPECT_NE(mine.string().find("dv-test-"), std::string::npos) << mine.string();
+
+  // It is the last file of the cascade, which is the one that wins.
+  EXPECT_EQ(mine, dv::config::default_config_paths().back());
 }
 
 }  // namespace

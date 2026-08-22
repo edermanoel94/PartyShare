@@ -164,15 +164,32 @@ std::string_view trim(std::string_view text) {
 
 /// Drops one layer of double quotes.
 ///
-/// Nothing here needs quoting - a value runs to the end of its line - but a URL
-/// pasted out of the JSON form arrives wearing them, and refusing that would be
-/// pedantry rather than validation.
+/// Two callers want this for two reasons. A URL pasted out of the JSON form
+/// arrives wearing quotes and refusing that would be pedantry rather than
+/// validation. And a value written back out by save_ini_settings wears them
+/// when it has to: see read_value below.
 std::string_view unquote(std::string_view text) {
   if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
     text.remove_prefix(1);
     text.remove_suffix(1);
   }
   return text;
+}
+
+/// What a value on the right of an = actually says.
+///
+/// A bare value is trimmed, because `key = value` is how everybody writes one
+/// and the spaces around it are layout. A quoted value is taken exactly as it
+/// stands, because that is the only thing quoting can be for: whitespace at
+/// either end, and a value that is nothing but whitespace. Trimming inside the
+/// quotes as well - which this did until the settings dialog started writing
+/// the file - leaves no spelling of "a device whose name ends in a space", and
+/// a configuration format that cannot write back what it read is one that
+/// quietly loses a setting now and then.
+std::string_view read_value(std::string_view text) {
+  const std::string_view trimmed = trim(text);
+  const std::string_view unquoted = unquote(trimmed);
+  return unquoted.size() == trimmed.size() ? trimmed : unquoted;
 }
 
 std::vector<std::string> split_list(std::string_view text) {
@@ -461,6 +478,93 @@ std::string named_config_path(int argc, const char* const argv[]) {
 /// A missing file is an error only when somebody named it. The cascade is built
 /// from paths that usually do not exist, and that is not the same event as
 /// asking for a file by name and not finding it.
+/// The whole of a text file, or nothing when it is not there.
+///
+/// Nothing and empty are different answers here: a file that does not exist is
+/// one save_ini_settings creates from scratch, and an empty one is a file whose
+/// content it has to preserve, which happens to be none.
+std::optional<std::string> read_text_file(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
+/// Splits text into lines, with the line terminators removed.
+///
+/// A carriage return goes with the newline, so a file written on Windows comes
+/// apart into the same lines a file written on Linux does. Which of the two the
+/// rebuilt file is joined back with is decided separately, by what it already
+/// was.
+std::vector<std::string> split_lines(std::string_view text) {
+  std::vector<std::string> lines;
+  while (!text.empty()) {
+    const std::size_t newline = text.find('\n');
+    std::string_view line = text.substr(0, newline);
+    if (!line.empty() && line.back() == '\r') {
+      line.remove_suffix(1);
+    }
+    lines.emplace_back(line);
+    if (newline == std::string_view::npos) {
+      break;
+    }
+    text.remove_prefix(newline + 1);
+  }
+  return lines;
+}
+
+/// The section a `[header]` line names, or nothing when the line is not one.
+std::optional<std::string> section_header(std::string_view line) {
+  const std::string_view trimmed = trim(line);
+  if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']') {
+    return std::nullopt;
+  }
+  return std::string(trim(trimmed.substr(1, trimmed.size() - 2)));
+}
+
+/// The key a `key = value` line sets, or nothing for a comment, a blank line or
+/// a header.
+///
+/// Comments are deliberately not keys. A shipped config.ini is mostly commented
+/// out examples, and treating `; input_device =` as the setting being present
+/// would overwrite the example and leave the line commented, so the file would
+/// look changed and behave exactly as before.
+std::optional<std::string> setting_key(std::string_view line) {
+  const std::string_view trimmed = trim(line);
+  if (trimmed.empty() || trimmed.front() == ';' || trimmed.front() == '#' ||
+      trimmed.front() == '[') {
+    return std::nullopt;
+  }
+  const std::size_t equals = trimmed.find('=');
+  if (equals == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const std::string_view key = trim(trimmed.substr(0, equals));
+  if (key.empty()) {
+    return std::nullopt;
+  }
+  return std::string(key);
+}
+
+/// A value as it has to be spelled so that parse_ini reads back what went in.
+///
+/// Quotes only where they earn their place, because they are noise in a file
+/// people edit by hand. Three cases need them: an empty value, which otherwise
+/// leaves a line that looks unfinished; whitespace at either end, which trim
+/// would eat; and a value that already opens and closes with a quote, which
+/// unquote would strip. Inner quotes need nothing - unquote takes one layer.
+std::string format_ini_value(const std::string& value) {
+  const bool trimmed_away = trim(value) != value;
+  const bool looks_quoted = value.size() >= 2 && value.front() == '"' && value.back() == '"';
+  if (value.empty() || trimmed_away || looks_quoted) {
+    return "\"" + value + "\"";
+  }
+  return value;
+}
+
 Result<Config> read_config_file(const std::filesystem::path& path, Config base, bool required) {
   std::ifstream input(path);
   if (!input.is_open()) {
@@ -604,7 +708,7 @@ Result<Config> parse_ini(const std::string& ini_text, Config base) {
     if (key.empty()) {
       return Result<Config>::failure(ini_error(number, "a setting needs a name"));
     }
-    const std::string value(trim(unquote(trim(line.substr(equals + 1)))));
+    const std::string value(read_value(line.substr(equals + 1)));
 
     if (const auto reason = apply_ini_field(base, section, key, value)) {
       return Result<Config>::failure(ini_error(number, *reason));
@@ -623,6 +727,14 @@ std::vector<std::filesystem::path> default_config_paths() {
     paths.push_back(mine / "config.ini");
   }
   return paths;
+}
+
+std::filesystem::path user_config_file() {
+  const std::filesystem::path mine = user_config_directory();
+  if (mine.empty()) {
+    return {};
+  }
+  return mine / "config.ini";
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
@@ -961,6 +1073,161 @@ std::string to_json(const Config& config) {
                        {"timeout_ms", config.database.timeout_ms}}}};
 
   return root.dump(2);
+}
+
+Result<std::monostate> save_ini_settings(const std::filesystem::path& path,
+                                         const std::vector<IniSetting>& settings) {
+  using Written = Result<std::monostate>;
+
+  if (path.empty()) {
+    return Written::failure("config_write_failed",
+                            "this system does not say where a user's configuration belongs");
+  }
+  for (const IniSetting& setting : settings) {
+    if (setting.section.empty() || setting.key.empty()) {
+      return Written::failure("invalid_value", "a setting needs both a section and a key");
+    }
+    // An INI value is the rest of its line, so there is no spelling of one that
+    // carries a line break. Caught here rather than written out and discovered
+    // on the next start, when the file no longer parses.
+    if (setting.value.find('\n') != std::string::npos ||
+        setting.value.find('\r') != std::string::npos) {
+      return Written::failure("invalid_value",
+                              setting.section + "." + setting.key + " cannot hold a line break");
+    }
+  }
+
+  const std::string original = read_text_file(path).value_or(std::string{});
+  // Whatever the file already is. Rewriting a Windows file with Unix endings
+  // turns one changed setting into a diff of every line for whoever is keeping
+  // the thing under version control.
+  const std::string_view line_ending = original.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+  std::vector<std::string> lines = split_lines(original);
+
+  const auto spell = [](const IniSetting& setting) {
+    return setting.key + " = " + format_ini_value(setting.value);
+  };
+
+  // First pass: keys the file already sets, rewritten where they stand.
+  //
+  // Every occurrence and not the first, because a file may set the same key
+  // twice and the parser takes the last. Rewriting one of them and leaving the
+  // other is how a save appears to do nothing.
+  std::vector<bool> found(settings.size(), false);
+  {
+    std::string section;
+    for (std::string& line : lines) {
+      if (const auto header = section_header(line)) {
+        section = *header;
+        continue;
+      }
+      const auto key = setting_key(line);
+      if (!key) {
+        continue;
+      }
+      for (std::size_t index = 0; index < settings.size(); ++index) {
+        if (settings[index].section == section && settings[index].key == *key) {
+          line = spell(settings[index]);
+          found[index] = true;
+        }
+      }
+    }
+  }
+
+  // Where a key that is not in the file yet has to go: the end of its section.
+  //
+  // The last line of the section that has something on it, rather than the
+  // line before the next header. A key put after the blank line that separates
+  // two sections still belongs to the earlier one as far as the parser is
+  // concerned, and to a reader it looks like it belongs to the later one.
+  const auto end_of_section = [&lines](const std::string& wanted) -> std::optional<std::size_t> {
+    std::optional<std::size_t> last;
+    std::string section;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+      if (const auto header = section_header(lines[index])) {
+        section = *header;
+        // The header itself, so that a section with nothing under it yet is
+        // still a section this can add to.
+        if (section == wanted) {
+          last = index;
+        }
+        continue;
+      }
+      if (section == wanted && !trim(lines[index]).empty()) {
+        last = index;
+      }
+    }
+    return last;
+  };
+
+  for (std::size_t index = 0; index < settings.size(); ++index) {
+    if (found[index]) {
+      continue;
+    }
+    if (const auto after = end_of_section(settings[index].section)) {
+      lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(*after) + 1, spell(settings[index]));
+      continue;
+    }
+    if (!lines.empty() && !trim(lines.back()).empty()) {
+      lines.emplace_back();
+    }
+    lines.push_back("[" + settings[index].section + "]");
+    lines.push_back(spell(settings[index]));
+  }
+
+  std::string rebuilt;
+  for (const std::string& line : lines) {
+    rebuilt += line;
+    rebuilt += line_ending;
+  }
+
+  // The one check that matters, and the reason this is worth doing at all: what
+  // is about to be written is read back by the same parser that reads it at
+  // startup. A config.ini that does not parse is not a setting that failed to
+  // save, it is a client that will not start, and nobody would connect that to
+  // having changed their microphone.
+  if (const auto reparsed = parse_ini(rebuilt, Config{}); !reparsed) {
+    return Written::failure(
+        "config_write_failed",
+        "refusing to write a configuration that cannot be read back: " + reparsed.error().message);
+  }
+
+  std::error_code failed;
+  if (const std::filesystem::path parent = path.parent_path(); !parent.empty()) {
+    std::filesystem::create_directories(parent, failed);
+    if (failed) {
+      return Written::failure("config_write_failed",
+                              "cannot create " + parent.string() + ": " + failed.message());
+    }
+  }
+
+  // Beside the file it replaces rather than in the system temporary directory:
+  // a rename is only atomic within one filesystem, and those two are routinely
+  // not the same one.
+  std::filesystem::path temporary = path;
+  temporary += ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+      return Written::failure("config_write_failed", "cannot write " + temporary.string());
+    }
+    output << rebuilt;
+    output.flush();
+    if (!output) {
+      std::error_code ignored;
+      std::filesystem::remove(temporary, ignored);
+      return Written::failure("config_write_failed", "cannot write " + temporary.string());
+    }
+  }
+
+  std::filesystem::rename(temporary, path, failed);
+  if (failed) {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    return Written::failure("config_write_failed",
+                            "cannot replace " + path.string() + ": " + failed.message());
+  }
+  return std::monostate{};
 }
 
 }  // namespace dv::config

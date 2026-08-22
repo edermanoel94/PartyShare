@@ -1,10 +1,12 @@
 #pragma once
 
 #include <QDialog>
+#include <QString>
 
 #include "app/call_session.hpp"
 
 class QComboBox;
+class QLabel;
 class QSpinBox;
 
 namespace dv::ui {
@@ -18,6 +20,10 @@ namespace dv::ui {
 /// Changes apply as they are made rather than on closing: a microphone that
 /// only takes effect after a dialog is dismissed cannot be tested by speaking
 /// into it.
+///
+/// The two audio devices are also written to this user's config.ini as they
+/// are chosen, so the choice survives the program closing. Chosen once and then
+/// forgotten is only true of a setting that is still there next time.
 class SettingsDialog : public QDialog {
   Q_OBJECT
 
@@ -36,6 +42,14 @@ class SettingsDialog : public QDialog {
   void load_devices();
   void load_monitors();
 
+  /// Writes one [audio] setting to this user's config.ini and says on screen
+  /// how it went.
+  ///
+  /// Reported rather than swallowed. A dialog that accepts a microphone,
+  /// cannot save it and says nothing produces "it keeps forgetting my
+  /// settings", which is a bug report with nothing in it to act on.
+  void remember(const QString& key, const QString& value);
+
   client::app::CallSession& session_;
 
   QComboBox* input_ = nullptr;
@@ -43,6 +57,9 @@ class SettingsDialog : public QDialog {
   QComboBox* monitor_ = nullptr;
   QSpinBox* min_bitrate_ = nullptr;
   QSpinBox* max_bitrate_ = nullptr;
+  /// Which file the audio devices are kept in, and what went wrong when one
+  /// could not be written to it.
+  QLabel* storage_ = nullptr;
 
  public:
   /// The monitor the user picked, for whoever starts the share.

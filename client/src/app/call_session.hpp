@@ -206,6 +206,14 @@ class CallSession {
   [[nodiscard]] Result<std::monostate> set_input_device(const std::string& device_id);
   [[nodiscard]] Result<std::monostate> set_output_device(const std::string& device_id);
 
+  /// The devices in use, or empty for the system's own choice.
+  ///
+  /// What the configuration file asked for until somebody changes it, which is
+  /// what lets the settings dialog open showing the microphone that is actually
+  /// being captured rather than whichever one the system listed first.
+  [[nodiscard]] std::string input_device() const;
+  [[nodiscard]] std::string output_device() const;
+
   void disconnect();
 
   // --- administration --------------------------------------------------------

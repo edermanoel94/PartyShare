@@ -104,9 +104,11 @@ QWidget* AdminPanel::build_users_tab() {
 
   auto* controls = new QHBoxLayout();
   create_user_ = new QPushButton(QStringLiteral("New account"), page);
+  create_user_->setProperty("accent", true);
   change_role_ = new QPushButton(QStringLiteral("Change role"), page);
   reset_password_ = new QPushButton(QStringLiteral("Reset password"), page);
   delete_user_ = new QPushButton(QStringLiteral("Delete"), page);
+  delete_user_->setProperty("danger", true);
   controls->addWidget(create_user_);
   controls->addWidget(change_role_);
   controls->addWidget(reset_password_);
@@ -132,7 +134,9 @@ QWidget* AdminPanel::build_rooms_tab() {
 
   auto* controls = new QHBoxLayout();
   create_room_ = new QPushButton(QStringLiteral("New persistent room"), page);
+  create_room_->setProperty("accent", true);
   close_room_ = new QPushButton(QStringLiteral("Close room"), page);
+  close_room_->setProperty("danger", true);
   controls->addWidget(create_room_);
   controls->addStretch();
   controls->addWidget(close_room_);
@@ -152,8 +156,10 @@ QWidget* AdminPanel::build_audit_tab() {
                       page);
   column->addWidget(audit_, 1);
 
-  column->addWidget(new QLabel(
-      QStringLiteral("Newest first. Only administrative actions are recorded here."), page));
+  auto* note = new QLabel(
+      QStringLiteral("Newest first. Only administrative actions are recorded here."), page);
+  note->setProperty("hint", true);
+  column->addWidget(note);
   return page;
 }
 

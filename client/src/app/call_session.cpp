@@ -393,6 +393,16 @@ Result<std::monostate> CallSession::set_output_device(const std::string& device_
   return session->set_output_device(device_id);
 }
 
+std::string CallSession::input_device() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.input_device;
+}
+
+std::string CallSession::output_device() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.output_device;
+}
+
 void CallSession::disconnect() {
   if (running_.exchange(false) && metrics_thread_.joinable()) {
     metrics_thread_.join();

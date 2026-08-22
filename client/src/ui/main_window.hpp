@@ -84,6 +84,14 @@ class MainWindow : public QMainWindow {
   // needs as its own specifier, and these members are not slots.
   // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
+  /// Puts a sentence under the sign in button, or takes the row away when
+  /// there is nothing to say.
+  ///
+  /// Shown but empty, the label still takes its height: a band of nothing under
+  /// the button on every login that has not failed yet, and a card that jumps
+  /// as soon as one does.
+  void show_login_error(const QString& text);
+
   void build_login_page();
   void build_home_page();
   void build_room_page();

@@ -265,9 +265,13 @@ One line is the whole file:
 signaling_url = ws://192.168.1.10:8080
 ```
 
-The Windows installer drops a commented `config.example.ini` beside the executable. Rename it to
-`config.ini` to put it to work — it ships under the other name because the installer replaces what it
-installed, and an upgrade would otherwise take the address of the server with it.
+Neither file has to be created by hand.
+The installer drops a fully commented `config.ini` beside the executable, and the client writes a second copy of the same file into this user's directory the first time it runs.
+Both are inert as they ship — every line is commented out — so uncommenting one line is the whole edit.
+
+Edit the second one where there is a choice.
+The first belongs to the installer and is replaced on the next upgrade, which would take the address of the server with it; the second is never touched by an installer, and on macOS the first one lives inside the signed `.app` where editing it breaks the signature.
+It is also where the client saves what you pick in **Settings**: choosing a microphone or an output device writes `input_device` and `output_device` into this user's `config.ini` as you choose them, so the choice is still there next time.
 
 Sections and keys are the same names the JSON form uses, so nothing has to be learned twice. Comments start
 with `;` or `#`. A key the client does not know is a startup error naming the line, rather than a line that

@@ -12,6 +12,7 @@
 #include <QDateTime>
 #include <QFont>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -52,6 +53,53 @@ constexpr int kAdminPage = 3;
 /// Where the participant's plain name is kept on a list item, next to the
 /// user id in Qt::UserRole. The visible text carries the state as well.
 constexpr int kNameRole = Qt::UserRole + 1;
+
+/// How many emoji the picker puts on a row. Eight of them at 34 pixels plus
+/// the spacing is about 290 wide, which fits under a sidebar that is 260 to
+/// 320 and does not hang off the side of the window.
+constexpr int kEmojiColumns = 8;
+
+/// What the picker offers.
+///
+/// Forty, chosen and not generated. The system picker already does the whole
+/// of Unicode with a search box, skin tones and a list of recents, and it will
+/// know about emoji that do not exist yet; competing with it would be a worse
+/// copy that goes out of date. What it cannot do is put the handful somebody
+/// reaches for during a call one click away, and that is what this is.
+///
+/// Ctrl+Cmd+Space on macOS and Win+. on Windows open the system one in this
+/// same field, so nothing here is a ceiling on what can be sent.
+[[nodiscard]] const QStringList& quick_emoji() {
+  // A function local static: a QStringList has a non-trivial constructor and
+  // cannot be constexpr, which is the case client/src/ui/.clang-tidy's naming
+  // rules call out.
+  // clang-format off
+  //
+  // Laid out eight to a line because that is how many go on a row of the
+  // picker, so the source has the shape of the thing on screen, and written as
+  // the characters themselves so that what is on offer can be read here rather
+  // than decoded. clang-format measures a line in bytes and an emoji is four
+  // of them, so left alone it reflows this to one per line and the grid goes.
+  static const QStringList kQuickEmoji = {
+      // Answers, which is most of what a chat during a call is for.
+      QStringLiteral("👍"), QStringLiteral("👎"), QStringLiteral("👌"), QStringLiteral("🙌"),
+      QStringLiteral("👏"), QStringLiteral("🙏"), QStringLiteral("💪"), QStringLiteral("🤝"),
+      // Faces.
+      QStringLiteral("😀"), QStringLiteral("😄"), QStringLiteral("😅"), QStringLiteral("😂"),
+      QStringLiteral("🙂"), QStringLiteral("😉"), QStringLiteral("😍"), QStringLiteral("🤔"),
+      QStringLiteral("😐"), QStringLiteral("😴"), QStringLiteral("😭"), QStringLiteral("😱"),
+      QStringLiteral("😡"), QStringLiteral("🤯"), QStringLiteral("🤦"), QStringLiteral("🤷"),
+      // How it went.
+      QStringLiteral("🎉"), QStringLiteral("🎊"), QStringLiteral("🔥"), QStringLiteral("⭐"),
+      QStringLiteral("✨"), QStringLiteral("💡"), QStringLiteral("✅"), QStringLiteral("❌"),
+      // The work itself.
+      QStringLiteral("🚀"), QStringLiteral("🐛"), QStringLiteral("🔧"), QStringLiteral("📌"),
+      QStringLiteral("⏰"), QStringLiteral("☕"), QStringLiteral("👀"), QStringLiteral("❤️"),
+  };
+  // clang-format on
+
+  return kQuickEmoji;
+}
 
 /// One line of the conversation as it is shown: when it was said, by whom, and
 /// what.
@@ -349,8 +397,16 @@ void MainWindow::build_room_page() {
   // document dead rather than to decide anything: send_chat checks the real
   // limit, and what it answers reaches the same place every other error does.
   chat_input_->setMaxLength(static_cast<int>(models::kMaxChatTextBytes));
+
+  chat_emoji_ = new QPushButton(QStringLiteral("🙂"), chat);
+  chat_emoji_->setToolTip(QStringLiteral("Insert an emoji"));
+  // Square and small: it sits in a sidebar that is 260 pixels wide at its
+  // narrowest, and every pixel it takes is one the message field does not get.
+  chat_emoji_->setFixedWidth(34);
+
   chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
   chat_row->addWidget(chat_input_, 1);
+  chat_row->addWidget(chat_emoji_);
   chat_row->addWidget(chat_send_);
 
   chat_column->addWidget(chat_view_, 1);
@@ -392,6 +448,7 @@ void MainWindow::build_room_page() {
   connect(participants_, &QListWidget::customContextMenuRequested, this,
           &MainWindow::on_participant_menu);
   connect(chat_send_, &QPushButton::clicked, this, &MainWindow::on_send_chat);
+  connect(chat_emoji_, &QPushButton::clicked, this, &MainWindow::on_open_emoji_picker);
   // Return sends, which is what everybody expects of a field next to a Send
   // button and what nobody wants to reach for the mouse for.
   connect(chat_input_, &QLineEdit::returnPressed, this, &MainWindow::on_send_chat);
@@ -672,6 +729,65 @@ void MainWindow::on_send_chat() {
   // is ready for the next line. Nothing is displayed from here either way:
   // what appears in the list is the copy the server broadcast.
   chat_input_->clear();
+}
+
+void MainWindow::on_open_emoji_picker() {
+  // A window of its own with Qt::Popup, and not a QMenu holding one widget.
+  //
+  // The QMenu route was written first and looks right: it draws the grid, it
+  // closes on a click outside, and it needs no lifetime handling. It also
+  // never delivers a click to a single one of those buttons on macOS. The menu
+  // keeps the mouse grab for itself and the presses die inside it, so the
+  // picker opened, showed forty emoji, and did nothing at all.
+  //
+  // Qt::Popup gives the same behaviour a picker needs, closing on a click
+  // outside and on escape, and what is inside it stays an ordinary widget that
+  // sees ordinary events. WA_DeleteOnClose is what disposes of it, because
+  // every one of those ways out ends in close().
+  auto* popup = new QWidget(chat_emoji_, Qt::Popup);
+  popup->setAttribute(Qt::WA_DeleteOnClose);
+
+  auto* grid = new QGridLayout(popup);
+  grid->setContentsMargins(4, 4, 4, 4);
+  grid->setSpacing(2);
+
+  int row = 0;
+  int column = 0;
+  for (const QString& emoji : quick_emoji()) {
+    auto* button = new QPushButton(emoji, popup);
+    button->setFlat(true);
+    button->setFixedSize(34, 34);
+    connect(button, &QPushButton::clicked, popup, [this, emoji, popup] {
+      insert_emoji(emoji);
+      // Closed after one pick. Somebody who wants a second one presses the
+      // button again, which is a click either way, and a picker that stays
+      // open over the field it is typing into is one that has to be dismissed.
+      popup->close();
+    });
+    grid->addWidget(button, row, column);
+    if (++column == kEmojiColumns) {
+      column = 0;
+      ++row;
+    }
+  }
+
+  // Above the button and lined up with its right edge. The row it sits on is
+  // at the bottom of the window, so a picker dropped downwards would open off
+  // the screen and be moved back over the field it is meant to fill.
+  popup->adjustSize();
+  popup->move(
+      chat_emoji_->mapToGlobal(QPoint(chat_emoji_->width() - popup->width(), -popup->height())));
+  popup->show();
+}
+
+void MainWindow::insert_emoji(const QString& emoji) {
+  // At the cursor, replacing whatever is selected, which is what typing the
+  // character would have done. QLineEdit::insert honours the field's maximum
+  // as well, so this cannot get past the guard that typing respects.
+  chat_input_->insert(emoji);
+  // Back to the field, so the next thing typed continues the message instead
+  // of going to a button.
+  chat_input_->setFocus();
 }
 
 void MainWindow::on_toggle_mute() {
@@ -1112,6 +1228,7 @@ void MainWindow::refresh_controls() {
   // There is nobody to say anything to outside a room, and a field that
   // accepts a line it cannot send is a field that loses it.
   chat_input_->setEnabled(in_call);
+  chat_emoji_->setEnabled(in_call);
   chat_send_->setEnabled(in_call);
 }
 

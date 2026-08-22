@@ -63,6 +63,7 @@ class MainWindow : public QMainWindow {
   void on_participant_menu(const QPoint& where);
   void on_volume_changed(int value);
   void on_send_chat();
+  void on_open_emoji_picker();
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
@@ -92,6 +93,9 @@ class MainWindow : public QMainWindow {
   /// Adds one line and keeps the view at the bottom, which is where a
   /// conversation is read from.
   void append_chat_line(const QString& line);
+  /// Puts one emoji into the message field at the cursor and gives the field
+  /// the focus back.
+  void insert_emoji(const QString& emoji);
   void update_volume_label(const QString& participant, int volume);
   void show_page();
 
@@ -132,6 +136,9 @@ class MainWindow : public QMainWindow {
   // be made to render theirs.
   QListWidget* chat_view_ = nullptr;
   QLineEdit* chat_input_ = nullptr;
+  /// Opens a short curated grid. The system picker, which every platform has,
+  /// covers everything this one leaves out and works in the same field.
+  QPushButton* chat_emoji_ = nullptr;
   QPushButton* chat_send_ = nullptr;
 
   // Administration.

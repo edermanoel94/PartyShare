@@ -292,6 +292,11 @@ void MediaRouter::on_media_signal(const std::string& room_id, const std::string&
         using T = std::decay_t<decltype(value)>;
 
         if constexpr (std::is_same_v<T, protocol::Answer>) {
+          // The other half of the DV_DUMP_SDP pair above: an offer nobody can
+          // see the reply to only tells half of why media is not flowing.
+          if (std::getenv("DV_DUMP_SDP") != nullptr) {
+            DV_LOG_INFO("SFU: answer from {}\n{}", from_user_id, value.sdp);
+          }
           try {
             session->connection->setRemoteDescription(
                 rtc::Description(value.sdp, rtc::Description::Type::Answer));

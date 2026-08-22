@@ -54,6 +54,7 @@
 #include <libyuv/convert.h>
 #include <libyuv/convert_argb.h>
 #include <p2p/base/basic_packet_socket_factory.h>
+#include <pc/srtp_session.h>
 #include <rtc_base/logging.h>
 #include <rtc_base/ssl_adapter.h>
 #include <rtc_base/thread.h>
@@ -62,6 +63,7 @@
 
 #include "media/media_session.hpp"
 #include "media/network_impairment.hpp"
+#include "network/transport_globals.hpp"
 #include "video/frame_queue.hpp"
 #include "video/screen_capturer.hpp"
 #include "webrtc/hardware_encoder.hpp"
@@ -237,6 +239,25 @@ class Engine {
                                                         : webrtc::LS_WARNING);
       webrtc::LogMessage::SetLogToStderr(true);
     }
+
+    // libwebrtc and libdatachannel each carry a copy of libsrtp, and both
+    // export its symbols, so a static link collapses the two into one. One
+    // copy means one crypto kernel, and libsrtp answers a second srtp_init()
+    // on it with bad_param, because the "srtp" debug module is already
+    // registered. libdatachannel ignores that return value and works anyway;
+    // libwebrtc treats it as fatal, never creates the SRTP session, and logs
+    // "DTLS-SRTP key installation for RTP failed". Everything else still
+    // looks healthy - ICE connects, DTLS completes, the codecs negotiate -
+    // and not one media packet is ever encrypted, in either direction.
+    //
+    // So exactly one of the two may initialise libsrtp. It has to be
+    // libdatachannel: it does so from its own global init, on the first
+    // WebSocket, which in this client is the signaling connection and
+    // therefore always before any call. preload_transport() makes that
+    // ordering explicit instead of incidental, and this call is what libwebrtc
+    // offers embedders in that position.
+    preload_transport();
+    webrtc::ProhibitLibsrtpInitialization();
 
     webrtc::InitializeSSL();
 

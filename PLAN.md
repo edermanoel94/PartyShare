@@ -747,6 +747,50 @@ Still not verified here: the media layer, absent as it is everywhere but Linux, 
 
 ---
 
+### Two copies of libsrtp in one process, and a call that carried nothing
+
+The first call between two machines over a server on the public internet failed in both directions at once: no voice, no screen, while the room, the participant list and every message of section 4 of docs/protocol.md worked.
+Two independent defects were in the way, one on each side, and either alone produces exactly that symptom.
+
+**The server took UDP ports the firewall did not open.**
+It was started without `--ice-port-range`, which leaves libdatachannel asking the system for an ephemeral port per participant - on Linux, 32768 to 60999 - while the host firewall opened the documented `50000:50100/udp` and nothing else.
+The startup log said so, in a line phrased as a note, and a note is what it was read as.
+That line is now a warning that states the consequence, because on any machine with a firewall in front of it the setting is the difference between a call and a room where nobody hears anybody.
+
+**The client negotiated a call it could not encrypt.**
+This is the interesting half, and it reproduces in loopback with no firewall anywhere near it: `dv_media_tests` on macOS had the SFU receiving zero audio and zero video packets while ICE connected, DTLS completed, the SDP was correct on both sides, the screen was captured at 30 fps and OpenH264 encoded it.
+Everything a log usually shows was healthy. The client simply put nothing on the wire.
+
+With `DV_WEBRTC_LOG=warning`, libwebrtc says what happened in three lines:
+
+```
+(srtp_session.cc:115): Failed to init SRTP, err=2
+(srtp_transport.cc:294): The params in SRTP transport are reset.
+(dtls_srtp_transport.cc:199): DTLS-SRTP key installation for RTP failed
+```
+
+`srtp_session.cc:115` is `srtp_init()`, and `err=2` is `srtp_err_status_bad_param`, which that function returns from one place: `srtp_crypto_kernel_load_debug_module`, when a module of that name is already registered.
+libwebrtc carries its own copy of libsrtp and libdatachannel links another, both export the symbols, and a static link resolves the two to one - one crypto kernel, and a second `srtp_init()` on it fails by construction.
+libdatachannel calls it first, from its global init, on the first WebSocket, which in this client is the signaling connection; it also ignores the return value, so it never notices.
+libwebrtc calls it second, treats the failure as fatal, and never creates the SRTP session. The rest of the stack carries on as if a call were in progress.
+
+The fix is the API libwebrtc offers embedders in exactly this position, `webrtc::ProhibitLibsrtpInitialization()`, paired with an explicit `rtc::Preload()` so that libdatachannel is the one initialising libsrtp at a moment we choose rather than at whichever socket happens to come first.
+With it, the two tests that had never passed on this platform - audio forwarded between two clients, and a screen share arriving decoded at the other end - pass in under a second each, where before they spent 41 and 31 seconds reaching zero.
+
+Worth stating plainly: this is not macOS specific in its cause.
+Any platform where both libraries end up in one binary with those symbols exported has the same single crypto kernel, and the only reason it went unnoticed is that the media job is `workflow_dispatch` and had never run.
+
+**The bundle asked macOS for a microphone it had not declared.**
+`Info.plist` carried no `NSMicrophoneUsageDescription`, and without that string the system does not ask the person, it refuses on their behalf and hands the application silence.
+The bundle now configures `assets/Info.plist.in`, which keeps the identity keys next to the target properties that set them.
+
+Two media tests still fail here, both about the audio device and neither about transport:
+turning the echo canceller off leaves `echo_cancellation_active` true, because the platform canceller on macOS is not the one that setting reaches,
+and switching the microphone takes 2.4 seconds to resume audio against a budget of 500 ms, which is what re-opening a CoreAudio input costs.
+The other 22 pass, one skips for want of a virtual device.
+
+---
+
 ## 4. Tracking the MVP acceptance criteria
 
 Mapping of the 15 criteria from section 29 of the SPEC to the milestones that cover them.

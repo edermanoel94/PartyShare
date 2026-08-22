@@ -45,7 +45,7 @@ It builds everything and publishes nothing, because a release without a tag has 
 | `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Built and verified |
 | `partyshare-x.y.z-windows-x64.msi` | Windows x64 | Built, installed and run |
 | `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Built, installed and run |
-| `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Written, never run |
+| `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Built by hand, installed and run |
 | `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
 | `SHA256SUMS` | - | Generated over whatever exists |
 
@@ -118,8 +118,14 @@ What they intend to produce:
   It is the same failure the first AppImage had, found the same way: by installing the artifact and trying to use it.
   The job now configures with `-DDV_BUILD_CLIENT_MEDIA=ON`, and libwebrtc comes from the tree described in section 8 of [webrtc-validation.md](webrtc-validation.md), fetched by `cmake/Findlibwebrtc.cmake`.
   A step after the build scans `partyshare.exe` for the sentence only the stub carries and fails the job when it is there, because a flag that goes missing again would otherwise build, package, install, sign and publish without a word.
-  **macOS has no equivalent yet**: no libwebrtc tree has ever been built for it, so the `.dmg` still ships a client that cannot make a call.
-- The `.dmg` has the bundle, the shortcut to `/Applications`, and a volume icon. It lacks a background image and icon positioning in the window, which is appearance rather than function.
+  **macOS is halfway there.**
+  A libwebrtc tree does exist for it now, produced by `scripts/build_webrtc.sh` on an Apple Silicon machine, and validated by linking the client against it: no stub sentence in the binary, and a client that starts with the media layer initialised.
+  It needed the new `--ssl-root`, because libwebrtc's bundled BoringSSL and the OpenSSL that libdatachannel needs collide in 932 duplicate symbols.
+  `ld64` refuses that outright, which is why the collision surfaced here and not on Linux, where GNU `ld` takes the first definition and links anyway.
+  What is missing is publishing that tree as a release asset and recording its URL and checksum in `cmake/Findlibwebrtc.cmake`, the way `_dv_url_windows_x64_md` already is.
+  Until then the macOS job must not pass `-DDV_BUILD_CLIENT_MEDIA=ON`: the only tree it could fetch is the prebuilt one, whose `std::__Cr` symbols cannot link against a client built with Apple's own libc++.
+  So the `.dmg` the pipeline publishes still ships a client that cannot make a call.
+- The `.dmg` has the bundle, the shortcut to `/Applications`, a volume icon, and the example configuration, both beside the application and inside `Contents/Resources`. It lacks a background image and icon positioning in the window, which is appearance rather than function.
 - Neither has been opened on a clean machine, which is the milestone's acceptance criterion.
 
 ## Signing and notarization

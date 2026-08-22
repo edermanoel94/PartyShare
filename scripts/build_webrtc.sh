@@ -10,12 +10,19 @@
 #
 # Usage:
 #   scripts/build_webrtc.sh [--jobs N] [--out DIR] [--milestone BRANCH]
+#                          [--ssl-root OPENSSL_INCLUDE_DIR]
+#
+# --ssl-root builds without the bundled BoringSSL, against the OpenSSL headers
+# in that directory, and marks the tree DV_EXTERNAL_SSL so the consumer links an
+# OpenSSL of its own. Required on macOS, where ld64 refuses the 932 duplicate
+# symbols the two SSLs produce in one binary.
 #
 # The result is a tree that cmake/Findlibwebrtc.cmake consumes directly:
 #   <out>/dist/include/...
 #   <out>/dist/lib/libwebrtc.a
 #   <out>/dist/VERSIONS
 #   <out>/dist/DV_SYSTEM_LIBCXX     marker, see Findlibwebrtc.cmake
+#   <out>/dist/DV_EXTERNAL_SSL     marker, only with --ssl-root
 #
 # Expect a checkout of roughly 30 GB and a build measured in tens of minutes.
 
@@ -30,6 +37,7 @@ BUILD_DIR="${WEBRTC_BUILD_DIR:-$HOME/.cache/partyshare/webrtc}"
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 SKIP_SYNC=0
 OUT_NAME="dv-release"
+SSL_ROOT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,7 +48,14 @@ while [[ $# -gt 0 ]]; do
     # which shares the host checkout with the container.
     --skip-sync) SKIP_SYNC=1; shift ;;
     --out-name) OUT_NAME="$2"; shift 2 ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    # Build without BoringSSL, against the OpenSSL headers in DIR.
+    #
+    # libwebrtc bundles BoringSSL, and libdatachannel needs an OpenSSL. Both
+    # define the same symbols, so a client that links the two ends in 932
+    # duplicate symbols on macOS. ld64 refuses that outright; GNU ld takes the
+    # first definition and links, which is why Linux has not needed this.
+    --ssl-root) SSL_ROOT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -197,6 +212,18 @@ GN_ARGS=(
   "treat_warnings_as_errors=false"
 )
 
+# The two pairs have to agree with each other, or pc/BUILD.gn refuses the
+# configure with "Mismatch ssl build settings detected" and then with
+# "Mismatch in ssl root detected". Section 8.2 of docs/webrtc-validation.md.
+if [[ -n "${SSL_ROOT}" ]]; then
+  GN_ARGS+=(
+    "rtc_build_ssl=false"
+    "rtc_ssl_root=\"${SSL_ROOT}\""
+    "libsrtp_build_boringssl=false"
+    "libsrtp_ssl_root=\"${SSL_ROOT}\""
+  )
+fi
+
 if [[ "${TARGET_OS}" == "linux" ]]; then
   ensure_libstdcxx
   _inc="${LIBSTDCXX_DIR}/usr/include"
@@ -238,9 +265,40 @@ EXTRA_TARGETS=(
 )
 
 echo "==> building"
-ninja -C "${OUT}" -j "${JOBS}" webrtc "${EXTRA_TARGETS[@]}"
+# The labels above are GN's, and ninja does not speak GN. It collapses the
+# leading "//" to a single "/" and then fails with "unknown target
+# '/api/video_codecs:builtin_video_encoder_factory'", suggesting the same name
+# without the slash. That name is the one gn writes into build.ninja, so the
+# prefix is stripped here and kept on EXTRA_TARGETS, which gn desc needs below.
+ninja -C "${OUT}" -j "${JOBS}" webrtc "${EXTRA_TARGETS[@]#//}"
 
 # --- package -----------------------------------------------------------------
+
+# The archives GN emits are thin: they hold paths to object files rather than
+# the objects themselves. GNU ar reads that format and Apple's does not, so on
+# macOS every one of them comes back as "Inappropriate file type or format" and
+# the merge below silently produces an archive missing the extra targets.
+#
+# The llvm-ar in the checkout is the one the build itself used, so it reads what
+# the build wrote on every platform. It has no llvm-ranlib beside it; "ar s" is
+# the same operation and llvm-ar implements it.
+AR_BIN="ar"
+RANLIB_CMD=(ranlib)
+# Absolute: the merge below runs from inside ${OUT}.
+_dv_llvm_ar="${BUILD_DIR}/src/third_party/llvm-build/Release+Asserts/bin/llvm-ar"
+if [[ -x "${_dv_llvm_ar}" ]]; then
+  AR_BIN="${_dv_llvm_ar}"
+  RANLIB_CMD=("${_dv_llvm_ar}" s)
+fi
+
+# install -D is a GNU extension. BSD install, which is what macOS ships, does
+# not create the leading directories and fails on the first header of every
+# subdirectory. mkdir -p and cp are the same thing everywhere.
+install_header() {
+  mkdir -p "$(dirname "$2")"
+  cp "$1" "$2"
+  chmod 644 "$2"
+}
 
 DIST="${BUILD_DIR}/dist"
 echo "==> packaging into ${DIST}"
@@ -289,7 +347,7 @@ cp "${OUT}/obj/libwebrtc.a" "${DIST}/lib/libwebrtc.a"
   # Every object name already in the archive, one per line, so that a member is
   # only appended when it is genuinely new. Appending to this list as objects
   # are picked also keeps two extra targets from contributing the same one.
-  seen="$(ar t "${DIST}/lib/libwebrtc.a")"
+  seen="$("${AR_BIN}" t "${DIST}/lib/libwebrtc.a")"
   missing=()
   for archive in "${archives[@]}"; do
     while IFS= read -r member; do
@@ -298,13 +356,13 @@ cp "${OUT}/obj/libwebrtc.a" "${DIST}/lib/libwebrtc.a"
         missing+=("${member}")
         seen+=$'\n'"${name}"
       fi
-    done < <(ar t "${archive}")
+    done < <("${AR_BIN}" t "${archive}")
   done
 
   if (( ${#missing[@]} > 0 )); then
     echo "    merging ${#missing[@]} objects from ${#EXTRA_TARGETS[@]} extra targets"
-    ar q "${DIST}/lib/libwebrtc.a" "${missing[@]}"
-    ranlib "${DIST}/lib/libwebrtc.a"
+    "${AR_BIN}" q "${DIST}/lib/libwebrtc.a" "${missing[@]}"
+    "${RANLIB_CMD[@]}" "${DIST}/lib/libwebrtc.a"
   fi
 )
 
@@ -315,7 +373,7 @@ for dir in api audio call common_audio common_video logging media modules net p2
   [[ -d "${dir}" ]] || continue
   find "${dir}" \( -name '*.h' -o -name '*.hpp' \) -print0 |
     while IFS= read -r -d '' header; do
-      install -Dm644 "${header}" "${DIST}/include/${header}"
+      install_header "${header}" "${DIST}/include/${header}"
     done
 done
 
@@ -323,7 +381,7 @@ done
 # include absl/... and a system abseil is not interchangeable.
 find third_party/abseil-cpp/absl \( -name '*.h' -o -name '*.inc' \) -print0 |
   while IFS= read -r -d '' header; do
-    install -Dm644 "${header}" "${DIST}/include/third_party/abseil-cpp/${header#third_party/abseil-cpp/}"
+    install_header "${header}" "${DIST}/include/third_party/abseil-cpp/${header#third_party/abseil-cpp/}"
   done
 
 # libyuv, for the same reason. Its objects are already in the archive, because
@@ -335,7 +393,7 @@ find third_party/abseil-cpp/absl \( -name '*.h' -o -name '*.inc' \) -print0 |
 # would be slower and worse than the tuned one already sitting in the archive.
 find third_party/libyuv/include \( -name '*.h' \) -print0 |
   while IFS= read -r -d '' header; do
-    install -Dm644 "${header}" "${DIST}/include/${header#third_party/libyuv/include/}"
+    install_header "${header}" "${DIST}/include/${header#third_party/libyuv/include/}"
   done
 
 {
@@ -348,6 +406,13 @@ find third_party/libyuv/include \( -name '*.h' \) -print0 |
 # Findlibwebrtc.cmake looks for this marker to know it must not apply the
 # bundled libc++ flags.
 touch "${DIST}/DV_SYSTEM_LIBCXX"
+
+# And this one to know the tree carries no SSL of its own, so the consumer has
+# to link OpenSSL. Without it the client link ends in unresolved externals
+# starting at SSL_CTX_set_options.
+if [[ -n "${SSL_ROOT}" ]]; then
+  touch "${DIST}/DV_EXTERNAL_SSL"
+fi
 
 echo
 echo "==> done"

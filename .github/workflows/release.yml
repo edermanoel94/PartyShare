@@ -508,11 +508,83 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # The example configuration has to be carried into the bundle by hand.
+      # install(FILES) puts it under share/doc, which is right for a Unix
+      # prefix and is not somewhere a .dmg looks: the image is built from
+      # stage/partyshare.app alone, so on macOS the file was installed and then
+      # left behind. Whoever installed from the .dmg got no example and no
+      # pointer to where the client reads a config.ini from.
+      #
+      # Copied from the install tree rather than from assets/, so it stays the
+      # file the install rule chose.
       - name: Stage the bundle
-        run: cmake --install build/${{ matrix.preset }} --prefix "$PWD/stage"
+        run: |
+          set -euo pipefail
+          cmake --install build/${{ matrix.preset }} --prefix "$PWD/stage"
+          cp stage/share/doc/partyshare/config.example.ini \
+             stage/partyshare.app/Contents/Resources/
 
       - name: Bundle the Qt runtime
         run: macdeployqt stage/partyshare.app -always-overwrite
+
+      # macdeployqt exits 0 after printing "ERROR: Cannot resolve rpath", so
+      # what it could not finish has to be found here rather than trusted.
+      #
+      # It copies every plugin of a category it decides to deploy, including
+      # ones whose framework is not installed: an iconengine that needs QtSvg,
+      # an imageformat that needs QtPdf, an input context that needs
+      # QtVirtualKeyboard. None of the three can load, all three fail silently
+      # at runtime, and all three are dead weight signed and shipped as if they
+      # worked. A plugin is judged by whether its dependencies are in the
+      # bundle, not by name, so a future Qt that moves one of them is caught
+      # too.
+      #
+      # The install names are the second half. macdeployqt rewrites what a
+      # binary depends on and sometimes leaves a copied dylib carrying its
+      # original absolute id, which is a path to a Homebrew that only exists on
+      # the builder.
+      - name: Make the bundle self-contained
+        run: |
+          set -euo pipefail
+          app=stage/partyshare.app
+          frameworks="$app/Contents/Frameworks"
+
+          removed=0
+          while IFS= read -r plugin; do
+            missing=""
+            while IFS= read -r dep; do
+              name="${dep#@rpath/}"
+              [[ -e "$frameworks/$name" ]] || missing="$missing $name"
+            done < <(otool -L "$plugin" | awk '/@rpath\//{print $1}')
+            if [[ -n "$missing" ]]; then
+              echo "removing $(basename "$plugin"), cannot resolve:$missing"
+              rm -f "$plugin"
+              removed=$((removed + 1))
+            fi
+          done < <(find "$app/Contents/PlugIns" -name '*.dylib')
+          echo "plugins removed: $removed"
+
+          for lib in "$frameworks"/*.dylib; do
+            id="$(otool -D "$lib" | tail -1)"
+            case "$id" in
+              /opt/homebrew/*|/usr/local/*)
+                echo "rewriting id of $(basename "$lib"): $id"
+                install_name_tool -id "@executable_path/../Frameworks/$(basename "$lib")" "$lib"
+                ;;
+            esac
+          done
+
+          # Nothing may point outside the bundle. A path that survives here is
+          # one that resolves on this runner and on no other machine, which is
+          # the failure that only shows up after the artefact is published.
+          leaked="$(find "$app" -type f \( -perm -u+x -o -name '*.dylib' \) -print0 |
+            xargs -0 -n1 otool -L 2>/dev/null |
+            grep -oE '(/opt/homebrew|/usr/local)[^ ]*' | sort -u || true)"
+          if [[ -n "$leaked" ]]; then
+            echo "$leaked"
+            echo "the bundle still references paths outside itself" >&2
+            exit 1
+          fi
 
       # Notarisation is not signing: Apple wants the bundle signed with a
       # Developer ID, then uploaded and stapled, and a bundle that skips any of
@@ -555,6 +627,11 @@ jobs:
           rm -rf dmg && mkdir -p dmg
           cp -R stage/partyshare.app dmg/
           ln -s /Applications dmg/Applications
+
+          # Beside the application, where it is read before anything is
+          # installed. The copy inside Contents/Resources is the one that
+          # survives the drag; this one is the one that gets noticed.
+          cp stage/share/doc/partyshare/config.example.ini dmg/
 
           # The icon the mounted volume itself gets in the Finder sidebar. It
           # needs the file, the custom icon attribute, and the directory marked

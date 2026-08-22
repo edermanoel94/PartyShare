@@ -1181,15 +1181,32 @@ Result<std::monostate> save_ini_settings(const std::filesystem::path& path,
     rebuilt += line_ending;
   }
 
-  // The one check that matters, and the reason this is worth doing at all: what
-  // is about to be written is read back by the same parser that reads it at
-  // startup. A config.ini that does not parse is not a setting that failed to
-  // save, it is a client that will not start, and nobody would connect that to
-  // having changed their microphone.
-  if (const auto reparsed = parse_ini(rebuilt, Config{}); !reparsed) {
+  // The check that matters, and the reason this is worth doing at all: what is
+  // about to be written goes through everything load() would put it through. A
+  // config.ini that does not survive that is not a setting that failed to save,
+  // it is a client that will not start, and nobody would connect that to having
+  // changed their microphone.
+  //
+  // Both halves are needed, and parsing alone is not enough. An unknown key is
+  // the parser's to catch; `min_bitrate_kbps = 200` parses perfectly and is
+  // refused by validate(), because the floor congestion control may squeeze the
+  // picture to defaults to 300 and is not allowed to sit above the minimum.
+  // That is a real way for a settings dialog to write a file nobody can start.
+  const auto reparsed = parse_ini(rebuilt, Config{});
+  if (!reparsed) {
     return Written::failure(
         "config_write_failed",
         "refusing to write a configuration that cannot be read back: " + reparsed.error().message);
+  }
+  // Over the built-in defaults, so this file is judged on its own rather than
+  // as part of the cascade. That is the strict reading, and a file that only
+  // holds together alongside the machine's is refused here. The strictness errs
+  // in the safe direction: it fails visibly, in front of somebody who has just
+  // changed a setting, rather than at the next startup with nothing to go on.
+  if (const auto violation = validate(reparsed.value())) {
+    return Written::failure(
+        "config_write_failed",
+        "refusing to write a configuration the client would reject: " + violation->message);
   }
 
   std::error_code failed;

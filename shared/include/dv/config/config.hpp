@@ -205,11 +205,18 @@ struct IniSetting {
 /// being present: it is not what the parser reads, so overwriting it would
 /// leave the setting looking applied while nothing had changed.
 ///
-/// The result is parsed before it replaces anything, and nothing is written
-/// when it does not parse. An unknown section or key is an error to parse_ini,
-/// so without that check a mistyped key here would produce a config.ini that
-/// stops the client from starting at all, and the person would have no reason
-/// to connect the two.
+/// The result is parsed and validated before it replaces anything, and nothing
+/// is written when either refuses it. Both are needed: an unknown key is the
+/// parser's to catch, while `[video] min_bitrate_kbps = 200` parses perfectly
+/// and is refused by validate() for sitting under the floor. Either one would
+/// otherwise produce a config.ini that stops the client from starting at all,
+/// and the person would have no reason to connect the two.
+///
+/// Validation judges the file on its own, over the built-in defaults, rather
+/// than as the last layer of the cascade. So a file that only holds together
+/// alongside the machine's config.ini is refused. That is deliberate: it fails
+/// in front of somebody who has just changed a setting, which is the one moment
+/// the failure means anything.
 ///
 /// Missing directories are created, and the replacement goes through a
 /// temporary file so that an interrupted write cannot leave half a config.ini.

@@ -271,7 +271,12 @@ Both are inert as they ship — every line is commented out — so uncommenting 
 
 Edit the second one where there is a choice.
 The first belongs to the installer and is replaced on the next upgrade, which would take the address of the server with it; the second is never touched by an installer, and on macOS the first one lives inside the signed `.app` where editing it breaks the signature.
-It is also where the client saves what you pick in **Settings**: choosing a microphone or an output device writes `input_device` and `output_device` into this user's `config.ini` as you choose them, so the choice is still there next time.
+It is also where the client saves what you pick in **Settings**: the microphone, the output device and the two ends of the bitrate range are written into this user's `config.ini` as you choose them, so the choice is still there next time.
+The monitor is the one thing on that screen that is not saved, because it is which screen to share next rather than a setting.
+
+The minimum bitrate the dialog offers stops at `video.floor_bitrate_kbps`, which defaults to 300 kbps.
+The floor is how far congestion control may squeeze the picture when the link cannot carry the minimum, and a configuration whose floor sits above its minimum is one the client refuses to start on — so the dialog will not let you save one.
+Lower both together if you need to go under 300.
 
 Sections and keys are the same names the JSON form uses, so nothing has to be learned twice. Comments start
 with `;` or `#`. A key the client does not know is a startup error naming the line, rather than a line that

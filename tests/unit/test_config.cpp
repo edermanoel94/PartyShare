@@ -752,6 +752,65 @@ TEST(ConfigSave, CreatesTheDirectoriesOnTheWayToTheFile) {
   std::filesystem::remove_all(root.path(), ignored);
 }
 
+TEST(ConfigSave, WritesTheBitrateRangeAsARange) {
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(),
+      {dv::config::IniSetting{.section = "video", .key = "min_bitrate_kbps", .value = "2000"},
+       dv::config::IniSetting{.section = "video", .key = "max_bitrate_kbps", .value = "4000"}});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_EQ(reloaded.value().video.min_bitrate_kbps, 2000);
+  EXPECT_EQ(reloaded.value().video.max_bitrate_kbps, 4000);
+}
+
+TEST(ConfigSave, RefusesAMinimumUnderTheFloorRatherThanWritingIt) {
+  // The one that would have bitten. 200 kbps parses, and validate() refuses it
+  // because the floor congestion control may squeeze the picture to defaults to
+  // 300 and may not sit above the minimum. Written, it would be a client that
+  // refuses to start with nothing on screen to connect it to the settings
+  // dialog.
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(),
+      {dv::config::IniSetting{.section = "video", .key = "min_bitrate_kbps", .value = "200"}});
+  ASSERT_FALSE(written.ok());
+  EXPECT_EQ(written.error().code, "config_write_failed");
+  EXPECT_FALSE(std::filesystem::exists(file.path()));
+}
+
+TEST(ConfigSave, RefusesAMaximumUnderItsMinimum) {
+  const ScopedPath file;
+  file.write("[video]\nmin_bitrate_kbps = 3000\n");
+
+  const auto written = dv::config::save_ini_settings(
+      file.path(),
+      {dv::config::IniSetting{.section = "video", .key = "max_bitrate_kbps", .value = "1000"}});
+  ASSERT_FALSE(written.ok());
+  EXPECT_EQ(written.error().code, "config_write_failed");
+
+  // And the file it refused to change is the file it was.
+  EXPECT_EQ(file.read(), "[video]\nmin_bitrate_kbps = 3000\n");
+}
+
+TEST(ConfigSave, AnythingItWritesIsSomethingLoadWouldAccept) {
+  // The promise the whole thing rests on, stated once: whatever comes back ok
+  // from here is a file the client starts on.
+  const ScopedPath file;
+  const auto written = dv::config::save_ini_settings(
+      file.path(),
+      {audio("input_device", "Yeti Nano"), audio("output_device", ""),
+       dv::config::IniSetting{.section = "video", .key = "min_bitrate_kbps", .value = "1500"},
+       dv::config::IniSetting{.section = "video", .key = "max_bitrate_kbps", .value = "3000"}});
+  ASSERT_TRUE(written.ok()) << written.error().message;
+
+  const auto reloaded = dv::config::load_from_file(file.path().string());
+  ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
+  EXPECT_FALSE(dv::config::validate(reloaded.value()).has_value());
+}
+
 TEST(ConfigSave, WritesToTheUsersOwnFileAndNotToTheMachines) {
   // Never the one beside the executable: on all three platforms that is a
   // directory the person running the client cannot write to.

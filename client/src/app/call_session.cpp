@@ -351,6 +351,11 @@ std::pair<int, int> CallSession::video_bitrate() const {
   return {options_.media.video_min_bitrate_kbps, options_.media.video_max_bitrate_kbps};
 }
 
+int CallSession::video_floor_bitrate_kbps() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.video_floor_bitrate_kbps;
+}
+
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
   std::shared_ptr<media::MediaSession> session;

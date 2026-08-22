@@ -222,6 +222,11 @@ int run(int argc, char* argv[]) {
   DV_LOG_INFO("Signaling server: {}", config.network.signaling_url);
   DV_LOG_INFO("Video: {}x{} @ {} FPS, codec {}", config.video.width, config.video.height,
               config.video.fps, config.video.codec);
+  // The bitrate belongs in the log for the same reason the devices below do:
+  // the settings dialog writes it to config.ini, so this is the line that says
+  // whether what was chosen came back.
+  DV_LOG_INFO("Video bitrate: {} to {} kbps, floor {} kbps", config.video.min_bitrate_kbps,
+              config.video.max_bitrate_kbps, config.video.floor_bitrate_kbps);
   DV_LOG_INFO("Audio: {} Hz, {} channel(s), {} ms frames", config.audio.sample_rate_hz,
               config.audio.channels, config.audio.frame_duration_ms);
   // Which devices, and not only the format. This is what the settings dialog

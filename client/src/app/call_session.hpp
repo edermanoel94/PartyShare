@@ -118,6 +118,20 @@ class CallSession {
     /// by `by_user_id`. A participant muting themselves does not come through
     /// here: that is an ordinary participant update.
     std::function<void(std::string user_id, std::string by_user_id, bool muted)> on_forced_mute;
+
+    /// An administrator changed what an account may do, for longer than this
+    /// room lasts. See models::Restrictions.
+    ///
+    /// It arrives for anybody in the room and for this session's own account
+    /// whether or not it is in one, which is the case that matters: somebody
+    /// told they may no longer share a screen can stop reaching for the
+    /// button, and somebody not told is left clicking one that does nothing.
+    ///
+    /// The participant list and `local_user()` are already up to date by the
+    /// time this runs. What is left for the interface is to say so.
+    std::function<void(std::string user_id, models::Restrictions restrictions,
+                       std::string by_user_id, std::string reason)>
+        on_restrictions_changed;
   };
 
   /// Creates the media session. Injectable so that the tests can drive the
@@ -221,6 +235,15 @@ class CallSession {
   [[nodiscard]] Result<std::monostate> kick(const std::string& user_id,
                                             const std::string& reason = {});
   [[nodiscard]] Result<std::monostate> force_mute(const std::string& user_id, bool muted);
+
+  /// Takes something away from an account, or gives it back, for longer than
+  /// the room lasts. Absent fields are left as they are, see
+  /// protocol::RestrictUser.
+  ///
+  /// Unlike kick and force_mute, this needs no room: it is about the account
+  /// and can be applied from the administration panel to somebody who is not
+  /// connected at all.
+  [[nodiscard]] Result<std::monostate> restrict_user(const protocol::RestrictUser& change);
 
   [[nodiscard]] Result<std::monostate> list_users();
   [[nodiscard]] Result<std::monostate> create_user(const std::string& username,

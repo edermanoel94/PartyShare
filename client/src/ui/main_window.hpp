@@ -75,6 +75,12 @@ class MainWindow : public QMainWindow {
   void apply_screen_share(const QString& user_id);
   void apply_kicked(const QString& reason);
   void apply_forced_mute(const QString& name, const QString& by_name, bool muted);
+  /// `summary` is models::describe of what is in force now, empty when nothing
+  /// is. Strings rather than the struct, for the reason the participant rows
+  /// travel as strings: crossing threads with a Qt connection needs a
+  /// registered metatype, and this needs none.
+  void apply_restrictions(const QString& name, const QString& by_name, const QString& summary,
+                          const QString& reason, bool is_us);
   void apply_chat_message(const QString& line);
   /// Replaces what is on screen rather than adding to it. See
   /// CallSession::Callbacks::on_chat_history for why.

@@ -271,8 +271,17 @@ Both are inert as they ship — every line is commented out — so uncommenting 
 
 Edit the second one where there is a choice.
 The first belongs to the installer and is replaced on the next upgrade, which would take the address of the server with it; the second is never touched by an installer, and on macOS the first one lives inside the signed `.app` where editing it breaks the signature.
-It is also where the client saves what you pick in **Settings**: the microphone, the output device and the two ends of the bitrate range are written into this user's `config.ini` as you choose them, so the choice is still there next time.
+It is also where the client saves what you pick in **Settings**: the microphone, the output device, the screen resolution and frame rate, and the two ends of the bitrate range are written into this user's `config.ini` as you choose them, so the choice is still there next time.
 The monitor is the one thing on that screen that is not saved, because it is which screen to share next rather than a setting.
+
+**Resolution** and **Frame rate** are `video.width`, `video.height` and `video.fps`, and the dialog offers 720p and 1080p at 30 or 60 fps.
+Both take effect at once, including mid-call: a share that is running restarts on the same monitor, which costs a stutter and no renegotiation.
+30 fps is right for a document or an editor; 60 is for what 30 makes unwatchable, which is scrolling, a terminal redrawing, anything animated.
+The resolution is a ceiling and not the size sent — a monitor is fitted inside it with its shape kept, so 1080p on a 3440x1440 ultrawide sends 1920x802 and never a stretched 1920x1080, and a monitor smaller than the box is sent untouched rather than upscaled.
+
+Raising either asks more of the encoder, and the dialog says so when the maximum bitrate below is lower than what the choice is worth — 1080p at 60 is worth around four times what 720p at 30 is.
+It says it rather than doing it: a ceiling you set to fit your link is not one the client should raise behind your back.
+The configuration is free to name a size or a rate the dialog does not offer, `width = 2560` is perfectly valid, and the dialog then shows that as a row of its own instead of quietly rounding you down to 720p.
 
 The minimum bitrate the dialog offers stops at `video.floor_bitrate_kbps`, which defaults to 300 kbps.
 The floor is how far congestion control may squeeze the picture when the link cannot carry the minimum, and a configuration whose floor sits above its minimum is one the client refuses to start on — so the dialog will not let you save one.

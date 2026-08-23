@@ -14,9 +14,13 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSize>
 #include <QSpinBox>
 #include <QStyle>
 #include <QVBoxLayout>
+
+#include "video/screen_quality.hpp"
 
 namespace dv::ui {
 namespace {
@@ -103,9 +107,21 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   max_bitrate_->setSingleStep(kBitrateStepKbps);
   max_bitrate_->setSuffix(QStringLiteral(" kbps"));
 
+  resolution_ = new QComboBox(video);
+  frame_rate_ = new QComboBox(video);
+
+  quality_hint_ = new QLabel(QString{}, video);
+  quality_hint_->setWordWrap(true);
+  quality_hint_->setProperty("hint", true);
+
   video_form->addRow(QStringLiteral("Monitor"), monitor_);
+  video_form->addRow(QStringLiteral("Resolution"), resolution_);
+  video_form->addRow(QStringLiteral("Frame rate"), frame_rate_);
   video_form->addRow(QStringLiteral("Minimum bitrate"), min_bitrate_);
   video_form->addRow(QStringLiteral("Maximum bitrate"), max_bitrate_);
+  // Spanning the form rather than in the value column, because it is a
+  // sentence and the value column is as wide as a spin box.
+  video_form->addRow(quality_hint_);
 
   auto* note =
       new QLabel(QStringLiteral("Changes take effect immediately, including during a call."), this);
@@ -134,11 +150,15 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
 
   load_devices();
   load_monitors();
+  load_quality();
   show_storage();
 
   const auto [minimum, maximum] = session_.video_bitrate();
   min_bitrate_->setValue(minimum);
   max_bitrate_->setValue(maximum);
+
+  // After the bitrate is in, because what it says is the two compared.
+  show_quality_hint();
 
   // Connected after the initial values are in, so that filling the widgets
   // does not look like the user changing something.
@@ -146,6 +166,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   connect(output_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_output_changed);
   connect(min_bitrate_, &QSpinBox::editingFinished, this, &SettingsDialog::on_bitrate_changed);
   connect(max_bitrate_, &QSpinBox::editingFinished, this, &SettingsDialog::on_bitrate_changed);
+  connect(resolution_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
+  connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
 }
 
 void SettingsDialog::load_devices() {
@@ -187,6 +209,57 @@ void SettingsDialog::load_monitors() {
     monitor_->addItem(QStringLiteral("no monitor available"), QString{});
     monitor_->setEnabled(false);
   }
+}
+
+void SettingsDialog::load_quality() {
+  const client::video::ScreenCaptureOptions quality = session_.video_quality();
+
+  for (const client::video::ScreenResolution& row : client::video::kScreenResolutions) {
+    resolution_->addItem(QString::fromUtf8(row.label.data(), qsizetype(row.label.size())),
+                         QSize(row.size.width, row.size.height));
+  }
+  const QSize in_use(quality.max_size.width, quality.max_size.height);
+  int index = resolution_->findData(in_use);
+  if (index < 0) {
+    // Configured to something this dialog does not offer. Shown as the size it
+    // is, so that opening settings does not read as "you are on 720p".
+    resolution_->addItem(QStringLiteral("%1x%2").arg(in_use.width()).arg(in_use.height()), in_use);
+    index = resolution_->count() - 1;
+  }
+  resolution_->setCurrentIndex(index);
+
+  for (const int fps : client::video::kScreenFrameRates) {
+    frame_rate_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
+  }
+  index = frame_rate_->findData(quality.max_fps);
+  if (index < 0) {
+    frame_rate_->addItem(QStringLiteral("%1 fps").arg(quality.max_fps), quality.max_fps);
+    index = frame_rate_->count() - 1;
+  }
+  frame_rate_->setCurrentIndex(index);
+}
+
+void SettingsDialog::show_quality_hint() {
+  const QSize size = resolution_->currentData().toSize();
+  const int fps = frame_rate_->currentData().toInt();
+  const int wants = client::video::recommended_max_bitrate_kbps(
+      {.width = size.width(), .height = size.height()}, fps);
+
+  if (wants <= max_bitrate_->value()) {
+    // The common case, and the one that has nothing to say. An empty label
+    // rather than a hidden one, so the rows below do not jump as the quality
+    // is changed.
+    quality_hint_->clear();
+    return;
+  }
+
+  quality_hint_->setText(
+      QStringLiteral("%1 at %2 fps is worth about %3 kbps. The maximum below is %4, so this will "
+                     "be sent softer than it could be.")
+          .arg(resolution_->currentText())
+          .arg(fps)
+          .arg(wants)
+          .arg(max_bitrate_->value()));
 }
 
 void SettingsDialog::remember(const std::vector<config::IniSetting>& settings) {
@@ -252,12 +325,52 @@ void SettingsDialog::on_bitrate_changed() {
     return;
   }
 
+  // Raising the ceiling can be what the quality above was waiting for, and
+  // lowering it can be what makes the quality above worth a word.
+  show_quality_hint();
+
   // Both keys in one pass. They are a range: written one at a time, a file read
   // between the two writes would hold a maximum below its minimum, which is a
   // configuration that does not start.
   remember({
       {.section = "video", .key = "min_bitrate_kbps", .value = std::to_string(minimum)},
       {.section = "video", .key = "max_bitrate_kbps", .value = std::to_string(maximum)},
+  });
+}
+
+void SettingsDialog::on_quality_changed() {
+  const QSize chosen = resolution_->currentData().toSize();
+  const int fps = frame_rate_->currentData().toInt();
+  const client::video::Size size{.width = chosen.width(), .height = chosen.height()};
+
+  if (const auto applied = session_.set_video_quality(size, fps); !applied) {
+    // Reachable, unlike the bitrate case: during a share this restarts the
+    // capture, and a monitor that was unplugged between opening this dialog
+    // and changing the row does not come back.
+    DV_LOG_WARN("Refused a screen quality of {}x{} at {} fps: {}", size.width, size.height, fps,
+                applied.error().message);
+
+    // Back onto what is actually being sent. Signals blocked, or putting them
+    // back arrives as another change and asks the session all over again.
+    const client::video::ScreenCaptureOptions in_use = session_.video_quality();
+    const QSignalBlocker resolution_quiet(resolution_);
+    const QSignalBlocker frame_rate_quiet(frame_rate_);
+    resolution_->setCurrentIndex(
+        std::max(0, resolution_->findData(QSize(in_use.max_size.width, in_use.max_size.height))));
+    frame_rate_->setCurrentIndex(std::max(0, frame_rate_->findData(in_use.max_fps)));
+    show_quality_hint();
+    return;
+  }
+
+  show_quality_hint();
+
+  // All three in one pass, for the reason the bitrate pair is: a file read
+  // between two of the writes would hold a width from one choice and a height
+  // from another, which is a shape no monitor has.
+  remember({
+      {.section = "video", .key = "width", .value = std::to_string(size.width)},
+      {.section = "video", .key = "height", .value = std::to_string(size.height)},
+      {.section = "video", .key = "fps", .value = std::to_string(fps)},
   });
 }
 

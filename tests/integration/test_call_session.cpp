@@ -67,6 +67,12 @@ struct FakeMediaState {
   int video_min_kbps = 0;
   int video_max_kbps = 0;
   std::atomic<int> share_stops{0};
+  /// What the last accepted set_capture_options asked for.
+  dv::client::video::ScreenCaptureOptions capture;
+  std::atomic<int> capture_changes{0};
+  /// Set to make set_capture_options fail, the way a monitor that went away
+  /// mid-call makes the restart fail.
+  std::string capture_failure;
 
   [[nodiscard]] double volume_of(const std::string& user_id) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -80,6 +86,10 @@ struct FakeMediaState {
   [[nodiscard]] std::string monitor() {
     const std::lock_guard<std::mutex> lock(mutex);
     return shared_monitor;
+  }
+  [[nodiscard]] dv::client::video::ScreenCaptureOptions capture_options() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return capture;
   }
 
   [[nodiscard]] std::size_t offer_count() {
@@ -185,6 +195,20 @@ class FakeMediaSession : public media::MediaSession {
     return std::monostate{};
   }
 
+  dv::Result<std::monostate> set_capture_options(
+      const dv::client::video::ScreenCaptureOptions& options) override {
+    if (options.max_size.empty() || options.max_fps < 1) {
+      return dv::Result<std::monostate>::failure("invalid_value", "bad capture options");
+    }
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    if (!state_->capture_failure.empty()) {
+      return dv::Result<std::monostate>::failure("capture_unavailable", state_->capture_failure);
+    }
+    state_->capture = options;
+    state_->capture_changes.fetch_add(1);
+    return std::monostate{};
+  }
+
   [[nodiscard]] media::VideoStats video_stats() const override {
     media::VideoStats stats;
     stats.send_width = 1280;
@@ -246,11 +270,20 @@ class Client {
         media_state_(std::make_shared<FakeMediaState>()),
         session_(std::make_unique<CallSession>(
             make_options(port),
-            [this](const media::MediaSessionOptions&, media::MediaSession::Callbacks callbacks)
+            [this](const media::MediaSessionOptions& options,
+                   media::MediaSession::Callbacks callbacks)
                 -> dv::Result<std::unique_ptr<media::MediaSession>> {
               {
                 const std::lock_guard<std::mutex> lock(mutex_);
                 remote_audio_ = callbacks.on_remote_audio;
+              }
+              {
+                // The real session reads the capture size and rate here, at
+                // creation, rather than being told them afterwards. Recording
+                // them is what lets a choice made before a call be checked
+                // where it actually lands.
+                const std::lock_guard<std::mutex> lock(media_state_->mutex);
+                media_state_->capture = options.capture;
               }
               auto fake = std::make_unique<FakeMediaSession>(std::move(callbacks), media_state_);
               {
@@ -756,6 +789,71 @@ TEST_F(CallSessionTest, TheChosenInputDeviceSurvivesIntoTheCall) {
   ASSERT_TRUE(ana.join(room));
 
   EXPECT_TRUE(wait_until([&] { return ana.audio().input() == "Microfone USB"; }));
+}
+
+TEST_F(CallSessionTest, TheChosenScreenQualitySurvivesIntoTheCall) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.session().set_video_quality({1920, 1080}, 60).ok());
+
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  EXPECT_TRUE(wait_until([&] {
+    const auto capture = ana.audio().capture_options();
+    return capture.max_size == dv::client::video::Size{1920, 1080} && capture.max_fps == 60;
+  }));
+}
+
+TEST_F(CallSessionTest, ChangingTheScreenQualityDuringACallReachesTheMediaLayer) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  // The point of the whole change: nobody should have to leave and rejoin to
+  // go from 720p to 1080p60.
+  ASSERT_TRUE(ana.session().set_video_quality({1920, 1080}, 60).ok());
+
+  EXPECT_TRUE(wait_until([&] { return ana.audio().capture_changes.load() == 1; }));
+  const auto capture = ana.audio().capture_options();
+  EXPECT_EQ(capture.max_size, (dv::client::video::Size{1920, 1080}));
+  EXPECT_EQ(capture.max_fps, 60);
+  EXPECT_EQ(ana.session().video_quality().max_fps, 60);
+}
+
+TEST_F(CallSessionTest, ARefusedScreenQualityLeavesThePreviousOneInPlace) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  const auto before = ana.session().video_quality();
+  {
+    const std::lock_guard<std::mutex> lock(ana.audio().mutex);
+    ana.audio().capture_failure = "the monitor went away";
+  }
+
+  // Remembering a quality the media layer refused would leave the settings
+  // dialog showing something that is not being sent.
+  EXPECT_FALSE(ana.session().set_video_quality({1920, 1080}, 60).ok());
+  EXPECT_EQ(ana.session().video_quality().max_size, before.max_size);
+  EXPECT_EQ(ana.session().video_quality().max_fps, before.max_fps);
+}
+
+TEST_F(CallSessionTest, AnImpossibleScreenQualityNeverReachesTheMediaLayer) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  EXPECT_FALSE(ana.session().set_video_quality({0, 0}, 60).ok());
+  EXPECT_FALSE(ana.session().set_video_quality({1920, 1080}, 0).ok());
+  EXPECT_EQ(ana.audio().capture_changes.load(), 0);
 }
 
 TEST_F(CallSessionTest, LevelsMarkWhoIsSpeaking) {

@@ -31,6 +31,7 @@ add_library(dv_client_core STATIC
   src/network/transport_globals.hpp
   src/video/frame_queue.hpp
   src/video/frame_size.hpp
+  src/video/screen_quality.hpp
   src/video/screen_capturer.cpp
   src/video/screen_capturer.hpp
   src/video/video_frame.hpp

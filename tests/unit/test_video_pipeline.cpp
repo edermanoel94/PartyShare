@@ -12,12 +12,14 @@
 
 #include "video/frame_queue.hpp"
 #include "video/frame_size.hpp"
+#include "video/screen_quality.hpp"
 #include "video/video_frame.hpp"
 
 namespace {
 
 using dv::client::video::fit_within;
 using dv::client::video::FrameQueue;
+using dv::client::video::recommended_max_bitrate_kbps;
 using dv::client::video::Size;
 using dv::client::video::VideoFrame;
 
@@ -71,6 +73,59 @@ TEST(FrameSizeTest, EverySizeIsEvenInBothDimensions) {
 TEST(FrameSizeTest, AnEmptySourceProducesAnEmptySize) {
   EXPECT_TRUE(fit_within({0, 0}, kTarget).empty());
   EXPECT_TRUE(fit_within({1920, 0}, kTarget).empty());
+}
+
+TEST(ScreenQualityTest, EveryOfferedSizeIsEvenAndOrdered) {
+  // Even for the same reason fit_within rounds down to even, and ordered
+  // because the menu is read top to bottom and a list that jumps around reads
+  // as a bug in the dialog.
+  int previous = 0;
+  for (const auto& row : dv::client::video::kScreenResolutions) {
+    EXPECT_EQ(row.size.width % 2, 0) << row.label;
+    EXPECT_EQ(row.size.height % 2, 0) << row.label;
+    EXPECT_GT(row.size.height, previous) << row.label;
+    previous = row.size.height;
+  }
+  EXPECT_FALSE(dv::client::video::kScreenFrameRates.empty());
+}
+
+TEST(ScreenQualityTest, TheDefaultQualityAsksForWhatTheSpecAllows) {
+  // 1280x720 at 30 is section 5.2, and section 6 puts its ceiling at 3 Mbps.
+  // Anything else here would mean the dialog complains about the defaults.
+  EXPECT_EQ(recommended_max_bitrate_kbps({1280, 720}, 30), 3000);
+}
+
+TEST(ScreenQualityTest, MorePixelsAskForMore) {
+  EXPECT_GT(recommended_max_bitrate_kbps({1920, 1080}, 30),
+            recommended_max_bitrate_kbps({1280, 720}, 30));
+}
+
+TEST(ScreenQualityTest, DoublingTheRateCostsHalfAgainRatherThanDouble) {
+  // A screen mostly does not change in 16 ms, so the second frame is nearly
+  // free. Budgeting double for it would take bandwidth away from the picture.
+  const int at30 = recommended_max_bitrate_kbps({1280, 720}, 30);
+  const int at60 = recommended_max_bitrate_kbps({1280, 720}, 60);
+  EXPECT_EQ(at60, at30 + at30 / 2);
+}
+
+TEST(ScreenQualityTest, ASlowerRateDoesNotLowerTheCeiling) {
+  // It is a ceiling the encoder may use, not a target it will spend, and
+  // lowering it would only take the headroom a keyframe needs.
+  EXPECT_EQ(recommended_max_bitrate_kbps({1280, 720}, 15),
+            recommended_max_bitrate_kbps({1280, 720}, 30));
+}
+
+TEST(ScreenQualityTest, TheRecommendationStopsWhereTheDialogStopsOffering) {
+  // 1080p60 works out above 10 Mbps, which is not a number the settings dialog
+  // can be set to. A hint asking for something unreachable is a hint that
+  // cannot be acted on.
+  const int wanted = recommended_max_bitrate_kbps({1920, 1080}, 60);
+  EXPECT_EQ(wanted, dv::client::video::kMaxRecommendedBitrateKbps);
+}
+
+TEST(ScreenQualityTest, NonsenseFallsBackToTheSpecDefault) {
+  EXPECT_EQ(recommended_max_bitrate_kbps({0, 0}, 30), dv::client::video::kBaseMaxBitrateKbps);
+  EXPECT_EQ(recommended_max_bitrate_kbps({1280, 720}, 0), dv::client::video::kBaseMaxBitrateKbps);
 }
 
 TEST(FrameQueueTest, FramesComeOutInTheOrderTheyWentIn) {

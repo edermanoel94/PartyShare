@@ -219,6 +219,19 @@ class CallSession {
   /// offers cannot produce that configuration.
   [[nodiscard]] int video_floor_bitrate_kbps() const;
 
+  /// The size and rate the screen is sent at. Remembered the same way the
+  /// bitrate is, so choosing it outside a call carries into the next one.
+  ///
+  /// `size` is a ceiling, not the size sent: a monitor is fitted inside it with
+  /// its aspect ratio kept, and one smaller than the box is sent as it is. See
+  /// video::fit_within.
+  ///
+  /// During a share this restarts the capture, so the picture stutters for a
+  /// moment. Fails with `invalid_value` for a size that is not positive or a
+  /// rate below one, and leaves the previous choice in place.
+  [[nodiscard]] Result<std::monostate> set_video_quality(video::Size size, int fps);
+  [[nodiscard]] video::ScreenCaptureOptions video_quality() const;
+
   /// Playback volume for one participant, from 0 to 1, with up to 10 allowed
   /// as amplification. Remembered and reapplied if their audio arrives later.
   [[nodiscard]] Result<std::monostate> set_participant_volume(const std::string& user_id,

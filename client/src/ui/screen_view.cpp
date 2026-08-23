@@ -4,8 +4,12 @@
 
 #include <QMetaObject>
 #include <QPainter>
+#include <QPainterPath>
 #include <QRect>
+#include <QRectF>
 #include <QSize>
+
+#include "ui/theme.hpp"
 
 namespace dv::ui {
 
@@ -67,7 +71,17 @@ void ScreenView::take_pending_frame() {
 
 void ScreenView::paintEvent(QPaintEvent* /*event*/) {
   QPainter painter(this);
-  painter.fillRect(rect(), palette().dark());
+  painter.setRenderHint(QPainter::Antialiasing, true);
+
+  // The corners are rounded to the same radius as the cards beside it. Because
+  // WA_OpaquePaintEvent promises every pixel is painted, what is outside the
+  // rounded rectangle has to be filled with the window colour by hand rather
+  // than left to Qt to clear.
+  painter.fillRect(rect(), palette().window());
+  QPainterPath frame;
+  frame.addRoundedRect(QRectF(rect()), theme::kCardRadius, theme::kCardRadius);
+  painter.setClipPath(frame);
+  painter.fillPath(frame, palette().dark());
 
   if (current_.isNull()) {
     painter.setPen(palette().color(QPalette::BrightText));

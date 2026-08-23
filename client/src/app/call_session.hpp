@@ -210,6 +210,15 @@ class CallSession {
   [[nodiscard]] Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps);
   [[nodiscard]] std::pair<int, int> video_bitrate() const;
 
+  /// The lowest congestion control may squeeze the screen share to, which is
+  /// also the lowest the minimum above is allowed to be.
+  ///
+  /// Read only: it is a property of what the link is worth carrying rather than
+  /// a preference, and dv::config::validate refuses a configuration whose floor
+  /// sits above its minimum. The settings dialog needs it so that the range it
+  /// offers cannot produce that configuration.
+  [[nodiscard]] int video_floor_bitrate_kbps() const;
+
   /// Playback volume for one participant, from 0 to 1, with up to 10 allowed
   /// as amplification. Remembered and reapplied if their audio arrives later.
   [[nodiscard]] Result<std::monostate> set_participant_volume(const std::string& user_id,
@@ -219,6 +228,14 @@ class CallSession {
   /// media session yet, the choice is kept and applied when one is created.
   [[nodiscard]] Result<std::monostate> set_input_device(const std::string& device_id);
   [[nodiscard]] Result<std::monostate> set_output_device(const std::string& device_id);
+
+  /// The devices in use, or empty for the system's own choice.
+  ///
+  /// What the configuration file asked for until somebody changes it, which is
+  /// what lets the settings dialog open showing the microphone that is actually
+  /// being captured rather than whichever one the system listed first.
+  [[nodiscard]] std::string input_device() const;
+  [[nodiscard]] std::string output_device() const;
 
   void disconnect();
 

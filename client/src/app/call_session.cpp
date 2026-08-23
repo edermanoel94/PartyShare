@@ -351,6 +351,11 @@ std::pair<int, int> CallSession::video_bitrate() const {
   return {options_.media.video_min_bitrate_kbps, options_.media.video_max_bitrate_kbps};
 }
 
+int CallSession::video_floor_bitrate_kbps() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.video_floor_bitrate_kbps;
+}
+
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
   std::shared_ptr<media::MediaSession> session;
@@ -391,6 +396,16 @@ Result<std::monostate> CallSession::set_output_device(const std::string& device_
     return std::monostate{};
   }
   return session->set_output_device(device_id);
+}
+
+std::string CallSession::input_device() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.input_device;
+}
+
+std::string CallSession::output_device() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.output_device;
 }
 
 void CallSession::disconnect() {

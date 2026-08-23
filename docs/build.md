@@ -296,7 +296,9 @@ Environment variables use the `DV_` prefix, for example `DV_SIGNALING_URL`, `DV_
 The complete list is in `shared/src/config/config.cpp`.
 
 The client also reads a `config.ini` it is not told about, first beside its own executable and then under
-the user's configuration directory, with the second winning. That is how an installed client is pointed at
+the user's configuration directory, with the second winning.
+It creates the second one from `assets/config.ini`, compiled into the binary, the first time it runs, and
+writes the audio devices chosen in the settings dialog back into it. That is how an installed client is pointed at
 a server, because a shortcut carries no arguments; the ports section of [requirements.md](requirements.md)
 and the client chapter of [../INSTALL.md](../INSTALL.md) cover it. `--config=PATH` takes `.ini` or `.json`
 by extension and replaces both.

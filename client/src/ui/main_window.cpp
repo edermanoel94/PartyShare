@@ -8,6 +8,7 @@
 
 #include <QAbstractItemView>
 #include <QClipboard>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFont>
@@ -33,6 +34,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
+#include <QStyle>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -40,6 +42,7 @@
 #include "ui/admin_panel.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
+#include "ui/theme.hpp"
 
 namespace dv::ui {
 namespace {
@@ -210,7 +213,7 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   QFont small = metrics_->font();
   small.setPointSize(small.pointSize() - 1);
   metrics_->setFont(small);
-  metrics_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+  metrics_->setProperty("hint", true);
 
   statusBar()->addWidget(status_);
   statusBar()->addWidget(quality_);
@@ -222,6 +225,11 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::show_login_error(const QString& text) {
+  login_error_->setText(text);
+  login_error_->setVisible(!text.isEmpty());
+}
 
 void MainWindow::build_login_page() {
   auto* page = new QWidget(pages_);
@@ -239,12 +247,16 @@ void MainWindow::build_login_page() {
   password_->setPlaceholderText(QStringLiteral("password"));
   connect_button_ = new QPushButton(QStringLiteral("Connect"), box);
   connect_button_->setDefault(true);
+  connect_button_->setProperty("accent", true);
+  connect_button_->setMinimumHeight(40);
 
   login_error_ = new QLabel(QString{}, box);
   login_error_->setWordWrap(true);
-  // A fixed red rather than a palette role. bright-text is white on a light
-  // theme, which is an error message nobody can read.
-  login_error_->setStyleSheet(QStringLiteral("color: #c62828;"));
+  // The colour comes from the theme rather than from a literal here. It used to
+  // be a hard coded #c62828, which is legible on a light window and very nearly
+  // invisible on a dark one.
+  login_error_->setProperty("error", true);
+  login_error_->setVisible(false);
 
   form->addRow(QStringLiteral("Username"), username_);
   form->addRow(QStringLiteral("Password"), password_);
@@ -282,10 +294,15 @@ void MainWindow::build_home_page() {
 
   create_button_ = new QPushButton(QStringLiteral("Create room"), box);
   create_button_->setMinimumHeight(44);
+  // The one filled button on this page. Creating and joining are both things
+  // somebody came here to do, but only one of them works without first having
+  // been sent a code, so that is the one the eye should land on.
+  create_button_->setProperty("accent", true);
 
   room_id_ = new QLineEdit(box);
   room_id_->setPlaceholderText(QStringLiteral("Room ID, for example 8F42A1"));
   room_id_->setAlignment(Qt::AlignCenter);
+  room_id_->setMinimumHeight(44);
 
   join_button_ = new QPushButton(QStringLiteral("Join room"), box);
   join_button_->setMinimumHeight(44);
@@ -340,7 +357,7 @@ void MainWindow::build_room_page() {
   connect(copy_room_button_, &QPushButton::clicked, this, &MainWindow::on_copy_room_id);
 
   sharing_label_ = new QLabel(QString{}, page);
-  sharing_label_->setStyleSheet(QStringLiteral("color: palette(highlight); font-weight: bold;"));
+  sharing_label_->setProperty("accent", true);
   header->addWidget(room_title_);
   header->addWidget(copy_room_button_);
   header->addStretch();
@@ -362,19 +379,25 @@ void MainWindow::build_room_page() {
   microphone_level_->setTextVisible(false);
   microphone_level_->setFixedHeight(8);
 
-  auto* volume_row = new QHBoxLayout();
+  // Stacked and not side by side. The label is a sentence and the sidebar is
+  // 240 pixels wide at its narrowest, so sharing a row left the slider about
+  // ninety of them: a control too small to aim at, beside a sentence too long
+  // to finish.
+  auto* volume_column = new QVBoxLayout();
+  volume_column->setSpacing(4);
   volume_label_ = new QLabel(QStringLiteral("Volume: select a participant"), people);
+  volume_label_->setProperty("hint", true);
   volume_ = new QSlider(Qt::Horizontal, people);
   // 0 to 200 percent: above 100 is amplification, which WebRTC allows.
   volume_->setRange(0, 200);
   volume_->setValue(100);
   volume_->setEnabled(false);
-  volume_row->addWidget(volume_label_);
-  volume_row->addWidget(volume_, 1);
+  volume_column->addWidget(volume_label_);
+  volume_column->addWidget(volume_);
 
   people_column->addWidget(microphone_level_);
   people_column->addWidget(participants_);
-  people_column->addLayout(volume_row);
+  people_column->addLayout(volume_column);
 
   auto* chat = new QGroupBox(QStringLiteral("Chat"), page);
   auto* chat_column = new QVBoxLayout(chat);
@@ -404,8 +427,12 @@ void MainWindow::build_room_page() {
   // Square and small: it sits in a sidebar that is 260 pixels wide at its
   // narrowest, and every pixel it takes is one the message field does not get.
   chat_emoji_->setFixedWidth(34);
+  // The stylesheet gives every button 18 pixels of side padding, which on a
+  // button pinned to 34 wide leaves nothing for the emoji itself.
+  chat_emoji_->setStyleSheet(QStringLiteral("padding: 0px;"));
 
   chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
+  chat_send_->setProperty("accent", true);
   chat_row->addWidget(chat_input_, 1);
   chat_row->addWidget(chat_emoji_);
   chat_row->addWidget(chat_send_);
@@ -455,6 +482,11 @@ void MainWindow::build_room_page() {
   for (QPushButton* button : {mute_button_, share_button_, settings_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
+  // What each toggle looks like when it is on. Sharing is the good state and
+  // wears the accent; a muted microphone is a warning and wears amber.
+  share_button_->setProperty("toggle", QStringLiteral("accent"));
+  mute_button_->setProperty("toggle", QStringLiteral("warn"));
+  leave_button_->setProperty("danger", true);
   controls->addWidget(mute_button_);
   controls->addWidget(share_button_);
   controls->addWidget(settings_button_);
@@ -704,18 +736,18 @@ void MainWindow::wire_session() {
 }
 
 void MainWindow::on_connect() {
-  login_error_->clear();
+  show_login_error(QString{});
   const QString user = username_->text().trimmed();
   if (user.isEmpty()) {
-    login_error_->setText(QStringLiteral("Enter a username."));
+    show_login_error(QStringLiteral("Enter a username."));
     return;
   }
 
   if (const auto connected =
           session_.connect_and_authenticate(user.toStdString(), password_->text().toStdString());
       !connected) {
-    login_error_->setText(describe(QString::fromStdString(connected.error().code),
-                                   QString::fromStdString(connected.error().message)));
+    show_login_error(describe(QString::fromStdString(connected.error().code),
+                              QString::fromStdString(connected.error().message)));
   }
 }
 
@@ -962,7 +994,7 @@ void MainWindow::apply_state(int state, const QString& detail) {
   status_->setText(text);
 
   if (state_ == client::app::CallSession::State::Failed) {
-    login_error_->setText(describe(QString{}, detail));
+    show_login_error(describe(QString{}, detail));
   }
 
   welcome_->setText(
@@ -1001,10 +1033,12 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
   metrics_->setText(summary);
 
   const auto measured = static_cast<client::app::NetworkQuality>(quality);
-  static const QHash<int, QString> kColours = {
-      {static_cast<int>(client::app::NetworkQuality::Good), QStringLiteral("#2e7d32")},
-      {static_cast<int>(client::app::NetworkQuality::Fair), QStringLiteral("#ef6c00")},
-      {static_cast<int>(client::app::NetworkQuality::Poor), QStringLiteral("#c62828")},
+  // From the theme, so the three of them follow the colour scheme along with
+  // everything else rather than staying at their light-window values.
+  const QHash<int, QColor> colours = {
+      {static_cast<int>(client::app::NetworkQuality::Good), theme::colors().success},
+      {static_cast<int>(client::app::NetworkQuality::Fair), theme::colors().warn},
+      {static_cast<int>(client::app::NetworkQuality::Poor), theme::colors().danger},
   };
 
   if (measured == client::app::NetworkQuality::Unknown) {
@@ -1015,15 +1049,23 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
       QStringLiteral("● network %1")
           .arg(QString::fromUtf8(client::app::to_string(measured).data(),
                                  static_cast<qsizetype>(client::app::to_string(measured).size()))));
-  quality_->setStyleSheet(
-      QStringLiteral("color: %1; font-weight: bold;").arg(kColours.value(quality)));
+  quality_->setStyleSheet(QStringLiteral("color: %1; font-weight: bold;")
+                              .arg(colours.value(quality, theme::colors().muted).name()));
 }
 
 void MainWindow::apply_local_level(double level, bool speaking) {
   microphone_level_->setValue(bar_percentage(level));
-  microphone_level_->setStyleSheet(
-      speaking ? QStringLiteral("QProgressBar::chunk { background-color: palette(highlight); }")
-               : QString());
+
+  // The meter turns the accent colour while somebody is actually speaking into
+  // it, which the stylesheet does off this property. Only on a change: this
+  // runs several times a second, and re-resolving a stylesheet at that rate to
+  // arrive at the colour it already had is work nobody sees.
+  if (microphone_level_->property("speaking").toBool() == speaking) {
+    return;
+  }
+  microphone_level_->setProperty("speaking", speaking);
+  microphone_level_->style()->unpolish(microphone_level_);
+  microphone_level_->style()->polish(microphone_level_);
 }
 
 void MainWindow::apply_error(const QString& code, const QString& message) {
@@ -1031,7 +1073,7 @@ void MainWindow::apply_error(const QString& code, const QString& message) {
 
   const QString text = describe(code, message);
   if (pages_->currentIndex() == kLoginPage) {
-    login_error_->setText(text);
+    show_login_error(text);
     return;
   }
   QMessageBox::warning(this, QStringLiteral("PartyShare"), text);

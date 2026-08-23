@@ -79,11 +79,51 @@ func (s *session) press(keys ...string) {
 
 func (s *session) typeText(text string) { s.model.Type(text) }
 
+// settle waits for the screen to stop changing.
+//
+// A change is answered in two parts. doneMsg draws the status line and returns
+// refresh() as a separate command, so the list that the sentence describes
+// lands a frame or more later. Quitting as soon as "was deleted" appears
+// catches the screen between the two: under GOMAXPROCS=1 that was most runs,
+// not a rare one, and it is what turned two of these tests red on a commit
+// that had not touched this program at all.
+//
+// Quiet rather than a particular string, for two reasons. What to wait for
+// differs per test, and one of them is waiting for a row to be gone, which is
+// an absence and not something a substring can be found in. And the counts in
+// the header are no substitute: refresh() batches three reads that land
+// independently, so "Users (1)" above two rows is a frame these tests have
+// actually produced.
+//
+// Bounded, because a screen with a text field on it has a blinking cursor and
+// never goes quiet. Reaching the bound is not a failure; it leaves those tests
+// looking at exactly the screen they looked at before.
+func (s *session) settle() {
+	const between = 20 * time.Millisecond
+	const enough = 3
+
+	deadline := time.Now().Add(time.Second)
+	drawn := len(s.drawn())
+	for stable := 0; stable < enough && time.Now().Before(deadline); {
+		time.Sleep(between)
+		if grown := len(s.drawn()); grown != drawn {
+			drawn = grown
+			stable = 0
+			continue
+		}
+		stable++
+	}
+}
+
 // finish stops the program and returns the last frame, which is where an
 // assertion about what is on the screen now rather than what was on it at some
 // point belongs.
+//
+// It settles first, so that "now" means the screen an operator would be
+// looking at rather than whichever half of a change happened to have arrived.
 func (s *session) finish(t *testing.T) string {
 	t.Helper()
+	s.settle()
 	if err := s.model.Quit(); err != nil {
 		t.Fatalf("could not quit: %v", err)
 	}

@@ -257,7 +257,24 @@ class Engine {
     // ordering explicit instead of incidental, and this call is what libwebrtc
     // offers embedders in that position.
     preload_transport();
+
+    // All of which is true wherever the two copies collapse into one, and
+    // false on Windows, where they do not. Here vcpkg builds libsrtp as
+    // srtp2.dll and libdatachannel imports it, while libwebrtc keeps its own
+    // copy statically inside the executable - dumpbin shows datachannel.dll
+    // importing srtp2.dll and the executable importing no such thing. Two
+    // libraries, two crypto kernels, no conflict to avoid.
+    //
+    // Prohibiting the initialisation there does not prevent a clash, it
+    // creates one: libwebrtc's kernel is then never initialised at all, and
+    // srtp_create() answers init_fail. The symptom is the same one this whole
+    // comment is about - ICE connects, DTLS completes, no packet is ever
+    // encrypted - which is why it has to be said out loud that the cure and
+    // the disease look identical from the outside. Tell them apart by the
+    // error: err=2 at srtp_init is the clash, err=5 at srtp_create is this.
+#ifndef _WIN32
     webrtc::ProhibitLibsrtpInitialization();
+#endif
 
     webrtc::InitializeSSL();
 

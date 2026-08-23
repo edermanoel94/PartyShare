@@ -14,8 +14,17 @@
 #
 # --ssl-root builds without the bundled BoringSSL, against the OpenSSL headers
 # in that directory, and marks the tree DV_EXTERNAL_SSL so the consumer links an
-# OpenSSL of its own. Required on macOS, where ld64 refuses the 932 duplicate
-# symbols the two SSLs produce in one binary.
+# OpenSSL of its own.
+#
+# Needed wherever the binary that consumes libwebrtc also links OpenSSL, which
+# here is anything joining the client media layer to dv_server_core: the SFU
+# links OpenSSL::Crypto, libwebrtc carries BoringSSL, and the two define the
+# same names. That is every platform this project builds on, not only macOS.
+#
+# macOS was where it was noticed, because ld64 refuses the 932 duplicate
+# symbols outright. GNU ld refuses them too - SSL_new, OBJ_nid2ln,
+# X509_SIG_get0 and the rest come back as "multiple definition" while linking
+# dv_media_tests. The Windows archive is already published built this way.
 #
 # The result is a tree that cmake/Findlibwebrtc.cmake consumes directly:
 #   <out>/dist/include/...

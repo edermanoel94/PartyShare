@@ -477,7 +477,7 @@ jobs:
             libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev \
             libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
             libglib2.0-dev libgbm-dev libdrm-dev libpipewire-0.3-dev \
-            pulseaudio pulseaudio-utils
+            libssl-dev pulseaudio pulseaudio-utils
 
       - name: Restore the libwebrtc build
         id: webrtc-cache
@@ -486,9 +486,17 @@ jobs:
           path: ~/.cache/partyshare/webrtc/dist
           key: webrtc-ubuntu-24.04-x64-${{ hashFiles('scripts/build_webrtc.sh', 'patches/webrtc/**') }}
 
+      # --ssl-root, because dv_media_tests links dv_server_core, which links
+      # OpenSSL::Crypto, and a libwebrtc carrying its own BoringSSL then puts
+      # two definitions of SSL_new and several hundred of its neighbours in one
+      # binary. GNU ld calls that "multiple definition" and stops.
+      #
+      # The system headers rather than vcpkg's: this step runs before vcpkg is
+      # prepared, and it only needs the declarations. Which OpenSSL is actually
+      # linked is the consumer's decision, which is the whole point of the flag.
       - name: Build libwebrtc
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
-        run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
+        run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc --ssl-root /usr/include
 
       - name: Prepare vcpkg
         run: scripts/ci_vcpkg.sh

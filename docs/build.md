@@ -116,10 +116,32 @@ The difference between the two paths, and the numbers measured with each, are in
 ### Hardware encoder
 
 The screen share is encoded by the graphics card when there is one, and by the processor when there is not.
-On Linux the backend is NVENC, on by default and switchable off with `-DDV_HARDWARE_ENCODER_NVENC=OFF`.
 
-Nothing is linked: `libnvidia-encode.so.1` and `libcuda.so.1` are opened at runtime, so the same binary runs on a machine without an NVIDIA card.
-The API header is in `third_party/nvcodec`, with its provenance alongside.
+| Backend | Where | Reaches | Off with |
+| --- | --- | --- | --- |
+| NVENC | Linux, Windows | NVIDIA | `-DDV_HARDWARE_ENCODER_NVENC=OFF` |
+| Media Foundation | Windows | NVIDIA, Intel QuickSync, AMD VCN | `-DDV_HARDWARE_ENCODER_MEDIA_FOUNDATION=OFF` |
+
+Neither on macOS: NVENC needs an NVIDIA driver, and macOS has had none since Mojave. VideoToolbox is the answer there and is not written yet.
+
+A Windows build carries both, and that is the point of them being a list rather than a compile-time choice — the machine running the binary is the only one that knows which card is in it.
+The list is probed in order and the first one that finds usable hardware wins, NVENC first: on an NVIDIA machine the Media Foundation transform is a wrapper around NVENC anyway, so going through it would add a layer and take away control.
+When none of them finds anything, every backend's reason is reported, not just the last one.
+
+`DV_HARDWARE_ENCODER=nvenc` or `=mediafoundation` picks one by name, and `=none` refuses all of them.
+Naming one is how the two get compared against each other, and it is also how the test suite covers the second backend on a machine where the first one always wins.
+
+Nothing is linked. Every library is opened at runtime through `client/src/webrtc/dynamic_library.hpp`:
+
+| Library | Linux | Windows |
+| --- | --- | --- |
+| CUDA driver | `libcuda.so.1` | `nvcuda.dll` |
+| NVENC | `libnvidia-encode.so.1` | `nvEncodeAPI64.dll` |
+| Media Foundation | — | `mfplat.dll` |
+
+That is not caution for its own sake. `mfplat.dll` is absent on the Windows N and KN editions, which ship without the Media Feature Pack, and an executable that imported it would fail to start there rather than fall back to software.
+`mfuuid.lib` and `strmiids.lib` are linked, which is not a contradiction: they are static libraries of GUID constants, bytes in the executable, with no DLL behind them.
+The NVENC API header is in `third_party/nvcodec`, with its provenance alongside.
 
 Which encoder is running shows up in the log at every metrics interval, read from libwebrtc's statistics:
 

@@ -6,10 +6,16 @@
 // on Linux and Windows, and it is what could actually be verified on the
 // machine this was written on.
 //
-// Nothing here is linked. libnvidia-encode comes with the driver and is opened
-// at runtime, so a binary built with this file runs unchanged on a machine
-// with no NVIDIA card at all: the support query answers no and the software
-// encoder is used.
+// Nothing here is linked. The encoder library comes with the driver and is
+// opened at runtime, so a binary built with this file runs unchanged on a
+// machine with no NVIDIA card at all: the support query answers no and the
+// software encoder is used.
+//
+// The two systems differ in exactly two things, both of them in probe(): what
+// the libraries are called, and which call opens them. The second one lives in
+// webrtc/dynamic_library.hpp. Everything below that - the CUDA context, the
+// session, the buffers, the rate control - is the same API on both, which is
+// why this file is not two files.
 
 #include "webrtc/hardware_encoder.hpp"
 
@@ -27,18 +33,38 @@
 #include <api/video_codecs/h264_profile_level_id.h>
 #include <api/video_codecs/video_codec.h>
 #include <api/video_codecs/video_encoder.h>
-#include <dlfcn.h>
 #include <modules/video_coding/include/video_codec_interface.h>
 #include <modules/video_coding/include/video_error_codes.h>
 
 #include <dv/logging/logger.hpp>
 
 #include "nvEncodeAPI.h"
+#include "webrtc/dynamic_library.hpp"
+#include "webrtc/hardware_encoder_backend.hpp"
 
 namespace dv::client::media {
 namespace {
 
+/// What the two driver libraries are called here.
+///
+/// Constants rather than literals at the call, because each one is used twice:
+/// to open the library and to say which one is missing when it will not open.
+/// Before this the messages named the Linux files, and on Windows "libcuda.so.1
+/// is not installed" is a sentence that helps nobody.
+#if defined(_WIN32)
+constexpr const char* kCudaLibrary = "nvcuda.dll";
+constexpr const char* kEncodeLibrary = "nvEncodeAPI64.dll";
+#else
+constexpr const char* kCudaLibrary = "libcuda.so.1";
+constexpr const char* kEncodeLibrary = "libnvidia-encode.so.1";
+#endif
+
 /// The slice of the CUDA driver API this needs.
+///
+/// The pointers carry no calling convention. On Windows the CUDA driver is
+/// __stdcall, but x64 has one convention and the attribute is ignored there,
+/// and this project is x64 only. It would matter on 32 bit Windows, which is
+/// not a target.
 ///
 /// Declared here rather than vendored: NVENC needs a CUDA context to hang an
 /// encoder session on, and creating one is five functions. Pulling in the
@@ -102,28 +128,24 @@ class Nvenc {
   Nvenc() { probe(); }
 
   void probe() {
-    cuda_library_ = ::dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (cuda_library_ == nullptr) {
-      detail_ = "libcuda.so.1 is not installed, so there is no NVIDIA driver here";
+    if (!cuda_library_.open(kCudaLibrary)) {
+      detail_ = std::string(kCudaLibrary) + " is not installed, so there is no NVIDIA driver here";
       return;
     }
 
-    cuda_.init = reinterpret_cast<CudaApi::Init>(::dlsym(cuda_library_, "cuInit"));
-    cuda_.device_count =
-        reinterpret_cast<CudaApi::DeviceGetCount>(::dlsym(cuda_library_, "cuDeviceGetCount"));
-    cuda_.device_get = reinterpret_cast<CudaApi::DeviceGet>(::dlsym(cuda_library_, "cuDeviceGet"));
-    cuda_.device_name =
-        reinterpret_cast<CudaApi::DeviceGetName>(::dlsym(cuda_library_, "cuDeviceGetName"));
-    cuda_.context_create =
-        reinterpret_cast<CudaApi::CtxCreate>(::dlsym(cuda_library_, "cuCtxCreate_v2"));
-    cuda_.context_destroy =
-        reinterpret_cast<CudaApi::CtxDestroy>(::dlsym(cuda_library_, "cuCtxDestroy_v2"));
-    cuda_.context_push =
-        reinterpret_cast<CudaApi::CtxPushCurrent>(::dlsym(cuda_library_, "cuCtxPushCurrent_v2"));
-    cuda_.context_pop =
-        reinterpret_cast<CudaApi::CtxPopCurrent>(::dlsym(cuda_library_, "cuCtxPopCurrent_v2"));
+    // The _v2 names are the same on both systems: they are what the CUDA
+    // driver has exported since the API was versioned, on Linux and Windows
+    // alike.
+    cuda_.init = symbol_as<CudaApi::Init>(cuda_library_, "cuInit");
+    cuda_.device_count = symbol_as<CudaApi::DeviceGetCount>(cuda_library_, "cuDeviceGetCount");
+    cuda_.device_get = symbol_as<CudaApi::DeviceGet>(cuda_library_, "cuDeviceGet");
+    cuda_.device_name = symbol_as<CudaApi::DeviceGetName>(cuda_library_, "cuDeviceGetName");
+    cuda_.context_create = symbol_as<CudaApi::CtxCreate>(cuda_library_, "cuCtxCreate_v2");
+    cuda_.context_destroy = symbol_as<CudaApi::CtxDestroy>(cuda_library_, "cuCtxDestroy_v2");
+    cuda_.context_push = symbol_as<CudaApi::CtxPushCurrent>(cuda_library_, "cuCtxPushCurrent_v2");
+    cuda_.context_pop = symbol_as<CudaApi::CtxPopCurrent>(cuda_library_, "cuCtxPopCurrent_v2");
     if (!cuda_.complete()) {
-      detail_ = "libcuda.so.1 is missing symbols this needs";
+      detail_ = std::string(kCudaLibrary) + " is missing symbols this needs";
       return;
     }
 
@@ -154,20 +176,19 @@ class Nvenc {
       }
     }
 
-    encode_library_ = ::dlopen("libnvidia-encode.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (encode_library_ == nullptr) {
-      detail_ = "libnvidia-encode.so.1 is not installed, so this driver has no encoder";
+    if (!encode_library_.open(kEncodeLibrary)) {
+      detail_ = std::string(kEncodeLibrary) + " is not installed, so this driver has no encoder";
       return;
     }
 
-    using CreateInstance = NVENCSTATUS (*)(NV_ENCODE_API_FUNCTION_LIST*);
-    auto* create =
-        reinterpret_cast<CreateInstance>(::dlsym(encode_library_, "NvEncodeAPICreateInstance"));
-    using MaxVersion = NVENCSTATUS (*)(uint32_t*);
-    auto* max_version =
-        reinterpret_cast<MaxVersion>(::dlsym(encode_library_, "NvEncodeAPIGetMaxSupportedVersion"));
+    // NVENCAPI is __stdcall on Windows and nothing on Linux, and nvEncodeAPI.h
+    // has already applied it to these two through NVENCAPI_PROTOTYPE.
+    using CreateInstance = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
+    auto* create = symbol_as<CreateInstance>(encode_library_, "NvEncodeAPICreateInstance");
+    using MaxVersion = NVENCSTATUS(NVENCAPI*)(uint32_t*);
+    auto* max_version = symbol_as<MaxVersion>(encode_library_, "NvEncodeAPIGetMaxSupportedVersion");
     if (create == nullptr) {
-      detail_ = "libnvidia-encode.so.1 has no NvEncodeAPICreateInstance";
+      detail_ = std::string(kEncodeLibrary) + " has no NvEncodeAPICreateInstance";
       return;
     }
 
@@ -197,8 +218,10 @@ class Nvenc {
     detail_ = device_name_.empty() ? "NVENC is available" : "NVENC on " + device_name_;
   }
 
-  void* cuda_library_ = nullptr;
-  void* encode_library_ = nullptr;
+  /// Closed when this singleton is destroyed, which is at process exit, long
+  /// after the last encoder that was holding a context on them.
+  DynamicLibrary cuda_library_;
+  DynamicLibrary encode_library_;
   CudaApi cuda_;
   NV_ENCODE_API_FUNCTION_LIST api_{};
   int device_ = 0;
@@ -665,20 +688,13 @@ class NvencVideoEncoder : public webrtc::VideoEncoder {
   uint32_t bitrate_bps_ = 0;
 };
 
-}  // namespace
-
-HardwareEncoderSupport hardware_encoder_support() {
+HardwareEncoderProbe probe_nvenc() {
   const Nvenc& nvenc = Nvenc::instance();
-  return HardwareEncoderSupport{
-      .compiled_in = true,
-      .available = nvenc.available(),
-      .implementation = "NVENC",
-      .detail = nvenc.detail(),
-  };
+  return HardwareEncoderProbe{.available = nvenc.available(), .detail = nvenc.detail()};
 }
 
-std::unique_ptr<webrtc::VideoEncoder> create_hardware_encoder(
-    const webrtc::Environment& /*env*/, const webrtc::SdpVideoFormat& format) {
+std::unique_ptr<webrtc::VideoEncoder> create_nvenc_encoder(const webrtc::Environment& /*env*/,
+                                                           const webrtc::SdpVideoFormat& format) {
   if (!Nvenc::instance().available()) {
     return nullptr;
   }
@@ -689,6 +705,17 @@ std::unique_ptr<webrtc::VideoEncoder> create_hardware_encoder(
     return nullptr;
   }
   return std::make_unique<NvencVideoEncoder>();
+}
+
+}  // namespace
+
+HardwareEncoderBackend nvenc_backend() {
+  return HardwareEncoderBackend{
+      .name = "NVENC",
+      .slug = "nvenc",
+      .probe = &probe_nvenc,
+      .create = &create_nvenc_encoder,
+  };
 }
 
 }  // namespace dv::client::media

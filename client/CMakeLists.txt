@@ -61,8 +61,12 @@ if(DV_BUILD_CLIENT_MEDIA)
   option(DV_HARDWARE_ENCODER_NVENC "Build the NVENC hardware encoder backend" ON)
 
   add_library(dv_client_media STATIC
+    src/webrtc/dynamic_library.cpp
+    src/webrtc/dynamic_library.hpp
+    src/webrtc/hardware_encoder.cpp
     src/webrtc/hardware_encoder.hpp
-    src/webrtc/hardware_encoder_none.cpp
+    src/webrtc/hardware_encoder_backend.hpp
+    src/webrtc/hardware_encoder_mediafoundation.cpp
     src/webrtc/hardware_encoder_nvenc.cpp
     src/webrtc/impaired_socket_factory.cpp
     src/webrtc/impaired_socket_factory.hpp
@@ -74,18 +78,45 @@ if(DV_BUILD_CLIENT_MEDIA)
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-  # Not on Windows, for the same kind of reason it is not on Apple: the loader
-  # here is dlopen, and Windows has LoadLibrary instead. Porting it is real work
-  # on a path nobody has measured on this platform yet, and a hardware encoder
-  # that fails to compile is worse than one that is absent, because absent is
-  # what the software encoder is for.
-  if(DV_HARDWARE_ENCODER_NVENC AND NOT APPLE AND NOT WIN32)
+  # Only for dlopen, which webrtc/dynamic_library.cpp needs whether or not a
+  # backend is built on top of it. Empty on the platforms that keep it in libc,
+  # and on Windows, where the loader is LoadLibrary and lives in kernel32.
+  target_link_libraries(dv_client_media PRIVATE ${CMAKE_DL_LIBS})
+
+  # Not on Apple: NVENC needs an NVIDIA driver, and macOS has had no NVIDIA
+  # driver since Mojave. VideoToolbox is the answer there and is not written
+  # yet.
+  #
+  # Windows is in, since the port of the loader. The API above it is the same
+  # on both systems; what differed was dlopen against LoadLibrary and the file
+  # names of the two driver libraries.
+  if(DV_HARDWARE_ENCODER_NVENC AND NOT APPLE)
     target_compile_definitions(dv_client_media PRIVATE DV_WITH_NVENC)
     target_include_directories(dv_client_media PRIVATE
       ${CMAKE_SOURCE_DIR}/third_party/nvcodec)
-    # Only for dlopen: the encoder itself is found at runtime.
-    target_link_libraries(dv_client_media PRIVATE ${CMAKE_DL_LIBS})
-    message(STATUS "Hardware encoder: NVENC")
+    list(APPEND dv_hardware_encoders NVENC)
+  endif()
+
+  # Windows only, and the reason it exists next to NVENC rather than instead of
+  # it: NVENC reaches NVIDIA cards and nothing else, and Media Foundation is
+  # how Intel QuickSync and AMD VCN are reached. A build carries both and the
+  # machine that runs it decides, because a compile-time choice cannot know
+  # which card is in the machine the binary ends up on.
+  option(DV_HARDWARE_ENCODER_MEDIA_FOUNDATION
+         "Build the Media Foundation hardware encoder backend" ON)
+
+  if(DV_HARDWARE_ENCODER_MEDIA_FOUNDATION AND WIN32)
+    target_compile_definitions(dv_client_media PRIVATE DV_WITH_MEDIA_FOUNDATION)
+    # GUID constants only. These are static libraries of bytes, not import
+    # libraries, so linking them adds no DLL the executable needs at startup -
+    # which matters, because mfplat.dll itself is deliberately not linked.
+    target_link_libraries(dv_client_media PRIVATE mfuuid strmiids)
+    list(APPEND dv_hardware_encoders "Media Foundation")
+  endif()
+
+  if(dv_hardware_encoders)
+    list(JOIN dv_hardware_encoders ", " dv_hardware_encoder_list)
+    message(STATUS "Hardware encoders: ${dv_hardware_encoder_list}")
   else()
     message(STATUS "Hardware encoder: none, the screen is encoded in software")
   endif()

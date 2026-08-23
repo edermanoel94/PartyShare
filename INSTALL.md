@@ -279,7 +279,10 @@ Both take effect at once, including mid-call: a share that is running restarts o
 30 fps is right for a document or an editor; 60 is for what 30 makes unwatchable, which is scrolling, a terminal redrawing, anything animated.
 The resolution is a ceiling and not the size sent — a monitor is fitted inside it with its shape kept, so 1080p on a 3440x1440 ultrawide sends 1920x802 and never a stretched 1920x1080, and a monitor smaller than the box is sent untouched rather than upscaled.
 
-Raising either asks more of the encoder, and the dialog says so when the maximum bitrate below is lower than what the choice is worth — 1080p at 60 is worth around four times what 720p at 30 is.
+Raising either asks more of the encoder, and 1080p at 60 asks a lot: on an NVIDIA card it is encoded by the card and costs almost no processor, and without one it is encoded in software and costs a great deal.
+Which one is happening is in the log, and [docs/build.md](docs/build.md) explains how to read it.
+
+The dialog also says something when the maximum bitrate below is lower than what the choice is worth — 1080p at 60 is worth around four times what 720p at 30 is.
 It says it rather than doing it: a ceiling you set to fit your link is not one the client should raise behind your back.
 The configuration is free to name a size or a rate the dialog does not offer, `width = 2560` is perfectly valid, and the dialog then shows that as a row of its own instead of quietly rounding you down to 720p.
 

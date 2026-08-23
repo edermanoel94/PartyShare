@@ -127,6 +127,7 @@ endif()
 # DTLS take real time, and they are labelled separately for that reason.
 if(DV_BUILD_CLIENT_MEDIA)
   add_executable(dv_media_tests
+    integration/test_hardware_encoder.cpp
     integration/test_media_end_to_end.cpp
     integration/test_network_impairment.cpp
     integration/test_screen_capture.cpp
@@ -145,6 +146,25 @@ if(DV_BUILD_CLIENT_MEDIA)
     PROPERTIES LABELS media TIMEOUT 180
     DISCOVERY_TIMEOUT 60
   )
+
+  # The Media Foundation backend, named explicitly.
+  #
+  # Without this it is never reached on a machine that has an NVIDIA card: the
+  # chain probes NVENC first and NVENC wins, so the discovered run above only
+  # ever covers one of the two backends. This runs the same test again with the
+  # other one selected, which is the only way both are covered on one machine.
+  #
+  # It skips itself where there is no Media Foundation encoder, the same way
+  # the discovered one skips where there is no hardware at all.
+  if(WIN32)
+    add_test(NAME HardwareEncoderTest.MediaFoundationEncodesH264
+      COMMAND dv_media_tests --gtest_filter=HardwareEncoderTest.EncodesH264OnThisMachine)
+    set_tests_properties(HardwareEncoderTest.MediaFoundationEncodesH264 PROPERTIES
+      ENVIRONMENT "DV_HARDWARE_ENCODER=mediafoundation"
+      LABELS media
+      TIMEOUT 180
+    )
+  endif()
 
   # The benchmarks of section 22 of SPEC.md. A target of their own because they
   # hold a call of five for half a minute, which nobody wants in the suite that

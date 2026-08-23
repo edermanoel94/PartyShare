@@ -414,21 +414,30 @@ QSlider::sub-page:horizontal {
   height: 6px;
   border-radius: 3px;
 }
+/* The vertical margin is what gives the handle its height: Qt grows it out of
+   the 6 pixel groove, half of the difference on each side. -4 against a 14
+   pixel width is the circle the radius below assumes; a bigger margin makes an
+   ellipse, and one bigger than the row makes an ellipse the widget clips. */
 QSlider::handle:horizontal {
   background: @{surface};
   border: 2px solid @{accent};
   width: 14px;
-  height: 14px;
-  margin: -6px 0;
-  border-radius: 9px;
+  margin: -4px 0;
+  border-radius: 7px;
 }
 QSlider::handle:horizontal:hover {
   background: @{accent_soft};
 }
-QSlider:disabled::sub-page:horizontal {
+/* The state comes after the sub-control, never before it. Written the other
+   way round Qt keeps the rule and forgets the sub-control, so `QSlider:disabled`
+   painted `border_strong` over the whole widget: a slab behind a groove that
+   stayed accent coloured, which is what the volume slider looked like with
+   nobody selected. */
+QSlider::sub-page:horizontal:disabled {
   background: @{border_strong};
 }
-QSlider:disabled::handle:horizontal {
+QSlider::handle:horizontal:disabled {
+  background: @{surface};
   border-color: @{border_strong};
 }
 

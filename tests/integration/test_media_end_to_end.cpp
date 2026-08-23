@@ -9,8 +9,14 @@
 // tree from docs/webrtc-toolchain.md.
 //
 // Set DV_AUDIO_NULL_DEVICE=1 to run them on a machine with no sound card. The
-// negotiation cases still pass; the ones that assert audio actually flowing
-// cannot, because a null device captures nothing.
+// negotiation cases still pass. The cases that assert something *about*
+// captured audio, which is both echo canceller cases, skip themselves: with
+// nothing captured there is nothing for a canceller to run on, and neither
+// answer would mean anything.
+//
+// MetricsAreCollectedFromTheRealConnection still fails there, and should. Its
+// assertion is that audio flows, so skipping it when audio does not flow would
+// leave a test that cannot fail.
 
 #include "media_test_client.hpp"
 
@@ -94,6 +100,14 @@ TEST_F(MediaEndToEndTest, TheEchoCancellerRunsOnTheCapturedAudio) {
   ASSERT_TRUE(bruno.join(room));
   ASSERT_TRUE(bruno.wait_until_in_call());
 
+  // An echo canceller processes captured audio, so with nothing captured
+  // there is nothing to assert either way. Skipped rather than failed: a
+  // headset that is switched off is not a defect in this program.
+  if (!ana.wait_until_sending_audio()) {
+    GTEST_SKIP() << "this machine captured no audio, so there is nothing for the echo canceller "
+                    "to run on";
+  }
+
   // Section 9 of SPEC.md requires AEC3. Whether it is configured is a matter
   // of reading the source, so what is asserted is the one thing libwebrtc
   // reports only while the echo controller is really processing capture: echo
@@ -118,9 +132,13 @@ TEST_F(MediaEndToEndTest, TurningTheEchoCancellerOffStopsIt) {
   ASSERT_TRUE(ana.join(room));
   ASSERT_TRUE(ana.wait_until_in_call());
 
-  // Wait for the pipeline to be running at all, then check that the echo
-  // canceller specifically is not part of it.
-  ASSERT_TRUE(wait_until([&] { return ana.session().stats().bytes_sent > 0; }));
+  // The pipeline has to be running before "the echo canceller is not part of
+  // it" means anything: on a machine that captures nothing, it is not part of
+  // it either way and the assertion below would pass for the wrong reason.
+  // Skipped rather than failed, and rather than passed.
+  if (!ana.wait_until_sending_audio()) {
+    GTEST_SKIP() << "this machine captured no audio, so an idle echo canceller proves nothing";
+  }
   std::this_thread::sleep_for(1500ms);
 
   EXPECT_FALSE(ana.session().stats().echo_cancellation_active)

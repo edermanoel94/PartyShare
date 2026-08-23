@@ -121,6 +121,22 @@ class Client {
     return wait_until([this] { return state_.load() == CallSession::State::InCall; });
   }
 
+  /// True once captured audio has actually left this machine.
+  ///
+  /// A different question from whether the call connected, and from whether a
+  /// device is listed. Windows enumerates a wireless headset that is switched
+  /// off, a permission prompt can silence an input that still appears in the
+  /// list, and DV_AUDIO_NULL_DEVICE captures nothing on purpose. All three
+  /// give a session that negotiates, connects, and sends not one byte.
+  ///
+  /// A test that asserts something about captured audio has to tell that apart
+  /// from the thing it is testing. Otherwise it reports a broken echo canceller
+  /// every time somebody's headset is off, which is a bug report pointing at
+  /// the wrong half of the program.
+  [[nodiscard]] bool wait_until_sending_audio() {
+    return wait_until([this] { return session_->stats().bytes_sent > 0; });
+  }
+
   [[nodiscard]] CallSession& session() { return *session_; }
   [[nodiscard]] media::AudioStats last_stats() const { return last_stats_; }
   [[nodiscard]] double highest_local_level() const { return highest_local_level_.load(); }

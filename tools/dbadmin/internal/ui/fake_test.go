@@ -29,11 +29,20 @@ type fakeDatabase struct {
 
 	// What was asked of it, in order, so that a test can say "the screen sent
 	// a create with this role" rather than inferring it from a redraw.
-	created   []store.NewAccount
-	updated   []store.Account
-	passwords []string
-	deleted   []string
-	queries   []store.AuditQuery
+	created    []store.NewAccount
+	updated    []store.Account
+	passwords  []string
+	restricted []restrictionCall
+	deleted    []string
+	queries    []store.AuditQuery
+}
+
+// restrictionCall is one SetRestrictions, kept whole so that a test can say
+// which of the four flags the screen actually sent rather than inferring it
+// from a redraw.
+type restrictionCall struct {
+	userID       string
+	restrictions store.Restrictions
 }
 
 func (f *fakeDatabase) Database() string   { return "partyshare_test" }
@@ -120,6 +129,22 @@ func (f *fakeDatabase) SetPassword(_ context.Context, userID, password string) e
 		return f.failure
 	}
 	f.append(store.ActionUpdateUser, userID, "password")
+	return nil
+}
+
+func (f *fakeDatabase) SetRestrictions(
+	_ context.Context, userID string, restrictions store.Restrictions) error {
+	defer f.lock()()
+	f.restricted = append(f.restricted, restrictionCall{userID: userID, restrictions: restrictions})
+	if f.failure != nil {
+		return f.failure
+	}
+	for i, account := range f.accounts {
+		if account.UserID == userID {
+			f.accounts[i].Restrictions = restrictions
+		}
+	}
+	f.append(store.ActionRestrictUser, userID, restrictions.Describe())
 	return nil
 }
 

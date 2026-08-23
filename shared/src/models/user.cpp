@@ -14,4 +14,31 @@ Role role_from_string(std::string_view name) noexcept {
   return name == "admin" ? Role::Admin : Role::User;
 }
 
+std::string describe(const Restrictions& restrictions) {
+  // The wire names, in the order the struct declares them, so that two
+  // accounts carrying the same restrictions produce the same line and an audit
+  // log can be read by eye without sorting anything.
+  std::string text;
+  const auto append = [&text](std::string_view name) {
+    if (!text.empty()) {
+      text += ' ';
+    }
+    text += name;
+  };
+
+  if (restrictions.banned) {
+    append("banned");
+  }
+  if (restrictions.muted) {
+    append("muted");
+  }
+  if (restrictions.silenced) {
+    append("silenced");
+  }
+  if (restrictions.screen_share_blocked) {
+    append("screen_share_blocked");
+  }
+  return text;
+}
+
 }  // namespace dv::models

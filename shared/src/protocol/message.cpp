@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/protocol.md must match.
-constexpr std::array<TypeMapping, 34> kTypeMappings{{
+constexpr std::array<TypeMapping, 36> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -41,6 +41,8 @@ constexpr std::array<TypeMapping, 34> kTypeMappings{{
     {.type = MessageType::KickUser, .name = "kick_user"},
     {.type = MessageType::UserKicked, .name = "user_kicked"},
     {.type = MessageType::ForceMute, .name = "force_mute"},
+    {.type = MessageType::RestrictUser, .name = "restrict_user"},
+    {.type = MessageType::UserRestricted, .name = "user_restricted"},
     {.type = MessageType::ListUsers, .name = "list_users"},
     {.type = MessageType::UserList, .name = "user_list"},
     {.type = MessageType::CreateUser, .name = "create_user"},
@@ -125,6 +127,22 @@ class FieldReader {
     return field->get<bool>();
   }
 
+  /// The boolean counterpart of maybe_string, and there for the same reason.
+  /// `restrict_user` has to tell "lift this" apart from "leave this alone", and
+  /// a flag that read as false when absent would make every request a claim
+  /// about all four restrictions.
+  std::optional<bool> maybe_boolean(std::string_view key) {
+    const json* field = find(key);
+    if (field == nullptr || field->is_null()) {
+      return std::nullopt;
+    }
+    if (!field->is_boolean()) {
+      fail("invalid_type", key, "expected a boolean");
+      return std::nullopt;
+    }
+    return field->get<bool>();
+  }
+
   std::int64_t optional_integer(std::string_view key, std::int64_t fallback = 0) {
     const json* field = find(key);
     if (field == nullptr || field->is_null()) {
@@ -149,6 +167,31 @@ class FieldReader {
     return field->get<int>();
   }
 
+  /// Absent, null, or a flag missing from inside it, all read as "nothing is
+  /// taken away". A client or a database from before restrictions existed
+  /// sends no such object, and must not acquire a ban by omission any more
+  /// than it acquires the administrator role by omitting `role`.
+  models::Restrictions restrictions(std::string_view key) {
+    const json* field = find(key);
+    if (field == nullptr || field->is_null()) {
+      return {};
+    }
+    if (!field->is_object()) {
+      fail("invalid_type", key, "expected an object");
+      return {};
+    }
+    FieldReader nested(*field);
+    models::Restrictions value;
+    value.banned = nested.boolean("banned");
+    value.muted = nested.boolean("muted");
+    value.silenced = nested.boolean("silenced");
+    value.screen_share_blocked = nested.boolean("screen_share_blocked");
+    if (!nested.ok()) {
+      fail(nested.error().code, key, nested.error().message);
+    }
+    return value;
+  }
+
   models::User user(std::string_view key) {
     const json* field = require(key);
     if (field == nullptr) {
@@ -167,6 +210,7 @@ class FieldReader {
     // from before roles existed sends no field, and must not become an
     // administrator by omission.
     value.role = models::role_from_string(nested.optional_string("role"));
+    value.restrictions = nested.restrictions("restrictions");
     if (!nested.ok()) {
       fail(nested.error().code, key, nested.error().message);
     }
@@ -269,11 +313,23 @@ class FieldReader {
   std::optional<Error> error_;
 };
 
+/// Always written, even when nothing is taken away, so that a reader never has
+/// to tell "no restrictions" apart from "a sender that does not know about
+/// them". Both mean the same thing here, and writing the object anyway is what
+/// keeps a packet capture readable without that reasoning.
+json restrictions_to_json(const models::Restrictions& restrictions) {
+  return json{{"banned", restrictions.banned},
+              {"muted", restrictions.muted},
+              {"silenced", restrictions.silenced},
+              {"screen_share_blocked", restrictions.screen_share_blocked}};
+}
+
 json user_to_json(const models::User& user) {
   return json{{"id", user.id},
               {"display_name", user.display_name},
               {"avatar", user.avatar},
-              {"role", models::to_string(user.role)}};
+              {"role", models::to_string(user.role)},
+              {"restrictions", restrictions_to_json(user.restrictions)}};
 }
 
 json user_summary_to_json(const UserSummary& summary) {
@@ -461,6 +517,12 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, ForceMute>) {
           return MessageType::ForceMute;
         }
+        if constexpr (std::is_same_v<T, RestrictUser>) {
+          return MessageType::RestrictUser;
+        }
+        if constexpr (std::is_same_v<T, UserRestricted>) {
+          return MessageType::UserRestricted;
+        }
         if constexpr (std::is_same_v<T, ListUsers>) {
           return MessageType::ListUsers;
         }
@@ -570,6 +632,27 @@ std::string serialize(const Message& message) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
           root["muted"] = value.muted;
+        } else if constexpr (std::is_same_v<T, RestrictUser>) {
+          root["user_id"] = value.user_id;
+          root["reason"] = value.reason;
+          // Only the flags that were actually asked about. Writing the absent
+          // ones as null would be the same message on the wire, and writing
+          // them as false would turn "leave this alone" into "lift this".
+          const auto write = [&root](const char* key, const std::optional<bool>& flag) {
+            if (flag.has_value()) {
+              root[key] = *flag;
+            }
+          };
+          write("banned", value.banned);
+          write("muted", value.muted);
+          write("silenced", value.silenced);
+          write("screen_share_blocked", value.screen_share_blocked);
+        } else if constexpr (std::is_same_v<T, UserRestricted>) {
+          root["user_id"] = value.user_id;
+          root["restrictions"] = restrictions_to_json(value.restrictions);
+          root["by_user_id"] = value.by_user_id;
+          root["reason"] = value.reason;
+          root["room_id"] = value.room_id;
         } else if constexpr (std::is_same_v<T, ListUsers> || std::is_same_v<T, ListRooms>) {
           // No payload at all. The type is the whole message.
         } else if constexpr (std::is_same_v<T, UserList>) {
@@ -805,6 +888,25 @@ Result<Message> parse(std::string_view json_text) {
       value.room_id = reader.string("room_id");
       value.user_id = reader.string("user_id");
       value.muted = reader.require_boolean("muted");
+      return finish(reader, value);
+    }
+    case MessageType::RestrictUser: {
+      RestrictUser value;
+      value.user_id = reader.string("user_id");
+      value.banned = reader.maybe_boolean("banned");
+      value.muted = reader.maybe_boolean("muted");
+      value.silenced = reader.maybe_boolean("silenced");
+      value.screen_share_blocked = reader.maybe_boolean("screen_share_blocked");
+      value.reason = reader.optional_string("reason");
+      return finish(reader, value);
+    }
+    case MessageType::UserRestricted: {
+      UserRestricted value;
+      value.user_id = reader.string("user_id");
+      value.restrictions = reader.restrictions("restrictions");
+      value.by_user_id = reader.optional_string("by_user_id");
+      value.reason = reader.optional_string("reason");
+      value.room_id = reader.optional_string("room_id");
       return finish(reader, value);
     }
     case MessageType::ListUsers:

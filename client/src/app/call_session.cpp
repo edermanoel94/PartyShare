@@ -516,6 +516,13 @@ Result<std::monostate> CallSession::force_mute(const std::string& user_id, bool 
   return signaling_.send(protocol::ForceMute{.room_id = room, .user_id = user_id, .muted = muted});
 }
 
+Result<std::monostate> CallSession::restrict_user(const protocol::RestrictUser& change) {
+  // No room is read and none is required. A restriction is about the account,
+  // which is what lets an administrator apply one to somebody who logged off
+  // an hour ago.
+  return signaling_.send(change);
+}
+
 Result<std::monostate> CallSession::list_users() {
   return signaling_.send(protocol::ListUsers{});
 }
@@ -684,6 +691,38 @@ void CallSession::handle_signal(protocol::Message message) {
     }
     if (!unmuted->by_user_id.empty() && handlers.on_forced_mute) {
       handlers.on_forced_mute(unmuted->user_id, unmuted->by_user_id, false);
+    }
+    publish_participants();
+    return;
+  }
+
+  if (const auto* restricted = std::get_if<protocol::UserRestricted>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      // Somebody who is not in this room is not in the map, and that is fine:
+      // this message reaches an administrator's session about an account with
+      // no room at all, and reaches our own session wherever we are.
+      if (const auto it = participants_.find(restricted->user_id); it != participants_.end()) {
+        it->second.user.restrictions = restricted->restrictions;
+      }
+      if (restricted->user_id == local_user_.id) {
+        // What `local_user()` answers is what the interface asks before it
+        // offers a control. Updating it here is what turns the share button
+        // off at the moment the restriction lands, rather than at the moment
+        // somebody presses it and the server says no.
+        local_user_.restrictions = restricted->restrictions;
+      }
+      handlers = callbacks_;
+    }
+
+    // The microphone and the screen share are not touched here. The server
+    // sends the ordinary `mute` and `screen_share_stopped` for those, and
+    // acting on this message as well would be the same change applied twice
+    // through two paths that can disagree.
+    if (handlers.on_restrictions_changed) {
+      handlers.on_restrictions_changed(restricted->user_id, restricted->restrictions,
+                                       restricted->by_user_id, restricted->reason);
     }
     publish_participants();
     return;

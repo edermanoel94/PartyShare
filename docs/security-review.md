@@ -75,7 +75,7 @@ This is a protocol change, so it is recorded here rather than improvised.
 
 ## 6. Privilege escalation
 
-Not part of section 17, and new with roles: once some accounts can remove and mute other people and manage the account list, "who is allowed to do this" becomes a thing that can be got wrong.
+Not part of section 17, and new with roles: once some accounts can remove and mute other people, take away what an account may do, and manage the account list, "who is allowed to do this" becomes a thing that can be got wrong.
 
 **Status: covered, and verified by tests.**
 
@@ -96,9 +96,22 @@ The panel and the context menu are hidden from anybody who is not an administrat
 The server refuses the messages themselves, and `AParticipantIsRefusedAndTheRoomIsUnchanged` sends `kick_user` from an ordinary participant over a real socket to prove it.
 
 **Nobody can be locked out of their own system.**
-An administrator may not change or delete their own account, and the last remaining administrator may not be demoted or deleted.
-Both are refused with their own error code rather than silently ignored, and both are tested.
+An administrator may not change, restrict or delete their own account, and the last remaining administrator may not be demoted, banned or deleted.
+All of them are refused with their own error code rather than silently ignored, and all of them are tested, here and in `tools/dbadmin`, which enforces the same two rules against the database.
 Without them, one click leaves a deployment that can only be repaired by editing the database by hand.
+
+**A restriction cannot be lifted by a message that said nothing about it.**
+`restrict_user` carries four optional booleans, and an absent one means unchanged rather than false.
+The failure that guards against is silent: an administrator unmuting somebody would otherwise also lift the ban a colleague applied a minute earlier, and the only sign of it would be that person logging in again.
+`AnAbsentFlagDoesNotLiftARestrictionSomebodyElseApplied` holds it at the Hub, and `AnAbsentRestrictionFlagIsNotFalse` holds it at the wire.
+
+A ban is enforced after the password is checked and never in its place.
+A wrong password on a banned account answers `unauthorized` with the same message any wrong password gets; only somebody holding the password is told the account is suspended.
+Answering "banned" to whoever typed a username would turn the login form into a way to enumerate accounts, which is the property `unauthorized()` exists to protect.
+
+Applying a ban revokes the account's tokens and drops its session, exactly as deleting the account does.
+Set from `tools/dbadmin` instead, with the server up, a session already open keeps working until it expires: a database tool reaches the documents and not the memory of a running process.
+That limit is stated in its README rather than papered over, and the panel in the client is the path that takes effect at once.
 
 `forbidden` and `unauthorized` are kept apart deliberately.
 The first means the server knows who is asking and the answer is still no; the second means it does not know.

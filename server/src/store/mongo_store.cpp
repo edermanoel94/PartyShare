@@ -111,6 +111,40 @@ std::int64_t int_field(const bsoncxx::document::view& document, const char* key)
   return 0;
 }
 
+/// Reads the restrictions subdocument, which an account written before it
+/// existed does not have.
+///
+/// Absent, of the wrong type, or missing a flag, all answer "nothing is taken
+/// away". Tolerant for the reason string_field is, and safe in the same
+/// direction the wire parser is: a document nobody understands must not turn
+/// into a ban.
+models::Restrictions restrictions_from(const bsoncxx::document::view& document) {
+  models::Restrictions restrictions;
+  const auto element = document["restrictions"];
+  if (!element || element.type() != bsoncxx::type::k_document) {
+    return restrictions;
+  }
+  const bsoncxx::document::view nested = element.get_document().value;
+  restrictions.banned = bool_field(nested, "banned");
+  restrictions.muted = bool_field(nested, "muted");
+  restrictions.silenced = bool_field(nested, "silenced");
+  restrictions.screen_share_blocked = bool_field(nested, "screen_share_blocked");
+  return restrictions;
+}
+
+/// Always written whole, all four flags, even when none is set.
+///
+/// A subdocument rather than four top level fields, so that one $set replaces
+/// the lot: writing them separately would let a failure land halfway and leave
+/// an account that is banned and not silenced when the administrator asked for
+/// both. It is also what makes the terminal tool's write and this one the same
+/// operation on the same shape.
+bsoncxx::document::value restrictions_to_document(const models::Restrictions& restrictions) {
+  return make_document(kvp("banned", restrictions.banned), kvp("muted", restrictions.muted),
+                       kvp("silenced", restrictions.silenced),
+                       kvp("screen_share_blocked", restrictions.screen_share_blocked));
+}
+
 Account account_from(const bsoncxx::document::view& document) {
   Account account;
   account.username = string_field(document, "username");
@@ -121,6 +155,7 @@ Account account_from(const bsoncxx::document::view& document) {
   account.user.display_name = string_field(document, "display_name");
   account.user.avatar = string_field(document, "avatar");
   account.user.role = models::role_from_string(string_field(document, "role"));
+  account.user.restrictions = restrictions_from(document);
   return account;
 }
 
@@ -130,7 +165,8 @@ bsoncxx::document::value account_to_document(const Account& account) {
       kvp("display_name", account.user.display_name), kvp("avatar", account.user.avatar),
       kvp("role", std::string(models::to_string(account.user.role))),
       kvp("salt_hex", account.salt_hex), kvp("password_hash_hex", account.password_hash_hex),
-      kvp("created_at", account.created_at));
+      kvp("created_at", account.created_at),
+      kvp("restrictions", restrictions_to_document(account.user.restrictions)));
 }
 
 RoomRecord room_from(const bsoncxx::document::view& document) {
@@ -263,12 +299,14 @@ class MongoUserStore final : public UserStore {
       const auto result = (*client)[session_.database]["users"].update_one(
           make_document(kvp("user_id", account.user.id)),
           make_document(kvp(
-              "$set", make_document(kvp("username", account.username),
-                                    kvp("display_name", account.user.display_name),
-                                    kvp("avatar", account.user.avatar),
-                                    kvp("role", std::string(models::to_string(account.user.role))),
-                                    kvp("salt_hex", account.salt_hex),
-                                    kvp("password_hash_hex", account.password_hash_hex)))));
+              "$set",
+              make_document(
+                  kvp("username", account.username), kvp("display_name", account.user.display_name),
+                  kvp("avatar", account.user.avatar),
+                  kvp("role", std::string(models::to_string(account.user.role))),
+                  kvp("salt_hex", account.salt_hex),
+                  kvp("password_hash_hex", account.password_hash_hex),
+                  kvp("restrictions", restrictions_to_document(account.user.restrictions))))));
       if (!result || result->matched_count() == 0) {
         return Error{.code = "user_not_found", .message = "no such account"};
       }

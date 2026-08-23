@@ -22,6 +22,7 @@ const (
 	usersCreate
 	usersEdit
 	usersPassword
+	usersRestrict
 	usersDelete
 	usersDetail
 )
@@ -48,6 +49,13 @@ const (
 const (
 	passwordNew = iota
 	passwordConfirm
+)
+
+const (
+	restrictBanned = iota
+	restrictMuted
+	restrictSilenced
+	restrictScreenShare
 )
 
 type usersModel struct {
@@ -112,8 +120,12 @@ var userColumns = []columnSpec{
 	{kind: columnUsername, title: "USERNAME", minimum: 10, flexible: true, priority: 0},
 	{kind: columnDisplayName, title: "DISPLAY NAME", minimum: 12, flexible: true, priority: 2},
 	{kind: columnRole, title: "ROLE", minimum: 5, priority: 1},
-	{kind: columnUserID, title: "USER ID", minimum: 14, priority: 4},
-	{kind: columnCreated, title: "CREATED", minimum: 16, priority: 3},
+	// Ahead of the date and the identifier, because the question this column
+	// answers is one somebody has while looking at the list, and the other two
+	// are looked up about an account already found.
+	{kind: columnRestrictions, title: "RESTRICTED", minimum: 11, priority: 3},
+	{kind: columnUserID, title: "USER ID", minimum: 14, priority: 5},
+	{kind: columnCreated, title: "CREATED", minimum: 16, priority: 4},
 }
 
 func (m *usersModel) columns(width int) ([]table.Column, []columnKind) {
@@ -226,9 +238,37 @@ func userCell(account store.Account, kind columnKind) string {
 			return when.Format("2006-01-02 15:04")
 		}
 		return "-"
+	case columnRestrictions:
+		return restrictionsCell(account.Restrictions)
 	case columnTime, columnActor, columnAction, columnTarget, columnDetail:
 	}
 	return ""
+}
+
+// restrictionsCell names what is taken away, short enough for a column.
+//
+// Not Describe: "screen_share_blocked" alone is twenty characters and would be
+// truncated into something unreadable in every window. These say the same four
+// things in the words a reader would use out loud, and the detail card, which
+// has the room, prints the wire names in full.
+func restrictionsCell(restrictions store.Restrictions) string {
+	if !restrictions.Any() {
+		return "-"
+	}
+	var parts []string
+	if restrictions.Banned {
+		parts = append(parts, "ban")
+	}
+	if restrictions.Muted {
+		parts = append(parts, "mic")
+	}
+	if restrictions.Silenced {
+		parts = append(parts, "chat")
+	}
+	if restrictions.ScreenShareBlocked {
+		parts = append(parts, "screen")
+	}
+	return strings.Join(parts, " ")
 }
 
 // capturesKeys says whether the screen is typing, and therefore whether the
@@ -277,6 +317,12 @@ func (m *usersModel) updateList(key tea.KeyMsg) tea.Cmd {
 	case "p":
 		if account, ok := m.selected(); ok {
 			m.openPassword(account)
+			return textinput.Blink
+		}
+		return nil
+	case "m":
+		if account, ok := m.selected(); ok {
+			m.openRestrict(account)
 			return textinput.Blink
 		}
 		return nil
@@ -402,6 +448,51 @@ func (m *usersModel) openPassword(account store.Account) {
 	m.mode = usersPassword
 }
 
+// openRestrict is the form behind the m key: what an administrator has taken
+// away from the account, all four at once.
+//
+// All four together and not one per keystroke, because a restriction is a
+// decision about a person rather than about a flag, and an operator who has
+// just read the whole set is the one qualified to write the whole set. The
+// client's per participant menu is the other case, one flag at a time, and it
+// leaves the rest absent so as not to lift somebody else's decision.
+func (m *usersModel) openRestrict(account store.Account) {
+	m.form = newForm("Restrictions for "+account.Username,
+		"These stay with the account until they are lifted, across rooms and "+
+			"across sign ins. A running server reads them back on this account's "+
+			"next message, so they take effect there without a restart. What it "+
+			"cannot do from here is end a session already open, take a microphone "+
+			"already on, or stop a share already running: those live in the memory "+
+			"of a process this program has no connection to.", "save",
+		choiceField("Cannot sign in", yesNo(), yesNoIndex(account.Restrictions.Banned),
+			"The lasting form of a kick. The last administrator cannot be banned."),
+		choiceField("Cannot use the microphone", yesNo(),
+			yesNoIndex(account.Restrictions.Muted),
+			"They arrive in a room already muted and cannot unmute themselves."),
+		choiceField("Cannot write in the chat", yesNo(),
+			yesNoIndex(account.Restrictions.Silenced),
+			"Reading the conversation is untouched."),
+		choiceField("Cannot share their screen", yesNo(),
+			yesNoIndex(account.Restrictions.ScreenShareBlocked),
+			"A share already running is stopped by the server when it reads this."),
+	)
+	m.form.width = m.width
+	m.target = account
+	m.mode = usersRestrict
+}
+
+// The two values every restriction takes. A closed choice and not a text
+// field, for the reason the role is one: a field that accepts "ys" and stores
+// a restriction nobody asked for is a worse way to say no.
+func yesNo() []string { return []string{"no", "yes"} }
+
+func yesNoIndex(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func roleChoices() []string {
 	choices := make([]string, 0, len(store.Roles))
 	for _, role := range store.Roles {
@@ -418,6 +509,8 @@ func (m *usersModel) submit() tea.Cmd {
 		return m.submitEdit()
 	case usersPassword:
 		return m.submitPassword()
+	case usersRestrict:
+		return m.submitRestrict()
 	case usersList, usersDelete, usersDetail:
 	}
 	return nil
@@ -505,9 +598,41 @@ func (m *usersModel) submitPassword() tea.Cmd {
 	}
 }
 
+func (m *usersModel) submitRestrict() tea.Cmd {
+	restrictions := store.Restrictions{
+		Banned:             m.form.value(restrictBanned) == "yes",
+		Muted:              m.form.value(restrictMuted) == "yes",
+		Silenced:           m.form.value(restrictSilenced) == "yes",
+		ScreenShareBlocked: m.form.value(restrictScreenShare) == "yes",
+	}
+
+	target := m.target
+	// Read before the command runs, because the status line has to say what
+	// was asked for even when the answer is that nothing moved.
+	unchanged := restrictions == target.Restrictions
+	m.mode = usersList
+	return func() tea.Msg {
+		if err := m.store.SetRestrictions(
+			context.Background(), target.UserID, restrictions); err != nil {
+			return outcomeFor(err, "The restrictions on \""+target.Username+"\" were saved")
+		}
+		if unchanged {
+			return doneMsg{
+				text:  "The restrictions on \"" + target.Username + "\" were already those",
+				focus: target.UserID,
+			}
+		}
+		text := "\"" + target.Username + "\" is now restricted: " + restrictions.Describe()
+		if !restrictions.Any() {
+			text = "The restrictions on \"" + target.Username + "\" were lifted"
+		}
+		return doneMsg{text: text, focus: target.UserID}
+	}
+}
+
 func (m *usersModel) View() string {
 	switch m.mode {
-	case usersCreate, usersEdit, usersPassword:
+	case usersCreate, usersEdit, usersPassword, usersRestrict:
 		m.form.width = m.width
 		return centre(m.form.View(), m.width, m.height)
 	case usersDelete:
@@ -571,12 +696,22 @@ func (m *usersModel) detailView() string {
 		cardLabelStyle.Render("Identifier   ") + cardValueStyle.Render(m.target.UserID),
 		cardLabelStyle.Render("Avatar       ") + avatar,
 		cardLabelStyle.Render("Created      ") + cardValueStyle.Render(created),
+		// The wire names in full, where there is room for them, so that this
+		// card and the client's own panel say the same words.
+		cardLabelStyle.Render("Restricted   ") + restrictionsLabel(m.target.Restrictions),
 		// The salt and the hash are read by this program and shown by nothing.
 		// A credential on a screen is a credential in a screenshot.
 		cardLabelStyle.Render("Password     ") + metaStyle.Render("stored as scrypt, not shown"),
 		cardFooterStyle.Render(helpLine(content, keyHint("esc", "close"))),
 	}
 	return cardStyle.Width(cardWidth(m.width)).Render(strings.Join(lines, "\n"))
+}
+
+func restrictionsLabel(restrictions store.Restrictions) string {
+	if !restrictions.Any() {
+		return metaStyle.Render("nothing taken away")
+	}
+	return dangerStyle.Render(restrictions.Describe())
 }
 
 func roleLabel(role store.Role) string {
@@ -588,7 +723,7 @@ func roleLabel(role store.Role) string {
 
 func (m *usersModel) help() string {
 	switch m.mode {
-	case usersCreate, usersEdit, usersPassword, usersDelete, usersDetail:
+	case usersCreate, usersEdit, usersPassword, usersRestrict, usersDelete, usersDetail:
 		return ""
 	case usersList:
 	}
@@ -602,6 +737,7 @@ func (m *usersModel) help() string {
 		keyHint("n", "new"),
 		keyHint("e", "edit"),
 		keyHint("p", "password"),
+		keyHint("m", "restrictions"),
 		keyHint("d", "delete"),
 		keyHint("/", "filter"),
 		keyHint("r", "refresh"),

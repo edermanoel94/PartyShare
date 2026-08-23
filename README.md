@@ -43,6 +43,11 @@ A user joins and creates rooms and shares a screen; an administrator can also re
 Every administrative action is checked on the server, against the role read from the account store at that moment rather than the one the session logged in with, and every one of them is written to an audit log.
 Section 4.7 of [docs/protocol.md](docs/protocol.md) is the normative list.
 
+An account also carries its **restrictions**: whether it may sign in, use a microphone, write in the chat, or share a screen.
+Those outlast the room, the session and the process, which is what separates them from a kick and from a forced mute.
+A kick ends one visit and the person can come straight back; a restriction stays until an administrator lifts it, and the server reads it back from the account on that account's next message.
+They are set from the same panel, from the menu on a participant, or from [tools/dbadmin](tools/dbadmin/README.md) with no server running at all.
+
 Each room has a **chat**, kept by the server and sent to whoever joins, so that somebody arriving late reads what was already said.
 A room's conversation lives exactly as long as the room: a persistent room keeps it across restarts, an ordinary one is forgotten when it empties.
 Section 4.5 of [docs/protocol.md](docs/protocol.md) is the normative description.
@@ -161,7 +166,7 @@ Neither of those turns the database on by naming a URI, unlike the command line 
 `timeout_ms` defaults to 2000 and is deliberately short: the store is called with the server's lock held, so the driver's own default of thirty seconds would not fail one login, it would hold every call on the server for half a minute.
 Writing the configuration back out replaces the credentials in the URI with asterisks, so dumping it is not a way to read the password.
 
-[tools/dbadmin](tools/dbadmin/README.md) does the same job from a terminal, and more of it: it lists, creates, edits and removes accounts, sets passwords, and reads the audit log, against the database and without a running server.
+[tools/dbadmin](tools/dbadmin/README.md) does the same job from a terminal, and more of it: it lists, creates, edits and removes accounts, sets passwords, applies and lifts restrictions, and reads the audit log, against the database and without a running server.
 It writes the same documents and the same audit entries the server writes.
 
 `--users-file` points at a list of development accounts:

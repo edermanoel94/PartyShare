@@ -59,6 +59,7 @@ class AdminPanel : public QWidget {
   void on_create_user();
   void on_change_role();
   void on_reset_password();
+  void on_restrict_user();
   void on_delete_user();
   void on_create_room();
   void on_close_room();
@@ -89,6 +90,7 @@ class AdminPanel : public QWidget {
   QPushButton* create_user_ = nullptr;
   QPushButton* change_role_ = nullptr;
   QPushButton* reset_password_ = nullptr;
+  QPushButton* restrict_user_ = nullptr;
   QPushButton* delete_user_ = nullptr;
 
   QTableWidget* rooms_ = nullptr;

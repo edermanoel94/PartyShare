@@ -29,6 +29,7 @@ type Database interface {
 	CreateAccount(ctx context.Context, spec store.NewAccount) (store.Account, error)
 	UpdateAccount(ctx context.Context, updated store.Account) error
 	SetPassword(ctx context.Context, userID, password string) error
+	SetRestrictions(ctx context.Context, userID string, restrictions store.Restrictions) error
 	DeleteAccount(ctx context.Context, userID string) error
 }
 

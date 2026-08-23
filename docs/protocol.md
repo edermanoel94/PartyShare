@@ -76,16 +76,35 @@ The server never echoes it back and never writes it to a log.
 The `user` object has this shape:
 
 ```json
-{ "id": "user123", "display_name": "Ana", "avatar": "", "role": "user" }
+{
+  "id": "user123",
+  "display_name": "Ana",
+  "avatar": "",
+  "role": "user",
+  "restrictions": {
+    "banned": false,
+    "muted": false,
+    "silenced": false,
+    "screen_share_blocked": false
+  }
+}
 ```
 
-`id` and `display_name` are mandatory, `avatar` and `role` are optional.
+`id` and `display_name` are mandatory, `avatar`, `role` and `restrictions` are optional.
 
 `role` is `"user"` or `"admin"`.
 Anything else, including an absent field, has to be read as `"user"`.
 A receiver that treats an unrecognised value as anything else is one that hands out privileges to whatever a future version of the protocol invents.
 
-The role appears wherever a `user` object does, so a client learns its own from `authenticated` and everyone else's from `user_joined`.
+`restrictions` is what an administrator has taken away from the account until they give it back, and section 4.7 says what each flag means and how it is changed.
+An absent object, and an absent flag inside one, both mean false: nothing taken away.
+That is the same rule the role follows and for the same reason, read in the other direction.
+A sender that does not know about restrictions must not have a ban read into its silence.
+
+A server writes the object whole, all four flags, even when none is set, so that a reader never has to tell "nothing taken away" apart from "written by something older".
+
+The role and the restrictions appear wherever a `user` object does, so a client learns its own from `authenticated` and everyone else's from `user_joined`.
+That is what lets a client disable a control the server would refuse, instead of offering it and reporting an error a second later.
 
 ### 4.3 WebRTC negotiation
 
@@ -259,6 +278,7 @@ Promoting or demoting somebody therefore takes effect on their next action rathe
 | --- | --- | --- |
 | `kick_user` | `room_id`, `user_id` | `reason` |
 | `force_mute` | `room_id`, `user_id`, `muted` | |
+| `restrict_user` | `user_id` | `banned`, `muted`, `silenced`, `screen_share_blocked`, `reason` |
 | `list_users` | | |
 | `create_user` | `username`, `password` | `display_name`, `role` |
 | `update_user` | `user_id` | `role`, `display_name`, `password` |
@@ -272,6 +292,7 @@ Promoting or demoting somebody therefore takes effect on their next action rathe
 | Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `user_kicked` | `room_id`, `user_id` | `reason` |
+| `user_restricted` | `user_id`, `restrictions` | `by_user_id`, `reason`, `room_id` |
 | `user_list` | `users` | |
 | `room_list` | `rooms` | |
 | `audit_list` | `entries` | |
@@ -288,25 +309,66 @@ A forced mute holds until an administrator releases it.
 The participant sending `unmute` about themselves while one is in place is answered with `forbidden`; muting themselves further is still allowed, because it takes nothing away from anyone.
 Without that rule a forced mute is advice, undone by one click on the button that appears to have turned itself off.
 
+`restrict_user` takes something away from an account, or gives it back, for longer than the room they are in lasts.
+It is the only administrative message in this section that names no room: a restriction is about the account, so it can be applied to somebody who logged off an hour ago and it survives a restart of the server.
+
+| Flag | While it is set |
+| --- | --- |
+| `banned` | The account cannot log in. `authenticate` is answered with `account_banned`, its sessions are revoked and it is removed from whatever room it was in |
+| `muted` | The account cannot transmit audio. It joins rooms already muted, by the administrator rather than by itself, so the mute holds exactly as a `force_mute` holds |
+| `silenced` | `chat_message` is answered with `forbidden`. Reading the conversation is untouched: a conversation somebody may not speak in is still one they are sitting in |
+| `screen_share_blocked` | `screen_share_started` is answered with `forbidden`, and a share already running is stopped. `screen_share_stopped` is never refused |
+
+Each flag is optional, and an absent one means unchanged.
+That is why they are booleans that may be absent rather than booleans that default to false: lifting a restriction and leaving it alone have to be different requests.
+Without the distinction, an administrator unmuting somebody would silently lift the ban a colleague applied a minute earlier, and the only sign of it would be that person logging in again.
+
+The change is announced with `user_restricted` to the account's own connection, whether or not it is in a room, and to every participant of the room it is in.
+It carries the whole resulting set rather than what changed, so a client that missed one while it was reconnecting is correct again on the next one.
+The account's own connection is told before a ban closes it: a ban that ended the session first would leave the person it is about the only one who never heard why.
+
+What `restrict_user` does not do is duplicate the announcements the room already has.
+Taking the microphone is confirmed to the room as an ordinary `mute` carrying `by_user_id`, and stopping a share as an ordinary `screen_share_stopped`, so a client that knows nothing about restrictions still draws both correctly.
+
+`kick_user` and `restrict_user` are different tools and neither replaces the other.
+A kick ends one visit to one room and the account can come straight back; a restriction stays with the account until an administrator lifts it.
+
+Where the two overlap, the account restriction wins.
+`force_mute` with `muted` false, aimed at an account whose `muted` restriction is set, is answered with `invalid_target` rather than handing the microphone back: the room level statement is the weaker of the two, and letting it win would unmute somebody who was muted everywhere.
+Lifting the restriction releases the mute in the room on its own, and is announced as an ordinary `unmute`.
+
 `update_user` changes only the fields that are present.
 An absent field means unchanged, which is why they are optional rather than empty: clearing a display name and not touching it have to be different requests.
 
 `delete_room` closes a room.
 Everyone in it is removed exactly as `kick_user` removes one person, and a persistent room stops existing rather than becoming empty.
 
-`create_user`, `update_user` and `delete_user` are each answered with the whole new `user_list`, and `delete_room` with the whole new `room_list`.
+`create_user`, `update_user`, `delete_user` and `restrict_user` are each answered with the whole new `user_list`, and `delete_room` with the whole new `room_list`.
 There is no separate acknowledgement: the new state is the acknowledgement, and it leaves no window in which a panel shows something the server has already moved past.
 
 Two rules exist so that a system cannot be left with nobody able to administer it, and both are refused rather than silently ignored:
 
-- An administrator may not change or delete their own account. Code `invalid_target`.
-- The last remaining administrator may not be demoted or deleted. Code `last_administrator`.
+- An administrator may not change, restrict or delete their own account. Code `invalid_target`.
+- The last remaining administrator may not be demoted, banned or deleted. Code `last_administrator`.
+
+The other three restrictions may be applied to an administrator, their own account excepted: an administrator who may not use a microphone can still administer.
 
 `users` is an array of:
 
 ```json
 {
-  "user": { "id": "user123", "display_name": "Ana", "avatar": "", "role": "admin" },
+  "user": {
+    "id": "user123",
+    "display_name": "Ana",
+    "avatar": "",
+    "role": "admin",
+    "restrictions": {
+      "banned": false,
+      "muted": false,
+      "silenced": false,
+      "screen_share_blocked": false
+    }
+  },
   "username": "ana",
   "created_at": 1755676800,
   "online": true
@@ -339,7 +401,11 @@ No password, salt or hash appears here, and none is defined for any message in t
 }
 ```
 
-`action` is one of `kick`, `force_mute`, `force_unmute`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
+`action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
+
+A `restrict_user` entry names the flags that moved and what they became, and the reason if one was given: `silenced=true reason=off topic`.
+What moved and not the resulting set, because a log that only ever states the result leaves the reader to diff it against an entry they have to go and find.
+An action that changes nothing writes no entry at all.
 Entries come back newest first.
 `limit` is clamped by the server, and zero or absent asks for its default.
 An empty or absent `actor_id` means every actor.
@@ -356,7 +422,7 @@ Ordinary participation is not recorded: joining, leaving, sharing a screen and m
 This table says what a role may send, not who they may send it about.
 Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
@@ -376,6 +442,7 @@ The message alongside them is for humans only and may change.
 | `not_in_room` | The operation requires the user to be in the room |
 | `screen_share_busy` | Another participant is already sharing their screen |
 | `unauthorized` | Session token absent, invalid or expired |
+| `account_banned` | The username and password were right, and an administrator has suspended the account |
 | `media_unavailable` | The message was addressed to `sfu`, and this server does not route media |
 | `forbidden` | The action requires a role the account does not hold |
 | `user_exists` | The username is already taken |
@@ -387,11 +454,15 @@ The message alongside them is for humans only and may change.
 
 The first five are detected in the parsing layer and have been implemented since M1.
 The next ones depend on the server and arrived in M2, and `media_unavailable` in M4.
-The last seven come with roles and persistence.
+The rest come with roles and persistence, and `account_banned` with account restrictions.
 
 `forbidden` and `unauthorized` are deliberately different.
 `unauthorized` means the server does not know who is asking; `forbidden` means it does, and the answer is still no.
 A client that treats them the same will try to log in again in response to a refusal that logging in cannot fix.
+
+`account_banned` is answered only after the password has been checked, and never in its place.
+A wrong password on a banned account is `unauthorized` with the same message any wrong password gets.
+Saying "banned" to whoever typed a username would turn the login form into a way to ask the server which accounts exist; the person who holds the password gets the real reason.
 
 ## 6. Session state machine
 

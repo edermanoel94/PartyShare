@@ -813,6 +813,15 @@ TEST_F(CallSessionTest, ChangingTheScreenQualityDuringACallReachesTheMediaLayer)
   ASSERT_FALSE(room.empty());
   ASSERT_TRUE(ana.join(room));
 
+  // Joining is not being in a call. The media session is created when the
+  // SFU's offer arrives, and until it exists set_video_quality has nobody to
+  // tell: it keeps the choice in the options, answers ok, and the media layer
+  // is never touched. Waiting here is what makes this test about changing the
+  // quality during a call rather than about the timing of the machine running
+  // it - on Windows the session happened to be up, and under the sanitizers,
+  // which are slower, it was not.
+  ASSERT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::InCall; }));
+
   // The point of the whole change: nobody should have to leave and rejoin to
   // go from 720p to 1080p60.
   ASSERT_TRUE(ana.session().set_video_quality({1920, 1080}, 60).ok());
@@ -830,6 +839,9 @@ TEST_F(CallSessionTest, ARefusedScreenQualityLeavesThePreviousOneInPlace) {
   const std::string room = ana.create_room();
   ASSERT_FALSE(room.empty());
   ASSERT_TRUE(ana.join(room));
+  // As above: with no media session yet there is nothing to refuse, and
+  // set_video_quality would answer ok for the wrong reason.
+  ASSERT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::InCall; }));
 
   const auto before = ana.session().video_quality();
   {

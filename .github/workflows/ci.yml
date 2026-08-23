@@ -465,19 +465,23 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # libpipewire-0.3-dev is named here because the build needs it, not
-          # because the runner lacks it. scripts/build_webrtc.sh turns on
-          # rtc_use_pipewire, so gn resolves pkg_config("pipewire") in
-          # //modules/portal, and without the package gn gen fails before a
-          # single object is compiled. The ubuntu-24.04 image happens to carry
-          # it, which is why this job passed without the line - and is exactly
-          # why the line belongs here: a dependency that only an image provides
-          # is one that disappears when the image changes.
+          # libpipewire-0.3-dev and libasound2-dev are named here because the
+          # build needs them, not because the runner lacks them.
+          # scripts/build_webrtc.sh turns on rtc_use_pipewire, so gn resolves
+          # pkg_config("pipewire") in //modules/portal and fails gn gen without
+          # the first; libwebrtc compiles its ALSA backend unconditionally on
+          # Linux and needs alsa/asoundlib.h from the second.
+          #
+          # Both were invisible while the libwebrtc cache kept hitting, because
+          # a cache hit skips the build step that needs them. The first cache
+          # miss is what asks the question, and a dependency that only the
+          # runner image happens to answer is one that disappears when the
+          # image changes.
           sudo apt-get install -y clang libx11-dev libxext-dev libxfixes-dev \
             libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev \
             libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
             libglib2.0-dev libgbm-dev libdrm-dev libpipewire-0.3-dev \
-            libssl-dev pulseaudio pulseaudio-utils
+            libasound2-dev libssl-dev pulseaudio pulseaudio-utils
 
       - name: Restore the libwebrtc build
         id: webrtc-cache

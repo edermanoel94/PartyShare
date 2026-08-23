@@ -544,11 +544,22 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
 
     MFT_OUTPUT_DATA_BUFFER output = {};
     output.dwStreamID = 0;
-    // Left null: a hardware transform allocates its own output, which
-    // MFT_OUTPUT_STREAM_PROVIDES_SAMPLES on the stream info says it will, and
-    // handing it one of ours would be refused.
-    output.pSample = nullptr;
     DWORD status = 0;
+
+    // Who allocates the output is the transform's decision, and it is asked
+    // rather than assumed. A transform that sets
+    // MFT_OUTPUT_STREAM_PROVIDES_SAMPLES hands back its own sample and refuses
+    // one of ours; a transform that does not set it wants ours and answers
+    // E_INVALIDARG to a null. Both kinds exist, and guessing wrong produces no
+    // output at all with nothing in the log to say why.
+    ComPtr<IMFSample> supplied;
+    if (!output_provides_samples_) {
+      supplied = make_output_sample();
+      if (supplied == nullptr) {
+        return;
+      }
+      output.pSample = supplied.Get();
+    }
 
     HRESULT produced = S_OK;
     {
@@ -565,7 +576,13 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
     }
 
     ComPtr<IMFSample> sample;
-    sample.Attach(output.pSample);
+    if (output.pSample == supplied.Get()) {
+      // Ours, and still ours: ProcessOutput does not add a reference to a
+      // sample the caller provided, so attaching here would release it twice.
+      sample = supplied;
+    } else {
+      sample.Attach(output.pSample);
+    }
     deliver(sample.Get());
   }
 
@@ -607,7 +624,57 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
     }
 
     apply_dynamic_codec_settings();
+    read_output_stream_info();
     return true;
+  }
+
+  /// Who allocates the output samples, and how big they have to be.
+  ///
+  /// Only meaningful once the output type is set, which is why this is not
+  /// asked any earlier. A transform that refuses to answer is treated as one
+  /// that provides its own, because that is what a hardware encoder normally
+  /// does and it is the case that needs no buffer from us.
+  void read_output_stream_info() {
+    MFT_OUTPUT_STREAM_INFO info = {};
+    const std::lock_guard<std::mutex> lock(transform_mutex_);
+    if (FAILED(transform_->GetOutputStreamInfo(0, &info))) {
+      output_provides_samples_ = true;
+      return;
+    }
+
+    output_provides_samples_ = (info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES |
+                                                MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
+    output_size_ = info.cbSize;
+    output_alignment_ = info.cbAlignment;
+
+    if (!output_provides_samples_) {
+      DV_LOG_INFO("Media Foundation: the transform wants the output buffer supplied, {} bytes",
+                  output_size_);
+    }
+  }
+
+  /// A buffer for the transform to encode into, when it does not bring one.
+  [[nodiscard]] ComPtr<IMFSample> make_output_sample() {
+    const MfApi& api = MediaFoundation::instance().api();
+
+    // A transform is allowed to report zero and mean "whatever you think".
+    // Compressed H.264 for one frame is far under an uncompressed one, so an
+    // uncompressed frame is a ceiling that cannot be too small.
+    DWORD size = output_size_;
+    if (size == 0) {
+      const DWORD luma = static_cast<DWORD>(width_) * static_cast<DWORD>(height_);
+      size = luma + (luma / 2);
+    }
+
+    ComPtr<IMFMediaBuffer> buffer;
+    if (FAILED(api.create_memory_buffer(size, &buffer))) {
+      return nullptr;
+    }
+    ComPtr<IMFSample> sample;
+    if (FAILED(api.create_sample(&sample)) || FAILED(sample->AddBuffer(buffer.Get()))) {
+      return nullptr;
+    }
+    return sample;
   }
 
   void apply_static_codec_settings() {
@@ -905,6 +972,12 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
   UINT32 framerate_ = 30;
   UINT32 bitrate_bps_ = 0;
   std::uint64_t frame_index_ = 0;
+
+  /// From MFT_OUTPUT_STREAM_INFO, once the output type is set. Written before
+  /// streaming starts and only read afterwards, so no lock guards them.
+  bool output_provides_samples_ = true;
+  DWORD output_size_ = 0;
+  DWORD output_alignment_ = 0;
 };
 
 HRESULT STDMETHODCALLTYPE EventSink::Invoke(IMFAsyncResult* result) {

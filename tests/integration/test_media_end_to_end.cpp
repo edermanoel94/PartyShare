@@ -265,6 +265,20 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
   ASSERT_TRUE(wait_until([&] { return router->audio_packets_received() > before + 5; }, 3000ms))
       << "audio never came back after the switch";
 
+  // Known to fail on a GitHub runner: 2056 ms against this 500 ms, on the
+  // first run where the media job ever reached its tests at all. Left as it
+  // is, and written down rather than loosened, because nobody yet knows which
+  // of two things it is.
+  //
+  // It is a wall clock budget measured on shared hardware through a PulseAudio
+  // null sink, which is the shape of an assertion that reports the machine
+  // instead of the program. It is also exactly the number a person notices
+  // when they change microphone mid-call, so raising it to make the job green
+  // would trade the only thing this test is for.
+  //
+  // Deciding needs a second data point, and there is no baseline: every
+  // earlier run of this job stopped before the tests, so this has possibly
+  // never run in CI until now.
   const auto gap = std::chrono::steady_clock::now() - switched_at;
   EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(gap).count(), 500)
       << "switching the microphone silenced the call for too long";

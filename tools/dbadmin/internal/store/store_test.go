@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -728,6 +729,29 @@ func TestClampAuditLimit(t *testing.T) {
 	}
 }
 
+// A failure to connect is the moment a URI reaches a terminal, a scrollback
+// and whatever collects stderr, so it is the moment the password in it has to
+// be gone. This one needs no database: nothing listens on port 1.
+func TestOpenReportsTheHostAndNotThePassword(t *testing.T) {
+	t.Parallel()
+
+	_, err := Open(context.Background(), Config{
+		URI:      "mongodb://ana:hunter2@127.0.0.1:1/",
+		Database: "partyshare",
+		Timeout:  500 * time.Millisecond,
+		Actor:    Actor{ID: "dbadmin:test", Username: "test (dbadmin)"},
+	})
+	if err == nil {
+		t.Fatal("Open reached a port nothing listens on")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the password is in the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Errorf("the error does not say which host it could not reach: %v", err)
+	}
+}
+
 func TestDescribeEndpointHidesCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -736,6 +760,9 @@ func TestDescribeEndpointHidesCredentials(t *testing.T) {
 		"mongodb://ana:secret@db.example.invalid:27017/x":                          "db.example.invalid:27017",
 		"mongodb+srv://ana:secret@cluster.example.invalid/?retryWrites=true":       "cluster.example.invalid",
 		"mongodb://a.example.invalid:27017,b.example.invalid:27017/?replicaSet=rs": "a.example.invalid:27017,b.example.invalid:27017",
+		// Malformed, and the one shape where falling back to the argument
+		// would hand back the password it was called to remove.
+		"mongodb://ana:secret@": "unknown host",
 	}
 	for uri, want := range cases {
 		if got := describeEndpoint(uri); got != want {

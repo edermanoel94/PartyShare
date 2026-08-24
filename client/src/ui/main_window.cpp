@@ -1,6 +1,7 @@
 #include "ui/main_window.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include <dv/logging/logger.hpp>
@@ -64,6 +65,32 @@ constexpr int kAdminPage = 3;
 /// Where the participant's plain name is kept on a list item, next to the
 /// user id in Qt::UserRole. The visible text carries the state as well.
 constexpr int kNameRole = Qt::UserRole + 1;
+
+/// "Nothing is being measured" as a value the indicator can remember having
+/// drawn. Outside the NetworkQuality range on purpose, so it can never be
+/// mistaken for one of the three verdicts.
+constexpr int kNoLinkQuality = -2;
+
+/// The colour of a verdict, from the theme rather than from a literal, so the
+/// three of them follow the colour scheme instead of staying at their
+/// light-window values.
+///
+/// Shared by the two indicators. They make different claims - one weighs three
+/// measurements, the other one - but the same word has to mean the same colour
+/// in both, or the dot changes meaning as somebody walks into a room.
+[[nodiscard]] QColor quality_colour(client::app::NetworkQuality quality) {
+  switch (quality) {
+    case client::app::NetworkQuality::Good:
+      return theme::colors().success;
+    case client::app::NetworkQuality::Fair:
+      return theme::colors().warn;
+    case client::app::NetworkQuality::Poor:
+      return theme::colors().danger;
+    case client::app::NetworkQuality::Unknown:
+      break;
+  }
+  return theme::colors().muted;
+}
 
 /// How many emoji the picker puts on a row. Eight of them at 34 pixels plus
 /// the spacing is about 290 wide, which fits under a sidebar that is 260 to
@@ -277,9 +304,23 @@ void MainWindow::build_login_page() {
   login_error_->setProperty("error", true);
   login_error_->setVisible(false);
 
+  // Settings is reachable from here and not only from inside a room, and the
+  // reason is the one setting that lives in this dialog: the server address.
+  // Every other setting can wait until somebody is signed in, because it is
+  // about this machine. The address is what signing in depends on, so a
+  // dialog that opens only after a successful sign-in is a dialog nobody can
+  // reach at the one moment they need it - a wrong address in config.ini used
+  // to leave editing the file by hand as the only way back.
+  auto* login_settings = new QPushButton(QStringLiteral("Settings"), box);
+  login_settings->setMinimumHeight(40);
+
+  auto* actions = new QHBoxLayout();
+  actions->addWidget(connect_button_, 1);
+  actions->addWidget(login_settings);
+
   form->addRow(QStringLiteral("Username"), username_);
   form->addRow(QStringLiteral("Password"), password_);
-  form->addRow(connect_button_);
+  form->addRow(actions);
   form->addRow(login_error_);
 
   auto* centred = new QHBoxLayout();
@@ -290,6 +331,7 @@ void MainWindow::build_login_page() {
   outer->addStretch();
 
   connect(connect_button_, &QPushButton::clicked, this, &MainWindow::on_connect);
+  connect(login_settings, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(username_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
   connect(password_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
 
@@ -333,12 +375,22 @@ void MainWindow::build_home_page() {
   admin_button_->setMinimumHeight(36);
   admin_button_->setVisible(false);
 
+  // The way back to the login screen, and the reason it exists is the server
+  // address in the settings dialog. A new address is adopted at the next
+  // sign-in, and without a way to sign out, "the next sign-in" would mean
+  // closing and reopening the program - which is the thing the setting was
+  // added to avoid. It is also the only way to hand the machine to somebody
+  // else without doing that.
+  auto* sign_out = new QPushButton(QStringLiteral("Sign out"), box);
+  sign_out->setMinimumHeight(36);
+
   column->addWidget(create_button_);
   column->addSpacing(16);
   column->addWidget(room_id_);
   column->addWidget(join_button_);
   column->addSpacing(16);
   column->addWidget(admin_button_);
+  column->addWidget(sign_out);
 
   auto* centred = new QHBoxLayout();
   centred->addStretch();
@@ -354,6 +406,7 @@ void MainWindow::build_home_page() {
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
   connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
+  connect(sign_out, &QPushButton::clicked, this, &MainWindow::on_sign_out);
 
   pages_->insertWidget(kHomePage, page);
 }
@@ -497,13 +550,13 @@ void MainWindow::build_room_page() {
   share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
   share_button_->setCheckable(true);
   settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
-  metrics_button_ = new QPushButton(QStringLiteral("Metrics"), page);
-  metrics_button_->setToolTip(
+  network_status_button_ = new QPushButton(QStringLiteral("Network status"), page);
+  network_status_button_->setToolTip(
       QStringLiteral("What the call is carrying, and the three measurements behind the network "
                      "indicator in the status bar."));
   leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
   for (QPushButton* button :
-       {mute_button_, share_button_, settings_button_, metrics_button_, leave_button_}) {
+       {mute_button_, share_button_, settings_button_, network_status_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
   // What each toggle looks like when it is on. Sharing is the good state and
@@ -514,7 +567,7 @@ void MainWindow::build_room_page() {
   controls->addWidget(mute_button_);
   controls->addWidget(share_button_);
   controls->addWidget(settings_button_);
-  controls->addWidget(metrics_button_);
+  controls->addWidget(network_status_button_);
   controls->addStretch();
   controls->addWidget(leave_button_);
 
@@ -532,7 +585,7 @@ void MainWindow::build_room_page() {
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
-  connect(metrics_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
+  connect(network_status_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
@@ -550,6 +603,16 @@ void MainWindow::wire_session() {
             QMetaObject::invokeMethod(this, "apply_state", Qt::QueuedConnection,
                                       Q_ARG(int, static_cast<int>(state)),
                                       Q_ARG(QString, QString::fromStdString(detail)));
+          },
+      .on_link =
+          [this](client::app::CallSession::LinkStats link) {
+            // Minus one for "no measurement", because a queued invocation
+            // carries plain types and an optional is not one of them. Zero is
+            // not free for that job: a round trip really can measure zero
+            // milliseconds against a server on this machine.
+            QMetaObject::invokeMethod(
+                this, "apply_link", Qt::QueuedConnection,
+                Q_ARG(int, link.round_trip ? static_cast<int>(link.round_trip->count()) : -1));
           },
       .on_participants =
           [this](const std::vector<client::app::Participant>& list) {
@@ -798,6 +861,20 @@ void MainWindow::on_connect() {
   }
 }
 
+void MainWindow::on_sign_out() {
+  // disconnect() drops the identity along with the socket, and the state it
+  // publishes is what carries the interface back to the login screen. Nothing
+  // here changes the page by hand: two routes to the same page are two routes
+  // that can disagree.
+  session_.disconnect();
+
+  // The password does not stay in the field for whoever sits down next. The
+  // username does, because signing back in as yourself is the ordinary case
+  // and a server address that has just been changed is the other one.
+  password_->clear();
+  show_login_error(QString{});
+}
+
 void MainWindow::on_create_room() {
   if (const auto created = session_.create_room("room"); !created) {
     apply_error(QString::fromStdString(created.error().code),
@@ -848,12 +925,19 @@ void MainWindow::on_leave_room() {
 
 void MainWindow::clear_metrics() {
   metrics_->clear();
-  quality_->clear();
   // And the verdict this window believes is on screen. apply_metrics only
   // restyles the indicator when the verdict moves, so without this the next
   // call would find the label already showing what it is about to report, skip
-  // the write, and leave the two labels cleared for the rest of the call.
+  // the write, and leave the label cleared for the rest of the call.
   shown_quality_ = -1;
+  shown_link_quality_ = -1;
+
+  // The indicator changes hands rather than going out. The signaling link is
+  // measured whether or not there is a call, so what goes up here is at most
+  // one interval old - and a status bar that empties itself the moment a call
+  // ends is what left "is my connection any good" unanswered everywhere except
+  // inside a room.
+  show_link_quality();
 }
 
 void MainWindow::on_send_chat() {
@@ -1134,6 +1218,14 @@ void MainWindow::apply_participants(const QStringList& names) {
 }
 
 void MainWindow::apply_metrics(const QString& summary, int quality) {
+  // A measurement taken a moment before the call ended can be delivered after
+  // it, and writing it here would put a finished call's verdict over the
+  // lobby's own indicator - which is now a live measurement of something else
+  // rather than an empty label.
+  if (state_ != client::app::CallSession::State::InCall) {
+    return;
+  }
+
   metrics_->setText(summary);
 
   // Only when the verdict has actually moved. Setting a stylesheet makes Qt
@@ -1144,16 +1236,11 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
     return;
   }
   shown_quality_ = quality;
+  // The link indicator does not own the label while a call does, so what it
+  // believes is on screen is no longer true.
+  shown_link_quality_ = -1;
 
   const auto measured = static_cast<client::app::NetworkQuality>(quality);
-  // From the theme, so the three of them follow the colour scheme along with
-  // everything else rather than staying at their light-window values.
-  const QHash<int, QColor> colours = {
-      {static_cast<int>(client::app::NetworkQuality::Good), theme::colors().success},
-      {static_cast<int>(client::app::NetworkQuality::Fair), theme::colors().warn},
-      {static_cast<int>(client::app::NetworkQuality::Poor), theme::colors().danger},
-  };
-
   if (measured == client::app::NetworkQuality::Unknown) {
     quality_->clear();
     return;
@@ -1162,8 +1249,50 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
       QStringLiteral("● network %1")
           .arg(QString::fromUtf8(client::app::to_string(measured).data(),
                                  static_cast<qsizetype>(client::app::to_string(measured).size()))));
-  quality_->setStyleSheet(QStringLiteral("color: %1; font-weight: bold;")
-                              .arg(colours.value(quality, theme::colors().muted).name()));
+  quality_->setStyleSheet(
+      QStringLiteral("color: %1; font-weight: bold;").arg(quality_colour(measured).name()));
+}
+
+void MainWindow::apply_link(int round_trip_ms) {
+  link_round_trip_ms_ = round_trip_ms;
+
+  // While there is a call, the verdict weighing all three measurements is the
+  // better answer and keeps the label. This one fills the rest of the time,
+  // which is most of it, and is kept up to date underneath so that leaving a
+  // room has something current to fall back to rather than a blank wait.
+  if (state_ == client::app::CallSession::State::InCall) {
+    return;
+  }
+  show_link_quality();
+}
+
+void MainWindow::show_link_quality() {
+  if (link_round_trip_ms_ < 0) {
+    // Not blank. "Nothing is being measured" is itself the answer to whether
+    // the connection is any good, and an empty status bar says it so quietly
+    // that it reads as the indicator being broken.
+    if (shown_link_quality_ != kNoLinkQuality) {
+      shown_link_quality_ = kNoLinkQuality;
+      quality_->setStyleSheet(
+          QStringLiteral("color: %1; font-weight: bold;").arg(theme::colors().muted.name()));
+    }
+    quality_->setText(QStringLiteral("● no server"));
+    return;
+  }
+
+  const auto measured =
+      client::app::quality_of(std::chrono::milliseconds(link_round_trip_ms_));
+  // The number as well as the word, unlike the call indicator, because there
+  // is only one measurement here and hiding it behind an adjective would leave
+  // "good" doing work three numbers do during a call.
+  quality_->setText(QStringLiteral("● server %1 ms").arg(link_round_trip_ms_));
+
+  if (const int verdict = static_cast<int>(measured); verdict != shown_link_quality_) {
+    shown_link_quality_ = verdict;
+    shown_quality_ = -1;
+    quality_->setStyleSheet(
+        QStringLiteral("color: %1; font-weight: bold;").arg(quality_colour(measured).name()));
+  }
 }
 
 void MainWindow::apply_local_level(double level, bool speaking) {

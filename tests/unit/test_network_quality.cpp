@@ -1,11 +1,14 @@
 // The network quality indicator, which is arithmetic over the call statistics.
 
+#include <chrono>
+
 #include <gtest/gtest.h>
 
 #include "app/network_quality.hpp"
 
 namespace {
 
+using namespace std::chrono_literals;
 using dv::client::app::NetworkQuality;
 using dv::client::app::quality_of;
 using dv::client::media::AudioStats;
@@ -87,6 +90,44 @@ TEST(NetworkQualityTest, SendingWithNothingComingBackIsStillMeasured) {
   AudioStats stats;
   stats.packets_sent = 500;
   EXPECT_NE(quality_of(stats), NetworkQuality::Unknown);
+}
+
+// The round trip only verdict, which is what the indicator has to work from
+// outside a call: there is no media flowing, so jitter and loss do not exist
+// to be measured.
+
+TEST(LinkQualityTest, AServerOnThisMachineIsGood) {
+  EXPECT_EQ(quality_of(0ms), NetworkQuality::Good);
+  EXPECT_EQ(quality_of(14ms), NetworkQuality::Good);
+}
+
+TEST(LinkQualityTest, ItUsesTheSameThresholdsAsTheCallVerdict) {
+  // Deliberately the same numbers. A link called fair during a call must not
+  // read as good in the lobby and then change its mind when somebody speaks:
+  // the indicator would be blamed for a change the network never made.
+  AudioStats latency_only;
+  latency_only.packets_received = 1000;
+  latency_only.round_trip_time_ms = 200;
+
+  EXPECT_EQ(quality_of(latency_only), NetworkQuality::Fair);
+  EXPECT_EQ(quality_of(200ms), NetworkQuality::Fair);
+
+  latency_only.round_trip_time_ms = 400;
+  EXPECT_EQ(quality_of(latency_only), NetworkQuality::Poor);
+  EXPECT_EQ(quality_of(400ms), NetworkQuality::Poor);
+}
+
+TEST(LinkQualityTest, TheBoundariesBelongToTheBetterVerdict) {
+  // Exactly at the threshold is still the good side of it, in both, because
+  // the comparisons are strict. Worth pinning: a boundary that moved in one of
+  // the two and not the other is precisely how the two indicators would come
+  // to disagree about an unchanged link.
+  EXPECT_EQ(quality_of(std::chrono::milliseconds(
+                static_cast<int>(dv::client::app::kFairRoundTripMs))),
+            NetworkQuality::Good);
+  EXPECT_EQ(quality_of(std::chrono::milliseconds(
+                static_cast<int>(dv::client::app::kPoorRoundTripMs))),
+            NetworkQuality::Fair);
 }
 
 }  // namespace

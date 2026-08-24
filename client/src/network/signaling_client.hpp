@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -50,6 +51,9 @@ class SignalingClient {
 
   struct Options {
     /// For example ws://127.0.0.1:8080.
+    ///
+    /// Where to start. Once the client exists, `url()` is the answer to which
+    /// server it is pointed at, because `set_url` can move it.
     std::string url;
 
     /// Retry on its own when the connection drops or is refused.
@@ -93,6 +97,48 @@ class SignalingClient {
 
   void disconnect();
 
+  /// Points this client at a different server, from the next `connect()` on.
+  ///
+  /// Deliberately not from the next *reconnection*. A socket that drops in the
+  /// middle of a call has to come back on the server that call was placed on,
+  /// and an address changed in the interface while a call is running would
+  /// otherwise move it silently at the first hiccup - to a server that has
+  /// never heard of the room. So the new address is held, and `connect()` is
+  /// what adopts it, which is the same moment somebody signs in.
+  ///
+  /// The address is not validated here. `connect()` is where an empty or
+  /// non-ws:// one is refused, because that is where it becomes an attempt.
+  void set_url(std::string url);
+
+  /// The address the next `connect()` will use.
+  ///
+  /// Not always the one the socket in hand is on: see `set_url`.
+  [[nodiscard]] std::string url() const;
+
+  /// Sends a ping of our own and starts timing it.
+  ///
+  /// The server's heartbeat measures the server's view: it asks, we answer,
+  /// and nothing about the round trip reaches this side. This is the other
+  /// direction, and it is the only measurement available when there is no call
+  /// - which is exactly when somebody is sitting on the lobby screen wondering
+  /// whether the network is any good.
+  ///
+  /// Section 4.1 of docs/protocol.md exempts the heartbeat from the
+  /// authentication gate, so this answers on the login screen too.
+  ///
+  /// Fails with `not_connected` when there is no socket. Calling it again
+  /// before the last one came back is not an error: the reply is matched by
+  /// nonce, so a lost ping is left behind rather than mistimed.
+  [[nodiscard]] Result<std::monostate> probe();
+
+  /// The round trip of the last probe that came back, or nothing.
+  ///
+  /// Nothing means it has not been measured *now*: no probe yet, none
+  /// answered, or the socket dropped. Deliberately not the last known value
+  /// kept warm - a number from a connection that no longer exists is the one
+  /// answer worse than no number, because it looks current.
+  [[nodiscard]] std::optional<std::chrono::milliseconds> round_trip() const;
+
   /// Queues one message. Fails with `not_connected` when the socket is not
   /// open, which callers are expected to handle rather than assume away.
   [[nodiscard]] Result<std::monostate> send(const protocol::Message& message);
@@ -119,11 +165,42 @@ class SignalingClient {
   /// scheduling another attempt.
   void handle_drop(const std::string& detail);
 
+  /// Throws away the round trip and any probe in flight.
+  ///
+  /// Called wherever the socket changes, which is the whole rule: the number
+  /// describes one connection, so it dies with that connection rather than
+  /// carrying over to the next one or outliving all of them.
+  void forget_round_trip();
+
   void reconnect_loop();
 
   Options options_;
 
   mutable std::mutex mutex_;
+
+  /// The address the socket in hand was opened on, and the one a reconnection
+  /// will use. Guarded, because the retry thread reads it while the interface
+  /// thread may be setting the one below.
+  std::string url_;
+  /// What the next `connect()` will adopt, which is `url_` until somebody
+  /// changes the server in the settings dialog.
+  std::string next_url_;
+
+  /// The nonce of the probe in flight and when it left, or empty when there is
+  /// none. One at a time: a probe every few seconds against a round trip
+  /// measured in milliseconds has no reason to overlap, and one outstanding
+  /// nonce is what makes a late reply to an abandoned ping impossible to
+  /// mistake for a fast reply to the current one.
+  std::string probe_nonce_;
+  std::chrono::steady_clock::time_point probe_sent_at_;
+  /// The last round trip measured on the socket in hand. Reset whenever that
+  /// socket goes, because it describes that socket and nothing else.
+  std::optional<std::chrono::milliseconds> round_trip_;
+  /// Numbers the probe nonces, so that a reply can only match the ping it
+  /// answers. Never reset: a nonce reused across a reconnection is a reply
+  /// from the old connection that fits the new one.
+  std::uint64_t probes_sent_ = 0;
+
   std::shared_ptr<rtc::WebSocket> socket_;
   MessageHandler message_handler_;
   StateHandler state_handler_;

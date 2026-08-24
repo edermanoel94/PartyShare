@@ -55,6 +55,9 @@ class MainWindow : public QMainWindow {
 
  private slots:
   void on_connect();
+  /// Drops the connection and the identity with it, which puts the login
+  /// screen back. What it is for is in build_home_page.
+  void on_sign_out();
   void on_create_room();
   void on_join_room();
   void on_leave_room();
@@ -75,6 +78,13 @@ class MainWindow : public QMainWindow {
   void apply_state(int state, const QString& detail);
   void apply_participants(const QStringList& names);
   void apply_metrics(const QString& summary, int quality);
+  /// The round trip to the signaling server in milliseconds, or -1 when there
+  /// is no current measurement.
+  ///
+  /// This is what keeps the network indicator alive outside a call, which is
+  /// where it was blank before: the call metrics stop when the call does, and
+  /// "is my connection any good" is asked hardest on the lobby screen.
+  void apply_link(int round_trip_ms);
   void apply_local_level(double level, bool speaking);
   /// Moves the microphone meter one frame closer to the last measurement.
   ///
@@ -123,14 +133,28 @@ class MainWindow : public QMainWindow {
   /// the focus back.
   void insert_emoji(const QString& emoji);
   void update_volume_label(const QString& participant, int volume);
-  /// Empties the two status bar labels a call fills.
+  /// Empties the status bar numbers a call fills, and hands the network
+  /// indicator back to the signaling link.
   ///
-  /// Their numbers belong to one call, and nothing outside a call writes them
-  /// again. Left where they are, they do not go stale by a second but by
+  /// The call's numbers belong to one call, and nothing outside a call writes
+  /// them again. Left where they are, they do not go stale by a second but by
   /// however long the window stays open, and the green "network good" is the
   /// half that misleads: it reads as a live measurement of a connection that
   /// is no longer carrying anything.
+  ///
+  /// The indicator itself is not emptied, it changes hands. What replaces the
+  /// call's verdict is the round trip to the signaling server, which is being
+  /// measured the whole time and is at most one interval old.
   void clear_metrics();
+
+  /// Draws the network indicator from the signaling link.
+  ///
+  /// Says `server` rather than `network`, and the difference is not decorative:
+  /// this is one round trip over a WebSocket, while the version a call
+  /// produces weighs latency, jitter and loss together. Both colour the same
+  /// dot, so the word is the only thing telling somebody which claim they are
+  /// being given.
+  void show_link_quality();
   void show_page();
 
   /// Puts a page on screen, fading it in.
@@ -173,7 +197,7 @@ class MainWindow : public QMainWindow {
   QPushButton* mute_button_ = nullptr;
   QPushButton* share_button_ = nullptr;
   QPushButton* settings_button_ = nullptr;
-  QPushButton* metrics_button_ = nullptr;
+  QPushButton* network_status_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
 
@@ -198,6 +222,15 @@ class MainWindow : public QMainWindow {
   /// Setting a stylesheet re-resolves the widget's whole style, and the
   /// measurement behind this arrives on a timer whether it moved or not.
   int shown_quality_ = -1;
+
+  /// The last round trip to the signaling server, in milliseconds, or -1 for
+  /// no current measurement. Kept because the indicator is repainted from it
+  /// on leaving a room, rather than left blank until the next probe.
+  int link_round_trip_ms_ = -1;
+  /// The link verdict on screen, for the reason `shown_quality_` exists. Its
+  /// own, because the two take turns owning the same label and one resetting
+  /// the other's memory would skip a restyle that was needed.
+  int shown_link_quality_ = -1;
 
   // Chat. A list of plain text items rather than a rich text view: what goes
   // in it is typed by other people, and a widget that renders no markup cannot

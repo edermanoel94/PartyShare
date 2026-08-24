@@ -127,8 +127,28 @@ class CallSession {
     std::chrono::milliseconds metrics_interval{5000};
   };
 
+  /// What is known about the link to the signaling server.
+  ///
+  /// Exists because the call metrics stop the moment a call does, and the
+  /// question "is the network any good" does not: it is asked hardest by
+  /// somebody sitting on the lobby screen deciding whether to start one.
+  ///
+  /// It is a thinner measurement than `media::AudioStats` and is not a
+  /// substitute for it. One round trip over a WebSocket says nothing about
+  /// jitter or loss, and whoever displays it is expected to say which of the
+  /// two it has - a call reported as good on this alone would be a claim
+  /// nothing here measured.
+  struct LinkStats {
+    /// Round trip to the signaling server, or unset when there is no current
+    /// measurement: no probe answered yet, or no connection at all.
+    std::optional<std::chrono::milliseconds> round_trip;
+  };
+
   struct Callbacks {
     std::function<void(State state, std::string detail)> on_state;
+    /// The link to the signaling server, on the same interval as `on_metrics`
+    /// and whether or not there is a call. See `LinkStats`.
+    std::function<void(LinkStats)> on_link;
     /// The room's participants, whenever the list changes.
     std::function<void(std::vector<Participant>)> on_participants;
     std::function<void(media::AudioStats)> on_metrics;
@@ -349,6 +369,25 @@ class CallSession {
   /// being captured rather than whichever one the system listed first.
   [[nodiscard]] std::string input_device() const;
   [[nodiscard]] std::string output_device() const;
+
+  /// The signaling server the next sign-in will use.
+  [[nodiscard]] std::string signaling_url() const;
+
+  /// Points this session at a different signaling server, without restarting
+  /// the program.
+  ///
+  /// It takes effect at the next `connect_and_authenticate`, and never in the
+  /// middle of what is already running: a call in progress stays on the server
+  /// it was placed on, including across a dropped socket, because the room and
+  /// everyone in it only exist there. Somebody who changes the address while
+  /// in a call leaves the room and signs in again, which is a great deal less
+  /// than closing and reopening the client - and that is the whole point of
+  /// this being a setter rather than a line in a file read once at startup.
+  ///
+  /// Not validated here, for the same reason `SignalingClient::set_url` is
+  /// not: an address is refused where it becomes an attempt, so the message
+  /// says what happened rather than what might.
+  void set_signaling_url(std::string url);
 
   void disconnect();
 

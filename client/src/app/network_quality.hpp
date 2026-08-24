@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <string_view>
 
 #include "media/media_session.hpp"
@@ -72,6 +73,29 @@ inline constexpr double kPoorLossPercent = 5.0;
   }
   if (stats.round_trip_time_ms > kFairRoundTripMs || stats.jitter_ms > kFairJitterMs ||
       loss > kFairLossPercent) {
+    return NetworkQuality::Fair;
+  }
+  return NetworkQuality::Good;
+}
+
+/// The same verdict from a round trip alone, which is all there is when no
+/// call is running.
+///
+/// The thresholds are deliberately the ones above rather than looser ones. A
+/// link called fair during a call must not read as good in the lobby and then
+/// change its mind the moment somebody speaks: the indicator would be blamed
+/// for the change, and the network would not have moved at all.
+///
+/// It is a thinner claim than the three measurement verdict, and whoever shows
+/// it is expected to say which one it is. Jitter and loss are not unmeasured
+/// here because they were good - they are unmeasured because nothing was
+/// flowing to measure them on.
+[[nodiscard]] constexpr NetworkQuality quality_of(std::chrono::milliseconds round_trip) noexcept {
+  const auto elapsed = static_cast<double>(round_trip.count());
+  if (elapsed > kPoorRoundTripMs) {
+    return NetworkQuality::Poor;
+  }
+  if (elapsed > kFairRoundTripMs) {
     return NetworkQuality::Fair;
   }
   return NetworkQuality::Good;

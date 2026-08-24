@@ -904,6 +904,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     const audio::LoopbackStats capture = mixer.capture_stats();
     copy.screen_audio_blocks = capture.blocks_delivered;
     copy.screen_audio_silent_blocks = capture.blocks_silent;
+    const audio::BlockPacer::Stats mixed = mixer.mix_stats();
+    copy.screen_audio_mixed_blocks = mixed.blocks_taken - mixed.blocks_silent;
+    copy.screen_audio_starved_blocks = mixed.blocks_silent;
+    copy.screen_audio_dropped_frames = mixed.frames_dropped;
     return copy;
   }
 

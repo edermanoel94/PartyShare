@@ -199,14 +199,22 @@ o mudo passa a ser exato em vez de depender do estado da trilha.
 coisas. Sem conserto dentro da Opção A — é o preço dela, e precisa estar escrito
 na interface ("volume de <fulano>" passa a incluir o que ele compartilha).
 
-**O indicador de fala ficaria aceso o tempo todo.** O nível local sai das
-estatísticas de `outbound-rtp` (`collect_levels`, linha 1227), que são pós
-mistura; o nível remoto sai da extensão de cabeçalho `audio-level`, que também
-é. Conserto: medir o nível do microfone dentro do `ScreenAudioMixer`, antes de
-misturar, e publicar esse valor. Para os espectadores, o nível remoto de quem
-compartilha passa a não significar nada — a interface deve deixar de mostrar o
-indicador de fala de quem está compartilhando, ou mostrá-lo a partir de outra
-fonte.
+**O indicador de fala local ficaria aceso o tempo todo.** O nível local saía das
+estatísticas de `outbound-rtp` (`collect_levels`), que são pós mistura.
+Conserto: medir o nível do microfone dentro do `ScreenAudioMixer`, antes de
+misturar, e publicar esse valor.
+
+> **Corrigido na fase 4.** Eu previ aqui que o problema também valeria para os
+> espectadores — que o nível remoto de quem compartilha deixaria de significar
+> alguma coisa, e que a interface teria de parar de mostrá-lo. **Está errado.**
+> O libwebrtc calcula o nível que a extensão de cabeçalho `audio-level` carrega
+> *antes* do processador de frames, então ele reporta o microfone sozinho e
+> nunca o áudio de tela somado depois. Medido em
+> `MediaEndToEndTest.TheSoundOfASharedScreenReachesTheOtherParticipant`: uma
+> trilha carregando 94 kbps de música reportou nível 0,0002. O indicador de fala
+> dos participantes remotos continua correto sem que nada precise ser feito — e
+> foi essa mesma medida que quase me fez concluir, ao contrário, que o som não
+> estava chegando.
 
 **Realimentação.** Se o loopback capturar a saída do próprio PartyShare, a voz
 de todo mundo volta para dentro da chamada, depois do AEC, sem nada para
@@ -519,16 +527,80 @@ sala, e conduzir uma janela Qt não é algo que se faça de um terminal. Tudo
 compila, a lógica está coberta por testes, e o que falta é alguém abrir o
 diálogo e olhar.
 
-### Fase 4 — medição e documentação
+### Fase 4 — medição e documentação ✅ feito
 
-- `VideoStats`/`AudioStats` ganham o bitrate do áudio da tela, para o painel de
-  métricas que já existe.
-- `docs/requirements.md` — a conta de banda revisada.
-- Um teste ponta a ponta em `tests/integration/`, no molde de
-  `test_media_end_to_end.cpp`: um cliente gera um tom, compartilha, e o outro
-  recebe áudio acima do piso de ruído. `DV_AUDIO_NULL_DEVICE` já existe para
-  rodar isso sem placa de som. **Desbloqueado**: `dv_media_tests` linka e roda,
-  contra a árvore de libwebrtc com `DV_EXTERNAL_SSL`.
+**O teste ponta a ponta**, em `tests/integration/test_media_end_to_end.cpp`, com
+nada encenado: o processo de teste toca um tom, a captura de loopback o ouve, o
+misturador o dobra na trilha de áudio da Ana depois do cancelador de eco, o Opus
+codifica, o SFU encaminha e o cliente do Bruno recebe.
+
+O instrumento não é o que o plano previa, e a razão é uma descoberta:
+
+> Eu ia medir o **nível** do participante remoto. Com o tom tocando, o nível que
+> o Bruno via da Ana era 0,0002 — praticamente silêncio — enquanto a trilha
+> carregava 94 kbps. Quase concluí que o som não estava chegando. O que
+> acontece é que o libwebrtc calcula o nível da extensão `audio-level` **antes**
+> do processador de frames: ele reporta o microfone sozinho. Isso é a resposta
+> certa para um indicador de fala e o instrumento errado para este teste.
+
+O que se mede então é o bitrate, comparando o **mesmo compartilhamento** com e
+sem som — comparar contra "sem compartilhamento nenhum" também estaria
+comparando mono contra estéreo:
+
+| A trilha de áudio de quem compartilha | Bitrate |
+| --- | --- |
+| Compartilhando, nada tocando | ~1 kbps |
+| Compartilhando, tom tocando | ~100 kbps |
+
+A primeira linha custou uma segunda descoberta: o Opus abre a trilha estéreo no
+teto negociado e só desce depois de alguns segundos vendo que o conteúdo é
+silêncio. A primeira versão do teste mediu o pico durante essa rampa e comparou
+100 kbps com 105 — o teste esperava até assentar, e agora espera de fato.
+
+Um segundo teste cobre o ciclo de vida: parar o compartilhamento leva o som
+junto, o Bruno é informado, e a chamada não é tocada por nada disso.
+
+#### O defeito que a fase 4 existiu para encontrar
+
+Com o microfone da Ana mudo, a trilha continuava custando 1 kbps: nada estava
+sendo misturado. Os contadores da captura estavam todos verdes — 590 blocos
+entregues, 3 de silêncio — e mesmo assim o compartilhamento era mudo para todo
+mundo.
+
+O que faltava era um contador do **outro** amortecedor. Expostos os dois, a
+resposta apareceu em uma linha: `mixed=0 starved=0 dropped=280260`. O buffer
+entre a captura e o codificador enchia e ninguém o esvaziava, porque `mix()`
+caía no caminho de passagem. E o aviso que eu tinha deixado lá dizia por quê:
+
+```
+Screen audio: not mixing, because a captured frame is 160 frames of 1 channels
+and this expects 480 of at most two
+```
+
+**160 quadros são 16 kHz.** O módulo de processamento de áudio entrega o que o
+dispositivo de captura produz, e um headset em modo de comunicação produz
+16 kHz. Meu misturador assumia 48 kHz — o que era verdade no spike, onde eu
+mesmo escolhia a taxa do ADM, e falso em qualquer máquina cujo microfone capture
+abaixo disso. O único sinal era uma linha de log.
+
+O conserto põe um `webrtc::PushResampler` no adaptador, que é onde o resampler
+do próprio libwebrtc está disponível, e sobe o microfone até 48 kHz em vez de
+descer o áudio de tela até 16. Música a 16 kHz não tem nada acima de 8 kHz, e o
+motivo de mandá-la é justamente que ela não é uma voz.
+
+O teste assere `screen_audio_mixed_blocks > 0`. É a asserção que teria pegado
+isso, e é por ela que o teste está escrito.
+
+**As métricas.** Não há bitrate separado para o áudio da tela a mostrar — ele
+não é uma trilha própria, essa é a Opção A. O que a linha de métricas passa a
+dizer é o que existe: `sound shared (N% silent)`. A porcentagem é a metade que
+importa: uma captura que entrega só silêncio é indistinguível, de fora, de uma
+que está funcionando.
+
+**A conta de banda** em `docs/requirements.md` foi revista com os números
+medidos. Resumo: no pior caso, um teto de 96 kbps a mais na entrada por quem
+compartilha e 96 kbps na saída por espectador — ao lado dos 3,3 Mbps da imagem,
+não muda como a máquina é dimensionada.
 
 ## 9. Riscos
 

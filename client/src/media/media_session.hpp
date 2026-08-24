@@ -85,6 +85,18 @@ struct AudioStats {
   /// process rather than from the start of the share.
   std::uint64_t screen_audio_blocks = 0;
   std::uint64_t screen_audio_silent_blocks = 0;
+  /// Blocks of screen audio that actually reached the encoder, and blocks the
+  /// mixer had to fill with silence because the buffer between the capture and
+  /// the encoder had run dry.
+  ///
+  /// Separate from the two above, which count what the capture produced. The
+  /// capture can be delivering perfectly while this starves, and it is only
+  /// here that the difference shows.
+  std::uint64_t screen_audio_mixed_blocks = 0;
+  std::uint64_t screen_audio_starved_blocks = 0;
+  /// Frames thrown away because that buffer went over its watermark, which is
+  /// the encoder falling behind the capture rather than the other way round.
+  std::uint64_t screen_audio_dropped_frames = 0;
 };
 
 /// What the screen share is doing, section 22 of SPEC.md.

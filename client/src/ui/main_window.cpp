@@ -607,6 +607,23 @@ void MainWindow::wire_session() {
               summary +=
                   QStringLiteral(" · screen %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
             }
+
+            // While the share carries sound, the audio number above stops being
+            // about a voice: it is a voice and a film together, in stereo, and
+            // it climbs from tens of kbps to near a hundred. Saying so is what
+            // keeps somebody from reading their own screen share as a fault.
+            //
+            // How much of it was silence is the other half. A capture that is
+            // delivering nothing but silence looks exactly like a working one
+            // from the outside, and this is the only place that difference
+            // shows.
+            if (stats.screen_audio_active) {
+              const auto blocks = stats.screen_audio_blocks;
+              const int quiet =
+                  blocks == 0 ? 0
+                              : static_cast<int>((stats.screen_audio_silent_blocks * 100) / blocks);
+              summary += QStringLiteral(" · sound shared (%1% silent)").arg(quiet);
+            }
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary),
                                       Q_ARG(int, static_cast<int>(client::app::quality_of(stats))));

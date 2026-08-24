@@ -85,6 +85,13 @@ class ScreenAudioMixer {
 
   [[nodiscard]] LoopbackStats capture_stats() const;
 
+  /// What the buffer between the capture and the encoder did.
+  ///
+  /// A different question from capture_stats(), and the one that says whether
+  /// the sound reached the track: the capture can be delivering perfectly while
+  /// this starves, and then the share is silent for everybody.
+  [[nodiscard]] BlockPacer::Stats mix_stats() const { return pacer_.stats(); }
+
   /// Silences the microphone without silencing the screen audio.
   ///
   /// This is why muting stopped being `track->set_enabled(false)` while a share

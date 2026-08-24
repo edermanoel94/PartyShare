@@ -43,6 +43,7 @@
 #include "audio/audio_sources.hpp"
 #include "audio/block_pacer.hpp"
 #include "audio/loopback_capturer.hpp"
+#include "tone_player.hpp"
 
 namespace {
 
@@ -63,145 +64,6 @@ TEST(LoopbackCaptureTest, AProcessLoopbackNeedsAProcess) {
 }
 
 #if defined(_WIN32)
-
-/// Renders a quiet 440 Hz tone to the default playback device, from this very
-/// process.
-///
-/// The point is to give the capture something known to hear that is entirely
-/// under the test's control: no second process to launch, no media file to
-/// ship, and nothing to go looking for if the assertion fails. Quiet and short
-/// on purpose - it does come out of the speakers.
-class TonePlayer {
- public:
-  ~TonePlayer() { stop(); }
-
-  /// False when this machine has no playback device, which is what a bare CI
-  /// runner is.
-  bool start() {
-    std::promise<bool> opened;
-    std::future<bool> ready = opened.get_future();
-    running_ = true;
-    thread_ = std::thread([this, &opened] { render(opened); });
-    if (!ready.get()) {
-      stop();
-      return false;
-    }
-    return true;
-  }
-
-  void stop() {
-    running_ = false;
-    if (thread_.joinable()) {
-      thread_.join();
-    }
-  }
-
- private:
-  void render(std::promise<bool>& opened) {
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool uninitialise = SUCCEEDED(com);
-    {
-      IMMDeviceEnumerator* enumerator = nullptr;
-      IMMDevice* device = nullptr;
-      IAudioClient* client = nullptr;
-      IAudioRenderClient* render_client = nullptr;
-      WAVEFORMATEX* mix = nullptr;
-      bool announced = false;
-
-      const auto give_up = [&](bool ok) {
-        if (!announced) {
-          opened.set_value(ok);
-          announced = true;
-        }
-      };
-
-      if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                     __uuidof(IMMDeviceEnumerator),
-                                     reinterpret_cast<void**>(&enumerator))) &&
-          SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) &&
-          SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                     reinterpret_cast<void**>(&client))) &&
-          SUCCEEDED(client->GetMixFormat(&mix)) &&
-          SUCCEEDED(client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10'000'000, 0, mix, nullptr)) &&
-          SUCCEEDED(client->GetService(__uuidof(IAudioRenderClient),
-                                       reinterpret_cast<void**>(&render_client))) &&
-          SUCCEEDED(client->Start())) {
-        give_up(true);
-        pump(*client, *render_client, *mix);
-        client->Stop();
-      } else {
-        give_up(false);
-      }
-
-      if (mix != nullptr) {
-        CoTaskMemFree(mix);
-      }
-      if (render_client != nullptr) {
-        render_client->Release();
-      }
-      if (client != nullptr) {
-        client->Release();
-      }
-      if (device != nullptr) {
-        device->Release();
-      }
-      if (enumerator != nullptr) {
-        enumerator->Release();
-      }
-    }
-    if (uninitialise) {
-      CoUninitialize();
-    }
-  }
-
-  void pump(IAudioClient& client, IAudioRenderClient& render_client, const WAVEFORMATEX& mix) {
-    UINT32 buffer_frames = 0;
-    if (FAILED(client.GetBufferSize(&buffer_frames))) {
-      return;
-    }
-    // The mix format is float32 on every desktop Windows in existence; the
-    // 16-bit branch is there so a machine that surprises us produces a quiet
-    // test failure rather than a scream.
-    const bool is_float = mix.wBitsPerSample == 32;
-    double phase = 0;
-    const double step = 2.0 * 3.14159265358979323846 * 440.0 / mix.nSamplesPerSec;
-
-    while (running_.load()) {
-      UINT32 padding = 0;
-      if (FAILED(client.GetCurrentPadding(&padding))) {
-        return;
-      }
-      const UINT32 free_frames = buffer_frames - padding;
-      if (free_frames == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        continue;
-      }
-
-      BYTE* data = nullptr;
-      if (FAILED(render_client.GetBuffer(free_frames, &data)) || data == nullptr) {
-        return;
-      }
-      for (UINT32 frame = 0; frame < free_frames; ++frame) {
-        const double value = std::sin(phase) * 0.05;
-        phase += step;
-        for (WORD channel = 0; channel < mix.nChannels; ++channel) {
-          const std::size_t index = (static_cast<std::size_t>(frame) * mix.nChannels) + channel;
-          if (is_float) {
-            reinterpret_cast<float*>(data)[index] = static_cast<float>(value);
-          } else {
-            reinterpret_cast<std::int16_t*>(data)[index] =
-                static_cast<std::int16_t>(value * 32767.0);
-          }
-        }
-      }
-      render_client.ReleaseBuffer(free_frames, 0);
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-  }
-
-  std::atomic<bool> running_{false};
-  std::thread thread_;
-};
 
 /// How much of TonePlayer's 440 Hz is in what was captured.
 ///
@@ -236,7 +98,8 @@ class ToneDetector {
   void close() {
     double in_phase = 0;
     double quadrature = 0;
-    const double step = 2.0 * 3.14159265358979323846 * 440.0 / dv::client::audio::kSampleRateHz;
+    const double step =
+        2.0 * 3.14159265358979323846 * dv::testing::kTestToneHz / dv::client::audio::kSampleRateHz;
     for (std::size_t i = 0; i < window_.size(); ++i) {
       const double angle = step * static_cast<double>(i);
       in_phase += window_[i] * std::cos(angle);
@@ -254,7 +117,7 @@ class ToneDetector {
 };
 
 TEST(LoopbackCaptureTest, ItHearsWhatAProcessIsPlaying) {
-  TonePlayer player;
+  dv::testing::TonePlayer player;
   if (!player.start()) {
     GTEST_SKIP() << "this machine has no playback device to render a tone to";
   }
@@ -283,35 +146,52 @@ TEST(LoopbackCaptureTest, ItHearsWhatAProcessIsPlaying) {
   EXPECT_GT(detector.tone(), 0.005) << "the capture never heard the tone";
 }
 
+/// Runs a system-mode capture for a moment and returns how much 440 Hz was in
+/// it. Used twice: once with this process silent and once with it playing.
+[[nodiscard]] double system_mode_tone() {
+  ToneDetector detector;
+  auto created = create_loopback_capturer(
+      [&](std::span<const std::int16_t> block) { detector.add(block); }, [](dv::Error) {});
+  if (!created.ok()) {
+    return -1;
+  }
+  auto capturer = std::move(created).take();
+  if (!capturer->start(LoopbackMode::System, 0).ok()) {
+    return -1;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  capturer->stop();
+  return detector.tone();
+}
+
 TEST(LoopbackCaptureTest, SystemModeIsDeafToThisProcess) {
   // The property the whole feature rests on. If system mode could hear us, a
   // share would send every other participant their own voice back, after the
   // echo canceller and with nothing left to remove it.
   //
-  // Asked as "is our tone in there" rather than "is it silent", so that a
-  // browser playing something on the machine running the test does not decide
-  // the answer.
-  TonePlayer player;
+  // Measured as a difference rather than against a fixed number. Asking "is it
+  // silent" fails on a machine that has music playing, and asking "is there
+  // 440 Hz" fails when the music happens to contain some - which it did, here,
+  // at 0.0024 against a threshold of 0.001. What the property actually says is
+  // that *our* tone changes nothing, so the baseline is measured first.
+  const double baseline = system_mode_tone();
+  if (baseline < 0) {
+    GTEST_SKIP() << "no system loopback on this machine";
+  }
+
+  dv::testing::TonePlayer player;
   if (!player.start()) {
     GTEST_SKIP() << "this machine has no playback device to render a tone to";
   }
-
-  ToneDetector detector;
-  auto created = create_loopback_capturer(
-      [&](std::span<const std::int16_t> block) { detector.add(block); }, [](dv::Error) {});
-  ASSERT_TRUE(created.ok()) << created.error().message;
-  auto capturer = std::move(created).take();
-
-  const auto started = capturer->start(LoopbackMode::System, 0);
-  if (!started.ok()) {
-    GTEST_SKIP() << "the loopback would not start: " << started.error().message;
-  }
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-  capturer->stop();
+  const double with_tone = system_mode_tone();
   player.stop();
 
-  EXPECT_LT(detector.tone(), 0.001) << "system mode heard this process";
+  ASSERT_GE(with_tone, 0.0);
+  // Room for the machine's own audio to wander, and nowhere near the amount our
+  // tone would add if it were being heard: captured directly, in the test
+  // above, it lands two orders of magnitude higher than this.
+  EXPECT_LT(with_tone, baseline + 0.005) << "system mode heard this process: " << baseline
+                                         << " without the tone, " << with_tone << " with it";
 }
 
 TEST(LoopbackCaptureTest, BlocksArriveOnTheClockEvenWhenNothingIsPlaying) {

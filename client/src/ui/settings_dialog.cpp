@@ -8,6 +8,7 @@
 #include <dv/config/config.hpp>
 #include <dv/logging/logger.hpp>
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -98,6 +99,11 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // client from starting, and nothing on screen would connect the two.
   const int lowest = std::max(kMinBitrateKbps, session_.video_floor_bitrate_kbps());
 
+  // Named for what it does rather than "Automatic", which on its own leaves
+  // the reader to guess what it is automatic about.
+  auto_bitrate_ =
+      new QCheckBox(QStringLiteral("Choose the bitrate from the resolution and frame rate"), video);
+
   min_bitrate_ = new QSpinBox(video);
   min_bitrate_->setRange(lowest, kMaxBitrateKbps);
   min_bitrate_->setSingleStep(kBitrateStepKbps);
@@ -141,6 +147,10 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   video_form->addRow(QStringLiteral("Monitor"), monitor_);
   video_form->addRow(QStringLiteral("Resolution"), resolution_);
   video_form->addRow(QStringLiteral("Frame rate"), frame_rate_);
+  // Above the two boxes it governs, because it decides whether they can be
+  // touched at all, and a switch read after the thing it disables is a switch
+  // read too late.
+  video_form->addRow(QStringLiteral("Bitrate"), auto_bitrate_);
   video_form->addRow(QStringLiteral("Minimum bitrate"), min_bitrate_);
   video_form->addRow(QStringLiteral("Maximum bitrate"), max_bitrate_);
   // Under the picture settings, because it is part of what a share carries
@@ -205,9 +215,9 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   load_audio_sources();
   show_storage();
 
-  const auto [minimum, maximum] = session_.video_bitrate();
-  min_bitrate_->setValue(minimum);
-  max_bitrate_->setValue(maximum);
+  // One call for all three, because in automatic mode the values and whether
+  // the boxes accept typing are the same question, answered by the session.
+  sync_bitrate();
 
   // After the bitrate is in, because what it says is the two compared.
   show_quality_hint();
@@ -222,6 +232,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // saying everything was saved, over a box showing a figure that was neither
   // in use nor written down. Whoever pressed it once and looked at the result
   // had every reason to believe it had taken.
+  connect(auto_bitrate_, &QCheckBox::toggled, this, &SettingsDialog::on_auto_bitrate_changed);
   connect(min_bitrate_, &QSpinBox::valueChanged, this, &SettingsDialog::on_bitrate_changed);
   connect(max_bitrate_, &QSpinBox::valueChanged, this, &SettingsDialog::on_bitrate_changed);
   connect(resolution_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
@@ -377,6 +388,20 @@ void SettingsDialog::show_quality_hint() {
   const int wants = client::video::recommended_max_bitrate_kbps(
       {.width = size.width(), .height = size.height()}, fps);
 
+  if (auto_bitrate_->isChecked()) {
+    // The warning below cannot fire here: the ceiling is the recommendation.
+    // What is worth saying instead is where the greyed out numbers came from,
+    // since a disabled box with a value in it otherwise reads as a setting
+    // that has got stuck.
+    quality_hint_->setText(
+        QStringLiteral("%1 at %2 fps is worth about %3 kbps, so that is the maximum. The two "
+                       "below follow the rows above.")
+            .arg(resolution_->currentText())
+            .arg(fps)
+            .arg(wants));
+    return;
+  }
+
   if (wants <= max_bitrate_->value()) {
     // The common case, and the one that has nothing to say. An empty label
     // rather than a hidden one, so the rows below do not jump as the quality
@@ -392,6 +417,39 @@ void SettingsDialog::show_quality_hint() {
           .arg(fps)
           .arg(wants)
           .arg(max_bitrate_->value()));
+}
+
+void SettingsDialog::sync_bitrate() {
+  const bool automatic = session_.auto_bitrate();
+  const auto [minimum, maximum] = session_.video_bitrate();
+
+  const QSignalBlocker auto_quiet(auto_bitrate_);
+  const QSignalBlocker min_quiet(min_bitrate_);
+  const QSignalBlocker max_quiet(max_bitrate_);
+
+  auto_bitrate_->setChecked(automatic);
+  min_bitrate_->setValue(minimum);
+  max_bitrate_->setValue(maximum);
+
+  // Disabled and not hidden. What automatic mode picked is the most useful
+  // thing on this row, and a row that disappears takes the answer to "what is
+  // it actually sending" with it.
+  min_bitrate_->setEnabled(!automatic);
+  max_bitrate_->setEnabled(!automatic);
+}
+
+std::vector<config::IniSetting> SettingsDialog::bitrate_settings() const {
+  return {
+      {.section = "video",
+       .key = "auto_bitrate",
+       .value = auto_bitrate_->isChecked() ? "true" : "false"},
+      {.section = "video",
+       .key = "min_bitrate_kbps",
+       .value = std::to_string(min_bitrate_->value())},
+      {.section = "video",
+       .key = "max_bitrate_kbps",
+       .value = std::to_string(max_bitrate_->value())},
+  };
 }
 
 void SettingsDialog::stage(const std::vector<config::IniSetting>& settings) {
@@ -530,13 +588,28 @@ void SettingsDialog::on_bitrate_changed() {
   // lowering it can be what makes the quality above worth a word.
   show_quality_hint();
 
-  // Both keys in one pass. They are a range: written one at a time, a file read
-  // between the two writes would hold a maximum below its minimum, which is a
-  // configuration that does not start.
-  stage({
-      {.section = "video", .key = "min_bitrate_kbps", .value = std::to_string(minimum)},
-      {.section = "video", .key = "max_bitrate_kbps", .value = std::to_string(maximum)},
-  });
+  // All three keys in one pass. Two of them are a range: staged one at a time,
+  // a Save between them would leave a file whose maximum sits below its
+  // minimum, which is a configuration that does not start.
+  stage(bitrate_settings());
+}
+
+void SettingsDialog::on_auto_bitrate_changed(bool automatic) {
+  if (const auto applied = session_.set_auto_bitrate(automatic); !applied) {
+    DV_LOG_WARN("Refused to turn automatic bitrate {}: {}", automatic ? "on" : "off",
+                applied.error().message);
+    // Back onto the mode actually in force, or the box says one thing while
+    // the session does another.
+    sync_bitrate();
+    return;
+  }
+
+  // The session has just worked the range out, so the boxes are read back from
+  // it rather than computed here a second time. Two places deriving the same
+  // number is two places to keep in step.
+  sync_bitrate();
+  show_quality_hint();
+  stage(bitrate_settings());
 }
 
 void SettingsDialog::on_quality_changed() {
@@ -563,16 +636,27 @@ void SettingsDialog::on_quality_changed() {
     return;
   }
 
+  // In automatic mode the session has just moved the range to match the new
+  // rows, so the boxes are stale until this. Harmless in manual mode, where it
+  // reads back exactly what is already shown.
+  sync_bitrate();
   show_quality_hint();
 
-  // All three in one pass, for the reason the bitrate pair is: a file read
-  // between two of the writes would hold a width from one choice and a height
-  // from another, which is a shape no monitor has.
-  stage({
+  // All three in one pass, for the reason the bitrate keys are: a Save between
+  // two of them would leave a width from one choice next to a height from
+  // another, which is a shape no monitor has.
+  std::vector<config::IniSetting> settings{
       {.section = "video", .key = "width", .value = std::to_string(size.width)},
       {.section = "video", .key = "height", .value = std::to_string(size.height)},
       {.section = "video", .key = "fps", .value = std::to_string(fps)},
-  });
+  };
+  if (auto_bitrate_->isChecked()) {
+    // The range moved with the rows, and a file that keeps the new resolution
+    // next to the old bitrate is a file that starts the next run on neither.
+    const std::vector<config::IniSetting> bitrate = bitrate_settings();
+    settings.insert(settings.end(), bitrate.begin(), bitrate.end());
+  }
+  stage(settings);
 }
 
 QString SettingsDialog::selected_monitor() const {

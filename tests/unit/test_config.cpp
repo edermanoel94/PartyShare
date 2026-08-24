@@ -103,6 +103,10 @@ TEST(Config, DefaultsMatchTheSpec) {
   EXPECT_TRUE(config.audio.echo_cancellation);
   EXPECT_TRUE(config.audio.noise_suppression);
   EXPECT_TRUE(config.audio.automatic_gain_control);
+  // Off, and this default matters more than most: on would mean that every
+  // config.ini already naming a bitrate has it overruled by the next upgrade,
+  // silently, including the ones written for a link that cannot carry more.
+  EXPECT_FALSE(config.video.auto_bitrate);
 }
 
 TEST(Config, DefaultsAreValid) {
@@ -292,12 +296,14 @@ TEST(Config, SerializationOmitsTheTurnPassword) {
 
 TEST(Config, SerializationRoundTrips) {
   Config original;
+  original.video.auto_bitrate = true;
   original.video.fps = 24;
   original.audio.channels = 2;
   original.server.port = 9999;
 
   const auto reparsed = dv::config::parse_json(dv::config::to_json(original), Config{});
   ASSERT_TRUE(reparsed.ok()) << reparsed.error().message;
+  EXPECT_TRUE(reparsed.value().video.auto_bitrate);
   EXPECT_EQ(reparsed.value().video.fps, 24);
   EXPECT_EQ(reparsed.value().audio.channels, 2);
   EXPECT_EQ(reparsed.value().server.port, 9999);
@@ -466,6 +472,18 @@ TEST(ConfigIni, ReachesEverySection) {
   EXPECT_TRUE(parsed.value().database.enabled);
 }
 
+TEST(ConfigIni, ReadsTheAutomaticBitrateMode) {
+  // The settings dialog writes this key, so a build that cannot read it back
+  // is a dialog whose switch forgets itself between runs.
+  const auto parsed = dv::config::parse_ini("[video]\nauto_bitrate = true\n", Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_TRUE(parsed.value().video.auto_bitrate);
+
+  const auto off = dv::config::parse_ini("[video]\nauto_bitrate = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().video.auto_bitrate);
+}
+
 TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {
   const auto parsed = dv::config::parse_ini("[screen_audio]\nmode = process\n", Config{});
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
@@ -506,6 +524,7 @@ TEST(ConfigIni, RefusesWhatItCannotApply) {
       {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
       {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
       {"[screen_audio]\nmodo = system\n", "a misspelled screen audio key"},
+      {"[video]\nauto_bitrate = sometimes\n", "a mode that is not a boolean"},
       {"[server]\nport = 70000\n", "a port out of range"},
       {"signaling_url = ws://x:1\n", "a setting under no section"},
       {"[network\nsignaling_url = ws://x:1\n", "an unterminated section header"},

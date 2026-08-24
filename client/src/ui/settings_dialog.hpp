@@ -9,6 +9,7 @@
 
 #include "app/call_session.hpp"
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -57,6 +58,7 @@ class SettingsDialog : public QDialog {
   void on_input_changed(int index);
   void on_output_changed(int index);
   void on_bitrate_changed();
+  void on_auto_bitrate_changed(bool automatic);
   void on_quality_changed();
   void on_screen_audio_changed();
   void on_save();
@@ -91,7 +93,27 @@ class SettingsDialog : public QDialog {
   /// A note and not a correction. Raising somebody's ceiling because they
   /// picked 1080p would undo a setting they made on purpose, possibly one made
   /// to fit a link that cannot carry more.
+  ///
+  /// In automatic mode there is nothing to warn about, because the ceiling is
+  /// the recommendation. It says what was chosen instead, which is the only
+  /// thing on screen that explains two greyed out boxes.
   void show_quality_hint();
+
+  /// Puts the range the session holds into the two spin boxes, and greys them
+  /// out when automatic mode is on.
+  ///
+  /// Signals blocked throughout: these values come from the session, and
+  /// letting them arrive as edits would ask the session for what it just said,
+  /// then stage it as though somebody had typed it.
+  void sync_bitrate();
+
+  /// The `[video]` keys that describe the bitrate right now, as one list.
+  ///
+  /// The mode and the range travel together for the reason the two ends of the
+  /// range do: staged apart, a Save in between leaves a file that says
+  /// automatic while holding the range from before it, and that file starts a
+  /// client on a bitrate nobody picked.
+  [[nodiscard]] std::vector<config::IniSetting> bitrate_settings() const;
 
   /// Adds settings to what Save will write, replacing any earlier value for
   /// the same key.
@@ -131,6 +153,7 @@ class SettingsDialog : public QDialog {
   QLabel* screen_audio_hint_ = nullptr;
   QComboBox* resolution_ = nullptr;
   QComboBox* frame_rate_ = nullptr;
+  QCheckBox* auto_bitrate_ = nullptr;
   QSpinBox* min_bitrate_ = nullptr;
   QSpinBox* max_bitrate_ = nullptr;
   /// Empty unless the chosen quality wants more than the configured ceiling.

@@ -19,6 +19,7 @@ namespace {
 
 using dv::client::video::fit_within;
 using dv::client::video::FrameQueue;
+using dv::client::video::recommended_bitrate_kbps;
 using dv::client::video::recommended_max_bitrate_kbps;
 using dv::client::video::Size;
 using dv::client::video::VideoFrame;
@@ -126,6 +127,52 @@ TEST(ScreenQualityTest, TheRecommendationStopsWhereTheDialogStopsOffering) {
 TEST(ScreenQualityTest, NonsenseFallsBackToTheSpecDefault) {
   EXPECT_EQ(recommended_max_bitrate_kbps({0, 0}, 30), dv::client::video::kBaseMaxBitrateKbps);
   EXPECT_EQ(recommended_max_bitrate_kbps({1280, 720}, 0), dv::client::video::kBaseMaxBitrateKbps);
+}
+
+TEST(ScreenQualityTest, TheAutomaticRangeIsTheSpecRangeAtTheDefaultQuality) {
+  // Section 6 of SPEC.md puts 720p30 between 1.5 and 3 Mbps. Automatic mode
+  // arriving anywhere else at the default quality would mean the mode and the
+  // defaults disagree about the one case both of them name.
+  const auto range = recommended_bitrate_kbps({1280, 720}, 30, 300);
+  EXPECT_EQ(range.min_kbps, 1500);
+  EXPECT_EQ(range.max_kbps, 3000);
+}
+
+TEST(ScreenQualityTest, TheAutomaticCeilingIsTheRecommendation) {
+  for (const int fps : {30, 60}) {
+    for (const Size size : {Size{1280, 720}, Size{1920, 1080}}) {
+      EXPECT_EQ(recommended_bitrate_kbps(size, fps, 300).max_kbps,
+                recommended_max_bitrate_kbps(size, fps))
+          << size.width << "x" << size.height << " at " << fps;
+    }
+  }
+}
+
+TEST(ScreenQualityTest, TheAutomaticStartNeverSitsBelowTheFloor) {
+  // dv::config::validate refuses a floor above the minimum, and this is the
+  // one place that can produce that pair without anybody typing a number.
+  const auto range = recommended_bitrate_kbps({1280, 720}, 30, 2000);
+  EXPECT_GE(range.min_kbps, 2000);
+  EXPECT_LE(range.min_kbps, range.max_kbps);
+}
+
+TEST(ScreenQualityTest, AFloorAboveTheRecommendationLiftsTheCeilingToMeetIt) {
+  // Strange, and legal: a floor is read from the configuration while the
+  // ceiling is computed. Returning a maximum under its minimum would be a
+  // range no caller can use, so the ceiling gives way.
+  const auto range = recommended_bitrate_kbps({1280, 720}, 30, 20000);
+  EXPECT_GE(range.max_kbps, 20000);
+  EXPECT_LE(range.min_kbps, range.max_kbps);
+}
+
+TEST(ScreenQualityTest, TheAutomaticRangeIsOrderedForEveryQualityOffered) {
+  for (const dv::client::video::ScreenResolution& row : dv::client::video::kScreenResolutions) {
+    for (const int fps : dv::client::video::kScreenFrameRates) {
+      const auto range = recommended_bitrate_kbps(row.size, fps, 300);
+      EXPECT_GE(range.min_kbps, 300) << row.label << " at " << fps;
+      EXPECT_LE(range.min_kbps, range.max_kbps) << row.label << " at " << fps;
+    }
+  }
 }
 
 TEST(FrameQueueTest, FramesComeOutInTheOrderTheyWentIn) {

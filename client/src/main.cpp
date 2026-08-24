@@ -19,6 +19,7 @@
 #include "media/media_session.hpp"
 #include "ui/main_window.hpp"
 #include "ui/theme.hpp"
+#include "video/screen_quality.hpp"
 
 namespace {
 
@@ -222,11 +223,27 @@ int run(int argc, char* argv[]) {
   DV_LOG_INFO("Signaling server: {}", config.network.signaling_url);
   DV_LOG_INFO("Video: {}x{} @ {} FPS, codec {}", config.video.width, config.video.height,
               config.video.fps, config.video.codec);
+  // Worked out here and used everywhere below, rather than read from the
+  // config in each place that wants it. In automatic mode the range is a
+  // function of the size and rate rather than a value in the file, and deriving
+  // it once is what stops the log and the session from disagreeing about which
+  // range is in force.
+  const dv::client::video::BitrateRange video_bitrate =
+      config.video.auto_bitrate
+          ? dv::client::video::recommended_bitrate_kbps(
+                {.width = config.video.width, .height = config.video.height}, config.video.fps,
+                config.video.floor_bitrate_kbps)
+          : dv::client::video::BitrateRange{.min_kbps = config.video.min_bitrate_kbps,
+                                            .max_kbps = config.video.max_bitrate_kbps};
+
   // The bitrate belongs in the log for the same reason the devices below do:
   // the settings dialog writes it to config.ini, so this is the line that says
-  // whether what was chosen came back.
-  DV_LOG_INFO("Video bitrate: {} to {} kbps, floor {} kbps", config.video.min_bitrate_kbps,
-              config.video.max_bitrate_kbps, config.video.floor_bitrate_kbps);
+  // whether what was chosen came back. Which mode produced it is on the same
+  // line, because "the bitrate I set is not the one in the log" has exactly one
+  // answer and this is it.
+  DV_LOG_INFO("Video bitrate: {} to {} kbps, floor {} kbps, {}", video_bitrate.min_kbps,
+              video_bitrate.max_kbps, config.video.floor_bitrate_kbps,
+              config.video.auto_bitrate ? "automatic from the size and rate above" : "as chosen");
   DV_LOG_INFO("Audio: {} Hz, {} channel(s), {} ms frames", config.audio.sample_rate_hz,
               config.audio.channels, config.audio.frame_duration_ms);
   // Which devices, and not only the format. This is what the settings dialog
@@ -268,8 +285,9 @@ int run(int argc, char* argv[]) {
   session_options.media.capture.max_size = {.width = config.video.width,
                                             .height = config.video.height};
   session_options.media.capture.max_fps = config.video.fps;
-  session_options.media.video_min_bitrate_kbps = config.video.min_bitrate_kbps;
-  session_options.media.video_max_bitrate_kbps = config.video.max_bitrate_kbps;
+  session_options.auto_bitrate = config.video.auto_bitrate;
+  session_options.media.video_min_bitrate_kbps = video_bitrate.min_kbps;
+  session_options.media.video_max_bitrate_kbps = video_bitrate.max_kbps;
   session_options.media.video_floor_bitrate_kbps = config.video.floor_bitrate_kbps;
   session_options.screen_audio_mode =
       dv::client::app::screen_audio_mode_from(config.screen_audio.mode);

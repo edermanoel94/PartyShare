@@ -254,6 +254,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
       understood = as_int(config.video.height);
     } else if (key == "fps") {
       understood = as_int(config.video.fps);
+    } else if (key == "auto_bitrate") {
+      understood = as_bool(config.video.auto_bitrate);
     } else if (key == "min_bitrate_kbps") {
       understood = as_int(config.video.min_bitrate_kbps);
     } else if (key == "max_bitrate_kbps") {
@@ -613,6 +615,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(video, "width", base.video.width);
       read_field(video, "height", base.video.height);
       read_field(video, "fps", base.video.fps);
+      read_field(video, "auto_bitrate", base.video.auto_bitrate);
       read_field(video, "min_bitrate_kbps", base.video.min_bitrate_kbps);
       read_field(video, "max_bitrate_kbps", base.video.max_bitrate_kbps);
       read_field(video, "floor_bitrate_kbps", base.video.floor_bitrate_kbps);
@@ -774,6 +777,7 @@ void apply_environment(Config& config) {
   apply_env_int("DV_VIDEO_WIDTH", config.video.width);
   apply_env_int("DV_VIDEO_HEIGHT", config.video.height);
   apply_env_int("DV_VIDEO_FPS", config.video.fps);
+  apply_env_bool("DV_VIDEO_AUTO_BITRATE", config.video.auto_bitrate);
   apply_env_int("DV_VIDEO_MIN_BITRATE_KBPS", config.video.min_bitrate_kbps);
   apply_env_int("DV_VIDEO_MAX_BITRATE_KBPS", config.video.max_bitrate_kbps);
   apply_env_int("DV_VIDEO_FLOOR_BITRATE_KBPS", config.video.floor_bitrate_kbps);
@@ -1040,6 +1044,7 @@ std::string to_json(const Config& config) {
                       {{"width", config.video.width},
                        {"height", config.video.height},
                        {"fps", config.video.fps},
+                       {"auto_bitrate", config.video.auto_bitrate},
                        {"min_bitrate_kbps", config.video.min_bitrate_kbps},
                        {"max_bitrate_kbps", config.video.max_bitrate_kbps},
                        {"codec", config.video.codec}}},

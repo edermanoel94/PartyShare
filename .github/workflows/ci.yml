@@ -550,9 +550,14 @@ jobs:
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
+          # The portal group is not optional even though nothing here shares a
+          # screen. Findlibwebrtc.cmake compiles every Linux consumer with
+          # WEBRTC_USE_PIPEWIRE, so it demands glib, gio, gobject, gbm and
+          # libdrm through pkg_check_modules, and the configure stops there.
           sudo apt-get update
           sudo apt-get install -y clang libx11-dev libxext-dev libxfixes-dev \
-            libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev
+            libxdamage-dev libxrandr-dev libxcomposite-dev libxtst-dev \
+            libglib2.0-dev libgbm-dev libdrm-dev
 
       - name: Set up MSVC
         if: runner.os == 'Windows'
@@ -581,6 +586,15 @@ jobs:
             -DDV_BUILD_CLIENT=OFF \
             -DDV_BUILD_SERVER=OFF \
             -DDV_BUILD_TESTS=OFF
+        # bash on every platform, including Windows, where the default is
+        # PowerShell and the backslashes below are not line continuations. Only
+        # the first line ran there, so the configure went ahead with none of
+        # these flags: DV_BUILD_CLIENT stayed on, Dependencies.cmake asked for
+        # a libdatachannel this job never installs, and the error named that
+        # rather than the shell. PowerShell then reported the second line as an
+        # unknown command, which is the only clue that the two were ever meant
+        # to be one.
+        shell: bash
         env:
           CXX: ${{ runner.os == 'Linux' && 'clang++' || '' }}
 

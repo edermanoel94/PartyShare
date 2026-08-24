@@ -14,17 +14,16 @@ What is missing is stated plainly, because a number nobody measured is worth no 
 | Platform | Status |
 | --- | --- |
 | Linux x64 | Built, run and measured. Every number in the documentation comes from here. |
-| Windows x64 | Built, run and packaged on Windows 11 with MSVC 19.44, Qt 6.7.3 and vcpkg: all 335 tests pass, the server listens, and the MSI installs, writes its start menu and desktop shortcuts, and the client it installs opens on its login screen. No media layer, because libwebrtc is not built there. Two defects came out of the first build, both recorded in M9. |
-| macOS ARM64 | Built and tested on macOS 26 with Apple clang 21, Qt 6.11 and vcpkg: all 277 tests pass. The server was driven end to end over the signaling protocol, and the client starts on its login screen, which is as far as an automated check goes without a person at the keyboard. No media layer, because libwebrtc is not built there, and no DMG was produced. |
+| Windows x64 | Built, run and packaged on Windows 11 with MSVC 19.44, Qt 6.7.3 and vcpkg: all 335 tests pass, the server listens, and the MSI installs, writes its start menu and desktop shortcuts, and the client it installs opens on its login screen. The media layer builds and runs there as well, over a source build of libwebrtc, and the media suite passes with the virtual audio device test skipping because its script is Linux only. Two defects came out of the first build, both in [docs/postmortems.md](docs/postmortems.md). |
+| macOS ARM64 | Built and tested on macOS 26 with Apple clang 21, Qt 6.11 and vcpkg: all 277 tests pass. The server was driven end to end over the signaling protocol, and the client starts on its login screen, which is as far as an automated check goes without a person at the keyboard. The media layer builds and runs there as well, over a source build of libwebrtc: 22 of the 25 media tests pass, one skips for want of a virtual device, and two fail on the audio device rather than on transport. No DMG has been produced. |
 | macOS x64 | Code, presets and DMG packaging exist. Never built, never run. |
 
-Two known gaps, both in M3:
-repeating the screen capture validation on a Wayland session,
-and running the libwebrtc spike on macOS following [docs/webrtc-validation.md](docs/webrtc-validation.md).
-The Windows half of that second gap is closed, and further than the spike: the media layer builds
-and runs there over a source build of libwebrtc, with 24 of the 25 media tests passing.
-Section 8 of [docs/webrtc-validation.md](docs/webrtc-validation.md) is the procedure, and it is
-worth reading before starting rather than during.
+One known gap remains, in M3: repeating the screen capture validation on a Wayland session.
+The libwebrtc question on Windows and macOS is closed, and further than the spike was ever asked to
+go - the media layer builds and runs on both, over a source build.
+Section 8 of [docs/webrtc-validation.md](docs/webrtc-validation.md) is the procedure for a new
+platform, and it is worth reading before starting rather than during.
+What is still not measured anywhere is listed in section 4 of [PLAN.md](PLAN.md).
 
 ## How it works
 
@@ -244,7 +243,8 @@ PartyShare/
 | Document | Subject |
 | --- | --- |
 | [SPEC.md](SPEC.md) | The product specification and the acceptance criteria |
-| [PLAN.md](PLAN.md) | The milestones, what each one delivered, and the bugs found along the way |
+| [PLAN.md](PLAN.md) | The milestone record, the decisions behind it, and what is still not verified |
+| [docs/postmortems.md](docs/postmortems.md) | The bugs that cost real time, and what each one turned out to be |
 | [INSTALL.md](INSTALL.md) | The short path: prerequisites, build, run the server, run the client |
 | [docs/build.md](docs/build.md) | Building, presets, options and media debugging |
 | [docs/requirements.md](docs/requirements.md) | The hardware needed to run the client and the server |

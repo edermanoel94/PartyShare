@@ -230,8 +230,9 @@ void install_handlers() {
 void install_handlers() {
   // Windows delivers a crash as a structured exception rather than a signal,
   // and the report worth writing there is a minidump through dbghelp. Neither
-  // exists here yet: this project has never been built or run on Windows, and
-  // a handler written blind would be a handler nobody has seen run. The seam
+  // exists here yet. The client is built, packaged and run on Windows now, so
+  // the reason is no longer that nobody could test a handler written blind: a
+  // minidump writer is simply a separate piece of work from this one. The seam
   // is this function.
 }
 

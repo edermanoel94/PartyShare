@@ -12,10 +12,11 @@ Worth reading before the tables.
 | Platform | Status |
 | --- | --- |
 | Linux x64 | Built and run, and where every number on this page was measured |
-| Windows x64 | Code and presets exist, never built and never run |
-| macOS ARM64 | Code and presets exist, never built and never run |
+| Windows x64 | Built, run and packaged, media layer included, over a source build of libwebrtc |
+| macOS ARM64 | Built and run, media layer included, over a source build of libwebrtc |
 
-The Windows and macOS requirements below follow from what libwebrtc and Qt 6 demand on those platforms, and not from a real run.
+Every number in the tables below was measured on Linux.
+The Windows and macOS figures follow from what libwebrtc and Qt 6 demand on those platforms rather than from a measurement taken there, which is a different claim from the platform being untested.
 
 ## Client
 

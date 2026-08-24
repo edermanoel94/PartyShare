@@ -431,14 +431,32 @@ Sem WASAPI nesse modo, de propósito: que a captura ouve o que um processo toca
 já está medido na fase 1. O que faltava medir era o que acontece com esses
 blocos depois.
 
-#### Um obstáculo que não é desta feature
+#### Qual árvore de libwebrtc usar, e por quê isso confundiu
 
-`dv_media_tests` **não linka nesta máquina**, e nunca linkou: `webrtc.lib` traz
-BoringSSL dentro e o `libssl` do vcpkg define os mesmos símbolos, então o
-linkador recusa com uma parede de `LNK2005`. Só o `.pdb` do alvo existe em
-`build/media/bin`. Por isso a verificação da fase 2 foi pelo spike, que linka só
-o libwebrtc e o `dv_shared` — e por isso o teste ponta a ponta da fase 4 vai
-precisar que esse conflito seja resolvido antes.
+Durante a fase 2 eu concluí que `dv_media_tests` não podia linkar nesta máquina,
+por um conflito entre o BoringSSL de dentro do `webrtc.lib` e o OpenSSL do
+vcpkg. **Estava errado**: era a árvore de libwebrtc errada, e o projeto já
+resolve isso.
+
+Existem duas por aqui:
+
+| Árvore | BoringSSL | CRT | Linka com libdatachannel? |
+| --- | --- | --- | --- |
+| `build/spike/_deps/libwebrtc_binary-src` | embutido | `/MT` | não, `LNK2005` aos montes |
+| `~/.cache/partyshare/webrtc/dist` | nenhum, tem o marcador `DV_EXTERNAL_SSL` | `/MD` | sim |
+
+`cmake/Findlibwebrtc.cmake` já explica exatamente isto, e o marcador
+`DV_EXTERNAL_SSL` existe justamente para distinguir as duas. `build/media`, que
+era a árvore de referência desta máquina, apontava para a primeira — e é por
+isso que `dv_media_tests` nunca tinha linkado nela.
+
+Com a segunda, mais o triplet dinâmico `x64-windows` para casar com o `/MD`,
+tudo linka: `dv_media_tests`, `dv_integration_tests` e o `partyshare.exe` com a
+camada de mídia. **551 testes passam**, dos quais 28 de mídia, com o misturador
+no caminho de todo o áudio. É a verificação de regressão mais forte que esta
+feature tem: encaminhamento de áudio entre clientes, mudo, níveis e
+compartilhamento de tela continuam funcionando com o `AudioFrameProcessor`
+instalado.
 
 ### Fase 3 — sessão, interface e configuração ✅ feito
 
@@ -494,12 +512,12 @@ do INI, o modo inválido recusado, e o mapeamento de modos nos dois sentidos.
 
 #### O que não deu para verificar rodando
 
-**O cliente Qt com a camada de mídia não linka nesta máquina**, pelo mesmo
-conflito BoringSSL/OpenSSL da fase 2. Não é regressão: `build/windows-release`
-tem a interface ligada e a mídia desligada, `build/media` o contrário, e
-`partyshare.exe` com as duas nunca existiu aqui. Tudo compila nas duas
-configurações e a lógica está coberta por testes, mas os dois controles novos do
-diálogo não foram vistos na tela.
+Os dois controles novos do diálogo **não foram vistos na tela**. O
+`partyshare.exe` com a camada de mídia constrói e roda — ver a nota da fase 2
+sobre qual árvore de libwebrtc usar — mas Configurações fica atrás do login e da
+sala, e conduzir uma janela Qt não é algo que se faça de um terminal. Tudo
+compila, a lógica está coberta por testes, e o que falta é alguém abrir o
+diálogo e olhar.
 
 ### Fase 4 — medição e documentação
 
@@ -509,9 +527,8 @@ diálogo não foram vistos na tela.
 - Um teste ponta a ponta em `tests/integration/`, no molde de
   `test_media_end_to_end.cpp`: um cliente gera um tom, compartilha, e o outro
   recebe áudio acima do piso de ruído. `DV_AUDIO_NULL_DEVICE` já existe para
-  rodar isso sem placa de som. **Bloqueado** até o conflito
-  BoringSSL/OpenSSL descrito na fase 2 ser resolvido: hoje `dv_media_tests` não
-  linka nesta máquina.
+  rodar isso sem placa de som. **Desbloqueado**: `dv_media_tests` linka e roda,
+  contra a árvore de libwebrtc com `DV_EXTERNAL_SSL`.
 
 ## 9. Riscos
 

@@ -63,6 +63,14 @@ class CallSession {
   struct Options {
     std::string signaling_url;
     media::MediaSessionOptions media;
+    /// Whether the bitrate range follows the capture size and rate instead of
+    /// being a value somebody chose. See `set_auto_bitrate`.
+    ///
+    /// The range in `media` is still the range in force either way: with this
+    /// on, whoever builds these options is expected to have filled it from
+    /// video::recommended_bitrate_kbps already, so that the session starts on
+    /// the same numbers it would recompute.
+    bool auto_bitrate = false;
     /// Section 22 of SPEC.md wants these numbers, and M4 wants them in the log.
     std::chrono::milliseconds metrics_interval{5000};
   };
@@ -207,8 +215,27 @@ class CallSession {
 
   /// The bitrate range the screen encoder may use, in kbps. Remembered, so a
   /// choice made before a call survives into it.
+  ///
+  /// Fails with `automatic_bitrate` while automatic mode is on, rather than
+  /// accepting a range that the next change of resolution would silently
+  /// replace. Turn the mode off first, which leaves the range where automatic
+  /// mode last put it.
   [[nodiscard]] Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps);
   [[nodiscard]] std::pair<int, int> video_bitrate() const;
+
+  /// Whether the bitrate range follows the capture size and rate.
+  ///
+  /// Turning it on works the range out from the size, the rate and the floor
+  /// and applies it at once, so the mode never has to wait for the next change
+  /// of resolution to take effect. Turning it off changes nothing but the mode:
+  /// the range stays where automatic mode left it, which is a far better
+  /// starting point for editing by hand than whatever was there before.
+  ///
+  /// It is the session and not the settings dialog that holds this, because it
+  /// is the session that owns the size and the rate. A mode kept in the dialog
+  /// would only be in force while the dialog is open.
+  [[nodiscard]] Result<std::monostate> set_auto_bitrate(bool automatic);
+  [[nodiscard]] bool auto_bitrate() const;
 
   /// The lowest congestion control may squeeze the screen share to, which is
   /// also the lowest the minimum above is allowed to be.

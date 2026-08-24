@@ -76,4 +76,38 @@ constexpr int kMinRecommendedBitrateKbps = 500;
       std::clamp<long long>(kbps, kMinRecommendedBitrateKbps, kMaxRecommendedBitrateKbps));
 }
 
+/// A bitrate range for the encoder, in kbps: where it starts and where it may
+/// grow to.
+struct BitrateRange {
+  int min_kbps = 0;
+  int max_kbps = 0;
+};
+
+/// The range automatic mode picks for a frame size, a rate and a floor.
+///
+/// The ceiling is `recommended_max_bitrate_kbps` unchanged, because that is
+/// already the answer to "what is worth giving the encoder here".
+///
+/// The start is half of it, which is the 1.5 to 3 Mbps of section 6 of SPEC.md
+/// held as a ratio rather than as two constants that only suit 720p30. Half is
+/// deliberately short of the ceiling: the start is a guess made before any
+/// feedback exists, and one that overshoots is paid for in loss during the
+/// first seconds, while one that undershoots costs only the moment the
+/// estimator needs to climb.
+///
+/// Never below `floor_kbps`, and never a maximum under its minimum, because
+/// dv::config::validate refuses both and this is the one place that can
+/// produce them without anybody typing a number.
+[[nodiscard]] constexpr BitrateRange recommended_bitrate_kbps(Size size, int fps,
+                                                              int floor_kbps) noexcept {
+  // The floor first, and the ceiling lifted to meet it when it has to. A floor
+  // above what the size is worth is a strange configuration, but it is a legal
+  // one, and the alternative here is a clamp whose lower bound sits above its
+  // upper bound, which is undefined behaviour rather than a bad number.
+  const int lowest = std::max(1, floor_kbps);
+  const int maximum = std::max(recommended_max_bitrate_kbps(size, fps), lowest);
+  const int minimum = std::clamp(maximum / 2, lowest, maximum);
+  return {.min_kbps = minimum, .max_kbps = maximum};
+}
+
 }  // namespace dv::client::video

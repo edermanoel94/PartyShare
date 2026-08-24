@@ -105,7 +105,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 
 	client, err := mongo.Connect(clientOptions)
 	if err != nil {
-		return nil, fmt.Errorf("could not connect to %s: %w", config.URI, err)
+		return nil, fmt.Errorf("could not connect to %s: %w", describeEndpoint(config.URI), err)
 	}
 
 	pingContext, cancel := context.WithTimeout(ctx, config.Timeout)
@@ -114,7 +114,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 		// Disconnecting here rather than leaving it to the caller: a Store is
 		// never returned alongside an error, so nobody else holds the client.
 		_ = client.Disconnect(context.Background())
-		return nil, fmt.Errorf("could not reach %s: %w", config.URI, err)
+		return nil, fmt.Errorf("could not reach %s: %w", describeEndpoint(config.URI), err)
 	}
 
 	database := client.Database(config.Database)
@@ -616,8 +616,8 @@ func (s *Store) record(ctx context.Context, action, targetID, detail string) err
 	return nil
 }
 
-// describeEndpoint reduces a URI to what belongs on a screen: the hosts, with
-// any username and password taken out of it.
+// describeEndpoint reduces a URI to what belongs on a screen or in an error:
+// the hosts, with any username and password taken out of it.
 func describeEndpoint(uri string) string {
 	trimmed := uri
 	for _, scheme := range []string{"mongodb+srv://", "mongodb://"} {
@@ -636,6 +636,14 @@ func describeEndpoint(uri string) string {
 		trimmed = before
 	}
 	if trimmed == "" {
+		// Nothing recognisable came out, which happens to a URI that is
+		// malformed rather than to one that is merely wrong. Handing back the
+		// argument would put a password on the screen in exactly the case
+		// nobody tested, so a URI that carries credentials is described by the
+		// fact that it carries them and by nothing else.
+		if strings.Contains(uri, "@") {
+			return "unknown host"
+		}
 		return uri
 	}
 	return trimmed

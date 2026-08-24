@@ -57,6 +57,39 @@ class ScopedEnv {
   std::optional<std::string> previous_;
 };
 
+/// Points the per-user configuration directory at one that does not exist, for
+/// the duration of a test.
+///
+/// Every test that calls load() without naming a file reads the cascade of
+/// default_config_paths(), and the last entry of that cascade is the config.ini
+/// of whoever is running the tests. Without this, the suite is testing the
+/// machine as much as the code.
+///
+/// That is not hypothetical. A client built from a branch that had a setting
+/// this one does not know wrote it to disk, and ten tests here began failing
+/// with "no such setting as [video] auto_bitrate" - on a branch where nothing
+/// about configuration had changed. The only way to get a green suite was to
+/// delete the file, which is a fine thing to have to do to a machine and a
+/// terrible thing to have to do to run tests.
+///
+/// A path that does not exist rather than an empty temporary directory: what
+/// these tests want is no user configuration at all, and a file that is not
+/// there is exactly that to the cascade. Forward slashes because
+/// std::filesystem takes them on Windows too.
+class ScopedEmptyConfigHome {
+ public:
+#ifdef _WIN32
+  ScopedEmptyConfigHome() : base_("LOCALAPPDATA", "C:/dv-test-appdata") {}
+#elif defined(__APPLE__)
+  ScopedEmptyConfigHome() : base_("HOME", "/dv-test-home") {}
+#else
+  ScopedEmptyConfigHome() : base_("XDG_CONFIG_HOME", "/dv-test-config") {}
+#endif
+
+ private:
+  ScopedEnv base_;
+};
+
 TEST(Config, DefaultsMatchTheSpec) {
   const Config config;
   EXPECT_EQ(config.video.width, 1280);
@@ -111,6 +144,7 @@ TEST(Config, EnvironmentOverridesTheFile) {
 }
 
 TEST(Config, CommandLineOverridesTheEnvironment) {
+  const ScopedEmptyConfigHome home;
   const ScopedEnv env("DV_VIDEO_FPS", "24");
   const char* argv[] = {"dv_client", "--fps=15"};
   const auto result = dv::config::load(2, argv);
@@ -119,12 +153,14 @@ TEST(Config, CommandLineOverridesTheEnvironment) {
 }
 
 TEST(Config, IgnoresArgumentsThatAreNotInKeyValueForm) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"dv_client", "--verbose", "positional", "-x"};
   const auto result = dv::config::load(4, argv);
   EXPECT_TRUE(result.ok()) << result.error().message;
 }
 
 TEST(Config, RejectingRefusesAnOptionNobodyDefined) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--prot=8080"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_FALSE(result.ok());
@@ -132,6 +168,7 @@ TEST(Config, RejectingRefusesAnOptionNobodyDefined) {
 }
 
 TEST(Config, RejectingRefusesAnOptionWithTheValueDetached) {
+  const ScopedEmptyConfigHome home;
   // The shape that let --help start a server instead of describing it.
   const char* argv[] = {"partyshare-server", "--port", "8080"};
   const auto result = dv::config::load(3, argv, dv::config::UnknownOptions::Reject);
@@ -140,6 +177,7 @@ TEST(Config, RejectingRefusesAnOptionWithTheValueDetached) {
 }
 
 TEST(Config, RejectingStillLetsHelpThrough) {
+  const ScopedEmptyConfigHome home;
   // main answers these before loading, so the parser must not refuse them.
   for (const char* flag : {"--help", "-h"}) {
     const char* argv[] = {"partyshare-server", flag};
@@ -149,6 +187,7 @@ TEST(Config, RejectingStillLetsHelpThrough) {
 }
 
 TEST(Config, RejectingLeavesPositionalArgumentsAlone) {
+  const ScopedEmptyConfigHome home;
   // Only a dash marks something as a mistyped option.
   const char* argv[] = {"partyshare-server", "positional"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
@@ -156,6 +195,7 @@ TEST(Config, RejectingLeavesPositionalArgumentsAlone) {
 }
 
 TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--port=9000"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -163,6 +203,7 @@ TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
 }
 
 TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
+  const ScopedEmptyConfigHome home;
   // Why the client cannot reject. Qt spells its own options with the value
   // detached, as "-platform offscreen", which is the very shape Reject refuses:
   // turning it on here would refuse an argument that is not ours to judge.
@@ -173,6 +214,7 @@ TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
 }
 
 TEST(Config, ReportsAMissingConfigFile) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"dv_client", "--config=/nonexistent/path/config.json"};
   const auto result = dv::config::load(2, argv);
   ASSERT_FALSE(result.ok());
@@ -270,6 +312,7 @@ TEST(Config, TheIceRangeIsUnsetByDefault) {
 }
 
 TEST(Config, ReadsTheIceRangeFromOneOption) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--ice-port-range=50000-50100"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -278,6 +321,7 @@ TEST(Config, ReadsTheIceRangeFromOneOption) {
 }
 
 TEST(Config, RejectsAnIceRangeThatIsNotARange) {
+  const ScopedEmptyConfigHome home;
   for (const char* option :
        {"--ice-port-range=50000", "--ice-port-range=50000-", "--ice-port-range=-50100",
         "--ice-port-range=abc-def", "--ice-port-range=0-50100", "--ice-port-range=50000-70000"}) {

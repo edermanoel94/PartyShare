@@ -13,6 +13,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
@@ -134,13 +135,25 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   storage_->setWordWrap(true);
   storage_->setProperty("hint", true);
 
-  // Named here rather than taken from QDialogButtonBox::Close, whose label
-  // comes from Qt's own translations. Without a translation file loaded that
-  // is the English word, sitting in the middle of an interface that is not.
+  // Named here rather than taken from QDialogButtonBox::Save and ::Close,
+  // whose labels come from Qt's own translations. Without a translation file
+  // loaded those are the English words, sitting in the middle of an interface
+  // that is not.
   auto* buttons = new QDialogButtonBox(this);
-  auto* close = buttons->addButton(QStringLiteral("Close"), QDialogButtonBox::AcceptRole);
-  close->setProperty("accent", true);
-  connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+
+  // ApplyRole and not AcceptRole. A button in the accept role makes
+  // QDialogButtonBox emit accepted(), which closes the dialog, and a Save that
+  // closes the window is a Save nobody can press twice - which is exactly what
+  // somebody whose first attempt failed needs to do.
+  save_ = buttons->addButton(QStringLiteral("Save"), QDialogButtonBox::ApplyRole);
+  save_->setProperty("accent", true);
+  save_->setEnabled(false);
+  connect(save_, &QPushButton::clicked, this, &SettingsDialog::on_save);
+
+  auto* close = buttons->addButton(QStringLiteral("Close"), QDialogButtonBox::RejectRole);
+  // Through reject() rather than accept(), so that this button, the escape key
+  // and the window's own close box all arrive at done() by the same route.
+  connect(close, &QPushButton::clicked, this, &QDialog::reject);
 
   layout->addWidget(audio);
   layout->addWidget(video);
@@ -182,12 +195,37 @@ void SettingsDialog::load_devices() {
 void SettingsDialog::show_storage() {
   const std::filesystem::path file = config::user_config_file();
   storage_->setProperty("error", false);
-  storage_->setText(
-      file.empty()
-          ? QStringLiteral("This system does not say where settings belong, so the devices and the "
-                           "bitrate chosen here last only until the program closes.")
-          : QStringLiteral("The devices and the bitrate are kept in %1")
-                .arg(QString::fromStdString(file.string())));
+
+  if (file.empty()) {
+    save_->setEnabled(false);
+    storage_->setText(
+        QStringLiteral("This system does not say where settings belong, so the devices, the "
+                       "bitrate and the screen quality chosen here last only until the program "
+                       "closes."));
+    restyle();
+    return;
+  }
+
+  // The button is the state. Enabled means there is something outstanding, and
+  // greyed out means everything on screen is also on disk, which saves the
+  // dialog a sentence saying so.
+  save_->setEnabled(!pending_.empty());
+
+  const QString where = QString::fromStdString(file.string());
+  if (pending_.empty()) {
+    storage_->setText(
+        QStringLiteral("The devices, the bitrate and the screen quality are kept in %1")
+            .arg(where));
+  } else if (pending_.size() == 1) {
+    storage_->setText(
+        QStringLiteral("One change is in use now and is not in %1 yet. Save puts it there.")
+            .arg(where));
+  } else {
+    storage_->setText(
+        QStringLiteral("%1 changes are in use now and are not in %2 yet. Save puts them there.")
+            .arg(pending_.size())
+            .arg(where));
+  }
   restyle();
 }
 
@@ -262,24 +300,54 @@ void SettingsDialog::show_quality_hint() {
           .arg(max_bitrate_->value()));
 }
 
-void SettingsDialog::remember(const std::vector<config::IniSetting>& settings) {
-  const std::filesystem::path file = config::user_config_file();
-  if (file.empty()) {
-    // Already said so at the bottom of the dialog when it opened. Saying it
-    // again per change would be a growing pile of the same sentence.
-    return;
-  }
-
-  const auto written = config::save_ini_settings(file, settings);
-  if (written) {
-    show_storage();
+void SettingsDialog::stage(const std::vector<config::IniSetting>& settings) {
+  if (config::user_config_file().empty()) {
+    // The dialog said at the bottom, when it opened, that there is nowhere on
+    // this system to keep these. Collecting them anyway would light up a Save
+    // button with no file to write to.
     return;
   }
 
   for (const config::IniSetting& setting : settings) {
+    const auto same_key = [&setting](const config::IniSetting& staged) {
+      return staged.section == setting.section && staged.key == setting.key;
+    };
+    const auto found = std::find_if(pending_.begin(), pending_.end(), same_key);
+    if (found != pending_.end()) {
+      found->value = setting.value;
+      continue;
+    }
+    pending_.push_back(setting);
+  }
+  show_storage();
+}
+
+void SettingsDialog::on_save() {
+  const std::filesystem::path file = config::user_config_file();
+  if (pending_.empty() || file.empty()) {
+    return;
+  }
+
+  // Every pending setting in one pass, which is the whole reason they are
+  // collected. save_ini_settings parses and validates the result before it
+  // replaces anything, so a half written range - a maximum below its minimum -
+  // is refused as a file rather than left on disk as one.
+  const auto written = config::save_ini_settings(file, pending_);
+  if (written) {
+    pending_.clear();
+    show_storage();
+    return;
+  }
+
+  for (const config::IniSetting& setting : pending_) {
     DV_LOG_WARN("Could not save {}.{} to {}: {}", setting.section, setting.key, file.string(),
                 written.error().message);
   }
+
+  // Kept rather than dropped. A write fails for reasons that go away - a full
+  // disk, a file held open by something else - and throwing the list out would
+  // mean the only way to try again was to make every change a second time.
+  //
   // What was chosen is in use either way, and saying otherwise would send
   // somebody looking for a problem with their microphone.
   storage_->setProperty("error", true);
@@ -287,6 +355,40 @@ void SettingsDialog::remember(const std::vector<config::IniSetting>& settings) {
                         .arg(QString::fromStdString(file.string()),
                              QString::fromStdString(written.error().message)));
   restyle();
+  save_->setEnabled(true);
+}
+
+void SettingsDialog::done(int result) {
+  if (pending_.empty()) {
+    QDialog::done(result);
+    return;
+  }
+
+  // Asked rather than decided. Saving on the way out keeps settings somebody
+  // was only trying out; discarding on the way out loses settings somebody
+  // meant. Neither is safe to guess, and the question costs one keystroke.
+  const QMessageBox::StandardButton answer = QMessageBox::question(
+      this, QStringLiteral("Save your settings?"),
+      QStringLiteral("What you changed is in use now, but it has not been written to %1. Close "
+                     "without saving and it lasts until PartyShare closes.")
+          .arg(QString::fromStdString(config::user_config_file().string())),
+      QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+
+  if (answer == QMessageBox::Cancel) {
+    return;
+  }
+
+  if (answer == QMessageBox::Save) {
+    on_save();
+    if (!pending_.empty()) {
+      // The write failed, and on_save has just put the reason on the storage
+      // line. Closing now would take that sentence off the screen along with
+      // the only chance to do anything about it.
+      return;
+    }
+  }
+
+  QDialog::done(result);
 }
 
 void SettingsDialog::on_input_changed(int index) {
@@ -295,7 +397,7 @@ void SettingsDialog::on_input_changed(int index) {
   }
   const QString device = input_->itemData(index).toString();
   (void)session_.set_input_device(device.toStdString());
-  remember({{.section = "audio", .key = "input_device", .value = device.toStdString()}});
+  stage({{.section = "audio", .key = "input_device", .value = device.toStdString()}});
 }
 
 void SettingsDialog::on_output_changed(int index) {
@@ -304,7 +406,7 @@ void SettingsDialog::on_output_changed(int index) {
   }
   const QString device = output_->itemData(index).toString();
   (void)session_.set_output_device(device.toStdString());
-  remember({{.section = "audio", .key = "output_device", .value = device.toStdString()}});
+  stage({{.section = "audio", .key = "output_device", .value = device.toStdString()}});
 }
 
 void SettingsDialog::on_bitrate_changed() {
@@ -332,7 +434,7 @@ void SettingsDialog::on_bitrate_changed() {
   // Both keys in one pass. They are a range: written one at a time, a file read
   // between the two writes would hold a maximum below its minimum, which is a
   // configuration that does not start.
-  remember({
+  stage({
       {.section = "video", .key = "min_bitrate_kbps", .value = std::to_string(minimum)},
       {.section = "video", .key = "max_bitrate_kbps", .value = std::to_string(maximum)},
   });
@@ -367,7 +469,7 @@ void SettingsDialog::on_quality_changed() {
   // All three in one pass, for the reason the bitrate pair is: a file read
   // between two of the writes would hold a width from one choice and a height
   // from another, which is a shape no monitor has.
-  remember({
+  stage({
       {.section = "video", .key = "width", .value = std::to_string(size.width)},
       {.section = "video", .key = "height", .value = std::to_string(size.height)},
       {.section = "video", .key = "fps", .value = std::to_string(fps)},

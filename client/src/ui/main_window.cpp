@@ -1280,8 +1280,7 @@ void MainWindow::show_link_quality() {
     return;
   }
 
-  const auto measured =
-      client::app::quality_of(std::chrono::milliseconds(link_round_trip_ms_));
+  const auto measured = client::app::quality_of(std::chrono::milliseconds(link_round_trip_ms_));
   // The number as well as the word, unlike the call indicator, because there
   // is only one measurement here and hiding it behind an adjective would leave
   // "good" doing work three numbers do during a call.

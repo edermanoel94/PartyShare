@@ -122,12 +122,12 @@ TEST(LinkQualityTest, TheBoundariesBelongToTheBetterVerdict) {
   // the comparisons are strict. Worth pinning: a boundary that moved in one of
   // the two and not the other is precisely how the two indicators would come
   // to disagree about an unchanged link.
-  EXPECT_EQ(quality_of(std::chrono::milliseconds(
-                static_cast<int>(dv::client::app::kFairRoundTripMs))),
-            NetworkQuality::Good);
-  EXPECT_EQ(quality_of(std::chrono::milliseconds(
-                static_cast<int>(dv::client::app::kPoorRoundTripMs))),
-            NetworkQuality::Fair);
+  EXPECT_EQ(
+      quality_of(std::chrono::milliseconds(static_cast<int>(dv::client::app::kFairRoundTripMs))),
+      NetworkQuality::Good);
+  EXPECT_EQ(
+      quality_of(std::chrono::milliseconds(static_cast<int>(dv::client::app::kPoorRoundTripMs))),
+      NetworkQuality::Fair);
 }
 
 }  // namespace

@@ -243,10 +243,10 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
           handle_mute(out, *state, value.room_id, value.user_id, false);
 
         } else if constexpr (std::is_same_v<T, protocol::ScreenShareStarted>) {
-          handle_screen_share(out, *state, value.room_id, value.user_id, true);
+          handle_screen_share(out, *state, value.room_id, value.user_id, true, value.has_audio);
 
         } else if constexpr (std::is_same_v<T, protocol::ScreenShareStopped>) {
-          handle_screen_share(out, *state, value.room_id, value.user_id, false);
+          handle_screen_share(out, *state, value.room_id, value.user_id, false, false);
 
         } else if constexpr (std::is_same_v<T, protocol::ChatMessage>) {
           handle_chat(out, *state, value);
@@ -462,9 +462,11 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
 
   // A screen share already in progress has to be announced to the newcomer.
   if (const models::Participant* sharer = room->screen_sharer()) {
-    out.push_back(Outgoing{.connection = connection.id,
-                           .message = protocol::ScreenShareStarted{.room_id = message.room_id,
-                                                                   .user_id = sharer->user.id}});
+    out.push_back(
+        Outgoing{.connection = connection.id,
+                 .message = protocol::ScreenShareStarted{.room_id = message.room_id,
+                                                         .user_id = sharer->user.id,
+                                                         .has_audio = sharer->sharing_audio}});
   }
 
   // What was already said, so that somebody joining a persistent room arrives
@@ -601,8 +603,8 @@ void Hub::handle_mute(std::vector<Outgoing>& out, Connection& connection,
 }
 
 void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection,
-                              const std::string& room_id, const std::string& user_id,
-                              bool sharing) {
+                              const std::string& room_id, const std::string& user_id, bool sharing,
+                              bool with_audio) {
   const models::User* user = authenticated(out, connection);
   if (user == nullptr) {
     return;
@@ -622,7 +624,7 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
     return;
   }
 
-  const auto failure = sharing ? rooms_.start_screen_share(room_id, user_id)
+  const auto failure = sharing ? rooms_.start_screen_share(room_id, user_id, with_audio)
                                : rooms_.stop_screen_share(room_id, user_id);
   if (failure) {
     reply_error(out, connection.id, *failure);
@@ -631,7 +633,9 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
 
   if (sharing) {
     DV_LOG_INFO("User {} started sharing in room {}", user_id, room_id);
-    broadcast(out, room_id, protocol::ScreenShareStarted{.room_id = room_id, .user_id = user_id});
+    broadcast(out, room_id,
+              protocol::ScreenShareStarted{
+                  .room_id = room_id, .user_id = user_id, .has_audio = with_audio});
   } else {
     DV_LOG_INFO("User {} stopped sharing in room {}", user_id, room_id);
     broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});

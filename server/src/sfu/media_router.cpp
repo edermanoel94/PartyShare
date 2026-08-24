@@ -16,6 +16,18 @@ namespace {
 /// Opus is always 48 kHz on the wire, section 9 of SPEC.md.
 constexpr int kOpusClockRate = 48000;
 
+/// The Opus fmtp this server offers, which is what decides what a participant
+/// encodes: their answer describes what they accept to receive, and every audio
+/// m-line here is one directional.
+///
+/// libdatachannel's own DEFAULT_OPUS_AUDIO_PROFILE, with the ceiling made
+/// configurable. Stereo is not decoration: it is what lets a screen share carry
+/// the two channels of whatever is playing rather than the average of them.
+[[nodiscard]] std::string opus_profile(int max_bitrate_kbps) {
+  return "minptime=10;maxaveragebitrate=" + std::to_string(max_bitrate_kbps * 1000) +
+         ";stereo=1;sprop-stereo=1;useinbandfec=1";
+}
+
 /// RFC 6464. Senders put the loudness of each packet in the RTP header, and
 /// the SFU forwards those bytes untouched, so a participant can tell who is
 /// speaking without decoding anything or polling statistics.
@@ -185,7 +197,7 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   // The participant's own microphone.
   rtc::Description::Audio inbound(std::to_string(session.next_mid++),
                                   rtc::Description::Direction::RecvOnly);
-  inbound.addOpusCodec(options_.opus_payload_type);
+  inbound.addOpusCodec(options_.opus_payload_type, opus_profile(options_.opus_max_bitrate_kbps));
   inbound.addExtMap(
       rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
   session.inbound = session.connection->addTrack(inbound);
@@ -412,7 +424,7 @@ void MediaRouter::add_outbound_track(Session& session, const std::string& source
 
   rtc::Description::Audio media(std::to_string(session.next_mid++),
                                 rtc::Description::Direction::SendOnly);
-  media.addOpusCodec(options_.opus_payload_type);
+  media.addOpusCodec(options_.opus_payload_type, opus_profile(options_.opus_max_bitrate_kbps));
   media.addExtMap(rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
 
   // The msid is how the receiver learns whose voice this is. Without it a

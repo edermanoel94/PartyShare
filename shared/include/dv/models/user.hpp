@@ -116,6 +116,12 @@ struct Participant {
   /// itself off.
   bool muted_by_admin = false;
   bool sharing_screen = false;
+  /// Whether that share is carrying the sound of the sharer's machine.
+  ///
+  /// Remembered here only so that somebody joining mid-share can be told. The
+  /// audio itself rides in the sharer's own track and needs nothing from the
+  /// server. Meaningless while `sharing_screen` is false, and cleared with it.
+  bool sharing_audio = false;
 
   friend bool operator==(const Participant&, const Participant&) = default;
 };

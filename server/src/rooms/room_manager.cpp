@@ -230,7 +230,7 @@ std::optional<Error> RoomManager::set_muted(const std::string& room_id, const st
 }
 
 std::optional<Error> RoomManager::start_screen_share(const std::string& room_id,
-                                                     const std::string& user_id) {
+                                                     const std::string& user_id, bool with_audio) {
   const auto it = rooms_.find(room_id);
   if (it == rooms_.end()) {
     return error("room_not_found", "no room with id " + room_id);
@@ -247,6 +247,7 @@ std::optional<Error> RoomManager::start_screen_share(const std::string& room_id,
   }
 
   participant->sharing_screen = true;
+  participant->sharing_audio = with_audio;
   return std::nullopt;
 }
 
@@ -261,6 +262,7 @@ std::optional<Error> RoomManager::stop_screen_share(const std::string& room_id,
     return error("not_in_room", user_id + " is not in " + room_id);
   }
   participant->sharing_screen = false;
+  participant->sharing_audio = false;
   return std::nullopt;
 }
 

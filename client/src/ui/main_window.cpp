@@ -572,7 +572,11 @@ void MainWindow::wire_session() {
                 label += QStringLiteral("  (connected)");
               }
               if (participant.sharing_screen) {
-                label += QStringLiteral("  (sharing)");
+                // Two words apart, because they answer different questions:
+                // whose picture is on screen, and why this person's volume
+                // slider is now also the volume of a film.
+                label += participant.sharing_audio ? QStringLiteral("  (sharing with sound)")
+                                                   : QStringLiteral("  (sharing)");
               }
               label += QStringLiteral("\t") + QString::fromStdString(participant.user.id);
               label += QStringLiteral("\t") + name;
@@ -930,9 +934,29 @@ void MainWindow::on_toggle_share() {
     return;
   }
 
-  if (const auto started = session_.start_screen_share(monitor_id_.toStdString()); !started) {
+  // Whatever the dialog last chose, or what the configuration says for
+  // somebody who has never opened it.
+  const client::app::ScreenAudio audio =
+      screen_audio_.value_or(client::app::ScreenAudio{.mode = session_.screen_audio_mode()});
+
+  if (const auto started = session_.start_screen_share(monitor_id_.toStdString(), audio);
+      !started) {
     apply_error(QString::fromStdString(started.error().code),
                 QString::fromStdString(started.error().message));
+    refresh_controls();
+    return;
+  }
+
+  // Sound was asked for and did not start. The share is up either way - see
+  // CallSession::start_screen_share - so this is a note and not an error
+  // dialog, but it has to be said: a silent share that was meant to have sound
+  // is otherwise indistinguishable from one that does.
+  if (audio.mode != client::app::ScreenAudio::Mode::None && !session_.screen_audio_active()) {
+    const Error why = session_.screen_audio_failure();
+    status_->setText(
+        why.message.empty()
+            ? QStringLiteral("Sharing without sound")
+            : QStringLiteral("Sharing without sound: %1").arg(QString::fromStdString(why.message)));
   }
   refresh_controls();
 }
@@ -941,6 +965,7 @@ void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+  screen_audio_ = dialog.selected_screen_audio();
 }
 
 void MainWindow::on_open_metrics() {

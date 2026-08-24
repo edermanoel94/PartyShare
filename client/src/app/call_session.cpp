@@ -243,7 +243,8 @@ Result<std::monostate> CallSession::list_chat(int limit) {
   return signaling_.send(protocol::ListChat{.room_id = room, .limit = limit});
 }
 
-Result<std::monostate> CallSession::start_screen_share(const std::string& monitor_id) {
+Result<std::monostate> CallSession::start_screen_share(const std::string& monitor_id,
+                                                       ScreenAudio audio) {
   std::string user_id;
   std::string room;
   std::shared_ptr<media::MediaSession> session;
@@ -273,13 +274,63 @@ Result<std::monostate> CallSession::start_screen_share(const std::string& monito
     return started;
   }
 
-  if (auto sent =
-          signaling_.send(protocol::ScreenShareStarted{.room_id = room, .user_id = user_id});
+  // Sound second, and it is not allowed to cancel the share. Somebody who
+  // asked to share a video and got told "no" because this Windows is a year
+  // too old would rather have the picture than nothing.
+  const bool with_audio = start_screen_audio(*session, audio);
+
+  if (auto sent = signaling_.send(protocol::ScreenShareStarted{
+          .room_id = room, .user_id = user_id, .has_audio = with_audio});
       !sent) {
+    session->stop_screen_audio();
     session->stop_screen_share();
     return sent;
   }
   return std::monostate{};
+}
+
+bool CallSession::start_screen_audio(media::MediaSession& session, ScreenAudio audio) {
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    screen_audio_failure_ = {};
+  }
+  if (audio.mode == ScreenAudio::Mode::None) {
+    return false;
+  }
+
+  const auto mode = audio.mode == ScreenAudio::Mode::Application
+                        ? client::audio::LoopbackMode::Process
+                        : client::audio::LoopbackMode::System;
+  if (auto started = session.start_screen_audio(mode, audio.source_id); !started) {
+    DV_LOG_WARN("Call: sharing without sound: {}", started.error().message);
+    const std::lock_guard<std::mutex> lock(mutex_);
+    screen_audio_failure_ = started.error();
+    return false;
+  }
+  return true;
+}
+
+bool CallSession::screen_audio_active() const {
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    session = audio_;
+  }
+  return session && session->screen_audio_active();
+}
+
+Error CallSession::screen_audio_failure() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return screen_audio_failure_;
+}
+
+Result<std::vector<client::audio::AudioSource>> CallSession::audio_sources() const {
+  return client::audio::audio_sources();
+}
+
+ScreenAudio::Mode CallSession::screen_audio_mode() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.screen_audio_mode;
 }
 
 Result<std::monostate> CallSession::stop_screen_share() {
@@ -294,6 +345,9 @@ Result<std::monostate> CallSession::stop_screen_share() {
   }
 
   if (session) {
+    // Sound first, so that a share which is stopping is never briefly a
+    // microphone track carrying a film with no picture to go with it.
+    session->stop_screen_audio();
     session->stop_screen_share();
   }
   if (room.empty()) {
@@ -872,6 +926,7 @@ void CallSession::handle_signal(protocol::Message message) {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(sharing->user_id); it != participants_.end()) {
         it->second.sharing_screen = true;
+        it->second.sharing_audio = sharing->has_audio;
       }
       screen_sharer_ = sharing->user_id;
       handlers = callbacks_;
@@ -889,6 +944,7 @@ void CallSession::handle_signal(protocol::Message message) {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (const auto it = participants_.find(stopped->user_id); it != participants_.end()) {
         it->second.sharing_screen = false;
+        it->second.sharing_audio = false;
       }
       if (screen_sharer_ == stopped->user_id) {
         screen_sharer_.clear();

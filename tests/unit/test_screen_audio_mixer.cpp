@@ -14,10 +14,32 @@
 
 #include <gtest/gtest.h>
 
+#include "app/call_session.hpp"
 #include "audio/block_pacer.hpp"
 #include "audio/screen_audio_mixer.hpp"
 
 namespace {
+
+using dv::client::app::screen_audio_mode_from;
+using dv::client::app::ScreenAudio;
+
+TEST(ScreenAudioModeTest, TheNamesRoundTrip) {
+  // Configuration, the settings dialog and the capture all have to mean the
+  // same thing by these words, which is why the mapping lives in one place.
+  for (const ScreenAudio::Mode mode :
+       {ScreenAudio::Mode::None, ScreenAudio::Mode::System, ScreenAudio::Mode::Application}) {
+    EXPECT_EQ(screen_audio_mode_from(dv::client::app::to_string(mode)), mode);
+  }
+}
+
+TEST(ScreenAudioModeTest, AnythingUnrecognisedIsSilence) {
+  // A configuration written by a later version, or a typo. Falling back to
+  // capturing the machine because a word was not understood is the one answer
+  // that must never happen.
+  EXPECT_EQ(screen_audio_mode_from("everything"), ScreenAudio::Mode::None);
+  EXPECT_EQ(screen_audio_mode_from(""), ScreenAudio::Mode::None);
+  EXPECT_EQ(screen_audio_mode_from("System"), ScreenAudio::Mode::None);
+}
 
 using dv::client::audio::kFramesPerBlock;
 using dv::client::audio::kSamplesPerBlock;

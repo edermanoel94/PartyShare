@@ -466,6 +466,36 @@ TEST(ConfigIni, ReachesEverySection) {
   EXPECT_TRUE(parsed.value().database.enabled);
 }
 
+TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {
+  const auto parsed = dv::config::parse_ini("[screen_audio]\nmode = process\n", Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().screen_audio.mode, "process");
+}
+
+TEST(Config, TheDefaultShareCarriesTheMachinesSound) {
+  // Sharing a video and having nobody hear it is the surprise, not the other
+  // way round. It is not a silent default either: the settings dialog shows the
+  // choice before anything is shared.
+  EXPECT_EQ(Config{}.screen_audio.mode, "system");
+}
+
+TEST(Config, ValidationRefusesAShareSoundModeNobodyImplements) {
+  Config config;
+  config.screen_audio.mode = "everything";
+  const auto failure = dv::config::validate(config);
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_value");
+  EXPECT_NE(failure->message.find("screen_audio.mode"), std::string::npos);
+}
+
+TEST(Config, TheOpusCeilingDescribesWhatTheOfferAlreadyCarried) {
+  // It was 48 and was applied to nothing: what went on the wire was
+  // libdatachannel's own default of 96. Now that it reaches the offer, the
+  // default has to be the number that was already true, or turning the setting
+  // on would quietly halve every screen share's sound.
+  EXPECT_EQ(Config{}.audio.bitrate_kbps, 96);
+}
+
 TEST(ConfigIni, RefusesWhatItCannotApply) {
   // Every one of these would otherwise be a line that looks applied and is not,
   // which is the failure this format exists to make impossible.
@@ -475,6 +505,7 @@ TEST(ConfigIni, RefusesWhatItCannotApply) {
       {"[video]\nfps = many\n", "a number that is not one"},
       {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
       {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
+      {"[screen_audio]\nmodo = system\n", "a misspelled screen audio key"},
       {"[server]\nport = 70000\n", "a port out of range"},
       {"signaling_url = ws://x:1\n", "a setting under no section"},
       {"[network\nsignaling_url = ws://x:1\n", "an unterminated section header"},

@@ -198,7 +198,8 @@ class Hub {
   void handle_mute(std::vector<Outgoing>& out, Connection& connection, const std::string& room_id,
                    const std::string& user_id, bool muted);
   void handle_screen_share(std::vector<Outgoing>& out, Connection& connection,
-                           const std::string& room_id, const std::string& user_id, bool sharing);
+                           const std::string& room_id, const std::string& user_id, bool sharing,
+                           bool with_audio);
 
   void handle_chat(std::vector<Outgoing>& out, Connection& connection,
                    const protocol::ChatMessage& message);

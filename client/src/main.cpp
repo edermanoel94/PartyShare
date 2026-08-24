@@ -271,6 +271,8 @@ int run(int argc, char* argv[]) {
   session_options.media.video_min_bitrate_kbps = config.video.min_bitrate_kbps;
   session_options.media.video_max_bitrate_kbps = config.video.max_bitrate_kbps;
   session_options.media.video_floor_bitrate_kbps = config.video.floor_bitrate_kbps;
+  session_options.screen_audio_mode =
+      dv::client::app::screen_audio_mode_from(config.screen_audio.mode);
 
   if (!dv::client::media::media_is_available()) {
     DV_LOG_WARN(

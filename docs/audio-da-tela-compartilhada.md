@@ -440,16 +440,66 @@ linkador recusa com uma parede de `LNK2005`. Só o `.pdb` do alvo existe em
 o libwebrtc e o `dv_shared` — e por isso o teste ponta a ponta da fase 4 vai
 precisar que esse conflito seja resolvido antes.
 
-### Fase 3 — sessão, interface e configuração
+### Fase 3 — sessão, interface e configuração ✅ feito
 
-- `call_session.hpp` — amarrar o início e o fim do áudio ao início e ao fim do
-  compartilhamento, e derrubar o áudio junto quando `on_screen_share_ended`
-  disparar.
-- `main_window.cpp` — o seletor no diálogo de compartilhar, o ícone de
-  alto-falante na lista de participantes, e o indicador de fala corrigido.
-- `config.cpp` — a seção nova, com o `bitrate_kbps` finalmente aplicado à
-  oferta.
-- `message.hpp` — `has_audio` em `ScreenShareStarted`.
+**A sessão.** `CallSession::start_screen_share(monitor, ScreenAudio)` liga o som
+depois que a captura da tela pegou, e só então anuncia — para que o `has_audio`
+do anúncio seja verdade e não intenção. `stop_screen_share` desliga o som
+primeiro, e `on_screen_share_ended` já chamava `stop_screen_share`, então uma
+captura que morre sozinha leva o áudio junto sem código novo.
+
+Uma decisão que vale escrever: **o som não derruba o compartilhamento**. Quem
+pediu para compartilhar um vídeo e ouviu "não" porque este Windows é um ano
+velho demais prefere a imagem a nada. Então a tela sobe, `screen_audio_active()`
+diz o que de fato aconteceu, `screen_audio_failure()` diz por quê, e a barra de
+status escreve "Sharing without sound: ...". Um compartilhamento mudo que era
+para ter som é, de outro modo, indistinguível de um que nunca ia ter.
+
+**A interface.** O seletor não foi para um diálogo de compartilhar, porque não
+existe um: o botão alterna direto e o monitor é escolhido em Configurações. O
+som foi para o mesmo lugar que o monitor — duas linhas novas no formulário de
+vídeo, "Share sound" (None / Everything but PartyShare / One application) e
+"Application", mais uma linha de dica que explica um controle desabilitado em
+vez de deixá-lo morto. A lista de aplicativos é relida a cada troca de modo, não
+uma vez ao abrir: ela é do que está tocando *agora*.
+
+Na lista de participantes, quem compartilha com som aparece como
+`(sharing with sound)` em vez de `(sharing)`. São duas perguntas diferentes —
+de quem é a imagem na tela, e por que o volume daquela pessoa agora é também o
+volume de um filme.
+
+**O protocolo.** `ScreenShareStarted` ganhou `has_audio`, e o servidor o lembra
+em `models::Participant::sharing_audio` para contar a quem entra no meio. Lido
+com *fallback* falso: um par construído antes disso não manda o campo, e "não
+manda" quer dizer "sem som" — não "mensagem malformada", que faria o
+compartilhamento de um cliente antigo deixar de ser anunciado.
+
+**A configuração.** Seção `[screen_audio]` com `mode`, validada contra
+`none|system|process`. O padrão é `system`, porque compartilhar um vídeo e
+ninguém ouvir é que é a surpresa; e não é um padrão silencioso, já que o diálogo
+mostra a escolha antes de qualquer compartilhamento. Um modo que este build não
+conhece lê como `none` — cair para capturar a máquina porque uma palavra não foi
+entendida é a única resposta inaceitável.
+
+E `audio.bitrate_kbps` finalmente chega à oferta, via
+`MediaRouter::Options::opus_max_bitrate_kbps`. **O padrão subiu de 48 para 96**,
+e isso não é mudança de comportamento: o que trafegava era o padrão do
+libdatachannel, 96. Deixá-lo em 48 ao ligá-lo pela primeira vez cortaria pela
+metade o som de todo compartilhamento. Agora o número descreve o que já era
+verdade.
+
+Onze testes novos: ida e volta do `has_audio`, a mensagem sem o campo, o
+servidor contando a quem entra no meio, o campo esquecido ao parar, a seção nova
+do INI, o modo inválido recusado, e o mapeamento de modos nos dois sentidos.
+
+#### O que não deu para verificar rodando
+
+**O cliente Qt com a camada de mídia não linka nesta máquina**, pelo mesmo
+conflito BoringSSL/OpenSSL da fase 2. Não é regressão: `build/windows-release`
+tem a interface ligada e a mídia desligada, `build/media` o contrário, e
+`partyshare.exe` com as duas nunca existiu aqui. Tudo compila nas duas
+configurações e a lógica está coberta por testes, mas os dois controles novos do
+diálogo não foram vistos na tela.
 
 ### Fase 4 — medição e documentação
 

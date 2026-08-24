@@ -164,6 +164,29 @@ TEST(RoundTrip, ScreenShareStartedAndStopped) {
             (ScreenShareStopped{"8F42A1", "user1"}));
 }
 
+TEST(RoundTrip, AScreenShareCarriesWhetherItHasSound) {
+  const ScreenShareStarted loud{"8F42A1", "user1", true};
+  EXPECT_EQ(round_trip(loud), loud);
+  EXPECT_TRUE(round_trip(loud).has_audio);
+
+  const ScreenShareStarted silent{"8F42A1", "user1", false};
+  EXPECT_FALSE(round_trip(silent).has_audio);
+}
+
+TEST(Parse, AScreenShareFromAPeerThatPredatesSoundIsSilent) {
+  // The field is new. A client built before it cannot be sending it, and
+  // "absent" has to read as "no sound" rather than as a malformed message -
+  // otherwise an older participant's share stops being announced at all.
+  const auto parsed = parse(R"({
+    "type": "screen_share_started",
+    "room_id": "8F42A1",
+    "user_id": "user1"
+  })");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  ASSERT_TRUE(std::holds_alternative<ScreenShareStarted>(parsed.value()));
+  EXPECT_FALSE(std::get<ScreenShareStarted>(parsed.value()).has_audio);
+}
+
 TEST(RoundTrip, MuteAndUnmute) {
   EXPECT_EQ(round_trip(Mute{"8F42A1", "user1"}), (Mute{"8F42A1", "user1"}));
   EXPECT_EQ(round_trip(Unmute{"8F42A1", "user1"}), (Unmute{"8F42A1", "user1"}));

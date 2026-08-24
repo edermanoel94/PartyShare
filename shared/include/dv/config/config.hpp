@@ -32,7 +32,16 @@ struct VideoConfig {
 struct AudioConfig {
   int sample_rate_hz = 48000;
   int channels = 1;
-  int bitrate_kbps = 48;
+  /// The ceiling the SFU's offer puts on Opus, in kbps.
+  ///
+  /// Was 48 and was read, validated and then applied to nothing at all. What
+  /// the wire actually carried was libdatachannel's own default of 96, so this
+  /// is not a change of behaviour: it is the setting finally describing what
+  /// was already happening, now that it reaches the offer.
+  ///
+  /// 96 rather than 48 because a screen share is stereo and carries music. A
+  /// voice never comes near either number.
+  int bitrate_kbps = 96;
   int frame_duration_ms = 20;
   bool echo_cancellation = true;
   bool noise_suppression = true;
@@ -40,6 +49,22 @@ struct AudioConfig {
   /// Empty means the system default device.
   std::string input_device;
   std::string output_device;
+};
+
+/// What a screen share carries besides the picture. Client side only: the
+/// sound rides in the sharer's own audio track and the server never sees it as
+/// a separate thing. See docs/audio-da-tela-compartilhada.md.
+struct ScreenAudioConfig {
+  /// What the share dialog opens on: "none", "system" or "process".
+  ///
+  /// "system" is everything the machine plays except this client, and it is the
+  /// default because sharing a video with no sound is the surprise, not the
+  /// other way round. It is not a silent one: the dialog shows the choice
+  /// before anything is shared.
+  ///
+  /// A string rather than an enum so that a mode added later needs no schema
+  /// change, which is the same reason video.codec is one.
+  std::string mode = "system";
 };
 
 struct NetworkConfig {
@@ -111,6 +136,7 @@ struct DatabaseConfig {
 struct Config {
   VideoConfig video;
   AudioConfig audio;
+  ScreenAudioConfig screen_audio;
   NetworkConfig network;
   LoggingConfig logging;
   ServerConfig server;

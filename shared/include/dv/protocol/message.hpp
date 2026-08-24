@@ -186,6 +186,18 @@ struct IceCandidate {
 struct ScreenShareStarted {
   std::string room_id;
   std::string user_id;
+  /// Whether what the sharer's machine is playing is going out with the
+  /// picture.
+  ///
+  /// Nothing depends on this to hear the sound: it rides in the sharer's own
+  /// audio track and arrives whether or not anybody was told. What it buys is
+  /// the interface being able to say so - and, less obviously, being able to
+  /// explain why the volume slider for that participant now controls two
+  /// things at once. See docs/audio-da-tela-compartilhada.md, section 6.
+  ///
+  /// Absent from an older peer's message, and false is the right reading of
+  /// that: a client that does not know about this cannot be sending it.
+  bool has_audio = false;
 
   friend bool operator==(const ScreenShareStarted&, const ScreenShareStarted&) = default;
 };

@@ -595,8 +595,13 @@ std::string serialize(const Message& message) {
           root["candidate"] = value.candidate;
           root["sdp_mid"] = value.sdp_mid;
           root["sdp_mline_index"] = value.sdp_mline_index;
+        } else if constexpr (std::is_same_v<T, ScreenShareStarted>) {
+          // Was one of the room-and-user messages below until the screen
+          // learned to carry sound.
+          root["room_id"] = value.room_id;
+          root["user_id"] = value.user_id;
+          root["has_audio"] = value.has_audio;
         } else if constexpr (std::is_same_v<T, LeaveRoom> || std::is_same_v<T, UserLeft> ||
-                             std::is_same_v<T, ScreenShareStarted> ||
                              std::is_same_v<T, ScreenShareStopped>) {
           // Everything whose payload is exactly a room and a user.
           root["room_id"] = value.room_id;
@@ -814,6 +819,9 @@ Result<Message> parse(std::string_view json_text) {
       ScreenShareStarted value;
       value.room_id = reader.string("room_id");
       value.user_id = reader.string("user_id");
+      // With a fallback rather than required: a peer built before the screen
+      // could carry sound does not send the field, and false is what it means.
+      value.has_audio = reader.boolean("has_audio", false);
       return finish(reader, value);
     }
     case MessageType::ScreenShareStopped: {

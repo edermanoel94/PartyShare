@@ -19,17 +19,66 @@
 #include <dv/models/user.hpp>
 #include <dv/protocol/message.hpp>
 
+#include "audio/audio_sources.hpp"
 #include "media/media_session.hpp"
 #include "network/signaling_client.hpp"
 #include "video/screen_capturer.hpp"
 
 namespace dv::client::app {
 
+/// What a screen share should carry besides the picture.
+struct ScreenAudio {
+  enum class Mode : std::uint8_t {
+    /// The share is silent, which is what every share was until now.
+    None,
+    /// Everything the machine plays except this process. The exception is the
+    /// whole of the feedback protection - see
+    /// docs/audio-da-tela-compartilhada.md, section 6.
+    System,
+    /// One application and the processes below it.
+    Application,
+  };
+
+  Mode mode = Mode::None;
+  /// A process id, read only in `Application` mode.
+  std::uint32_t source_id = 0;
+};
+
+/// The names configuration and the settings dialog use for the modes. Inline
+/// so that the mapping lives in one place and neither of them invents its own.
+[[nodiscard]] constexpr std::string_view to_string(ScreenAudio::Mode mode) noexcept {
+  switch (mode) {
+    case ScreenAudio::Mode::None:
+      return "none";
+    case ScreenAudio::Mode::System:
+      return "system";
+    case ScreenAudio::Mode::Application:
+      return "process";
+  }
+  return "none";
+}
+
+/// Anything unrecognised reads as None. A share that is silent because the
+/// configuration says something this build does not understand is a great deal
+/// better than one that captures the machine because of it.
+[[nodiscard]] constexpr ScreenAudio::Mode screen_audio_mode_from(std::string_view name) noexcept {
+  if (name == "system") {
+    return ScreenAudio::Mode::System;
+  }
+  if (name == "process") {
+    return ScreenAudio::Mode::Application;
+  }
+  return ScreenAudio::Mode::None;
+}
+
 /// A participant as the interface needs to show them.
 struct Participant {
   models::User user;
   bool muted = false;
   bool sharing_screen = false;
+  /// Whether that share is carrying the sound of their machine, which is also
+  /// why the volume below now controls two things at once for them.
+  bool sharing_audio = false;
   /// Their audio is arriving on a track of ours.
   bool audio_active = false;
   /// How loud they are right now, from 0 to 1, and whether that counts as
@@ -71,6 +120,9 @@ class CallSession {
     /// video::recommended_bitrate_kbps already, so that the session starts on
     /// the same numbers it would recompute.
     bool auto_bitrate = false;
+    /// What the share dialog opens on. Remembered here for the same reason the
+    /// bitrate is: a choice made before a call has to survive into it.
+    ScreenAudio::Mode screen_audio_mode = ScreenAudio::Mode::System;
     /// Section 22 of SPEC.md wants these numbers, and M4 wants them in the log.
     std::chrono::milliseconds metrics_interval{5000};
   };
@@ -204,9 +256,30 @@ class CallSession {
   ///
   /// Fails with `screen_share_busy` when somebody else already holds the
   /// floor, and with what the capture layer reports otherwise.
-  [[nodiscard]] Result<std::monostate> start_screen_share(const std::string& monitor_id = {});
+  ///
+  /// `audio` asks for the machine's sound to go with the picture. It is the one
+  /// part that does **not** fail the share: a Windows too old to capture per
+  /// process, or an application that closed between the menu and the click,
+  /// gives a share that is silent rather than no share at all. Ask
+  /// `screen_audio_active()` for what actually happened, and
+  /// `screen_audio_failure()` for why.
+  [[nodiscard]] Result<std::monostate> start_screen_share(const std::string& monitor_id = {},
+                                                          ScreenAudio audio = {});
   [[nodiscard]] Result<std::monostate> stop_screen_share();
   [[nodiscard]] bool sharing_screen() const;
+
+  /// True while this participant's share is carrying their machine's sound.
+  [[nodiscard]] bool screen_audio_active() const;
+
+  /// Why the sound is not going out, when it was asked for and did not start.
+  /// Empty code when nothing went wrong.
+  [[nodiscard]] Error screen_audio_failure() const;
+
+  /// The applications this machine can be heard playing, for the share dialog.
+  [[nodiscard]] Result<std::vector<audio::AudioSource>> audio_sources() const;
+
+  /// What the next share will carry unless the dialog is told otherwise.
+  [[nodiscard]] ScreenAudio::Mode screen_audio_mode() const;
   /// Who is sharing right now, empty when nobody is.
   [[nodiscard]] std::string screen_sharer() const;
 
@@ -361,6 +434,14 @@ class CallSession {
   /// Kept from the ScreenShareStarted and ScreenShareStopped the server
   /// broadcasts, so every client agrees on it.
   std::string screen_sharer_;
+  /// Starts the machine's sound on an already running share. Returns whether
+  /// it is going out, and records why not when it is not.
+  bool start_screen_audio(media::MediaSession& session, ScreenAudio audio);
+
+  /// Why the screen audio did not start, when it was asked for. Kept rather
+  /// than returned because starting the sound is not allowed to fail the share:
+  /// see start_screen_share.
+  Error screen_audio_failure_;
   std::unordered_map<std::string, Participant> participants_;
   /// Per participant playback volume, kept here so that a choice made before
   /// the call survives into it.

@@ -227,6 +227,10 @@ class MainWindow : public QMainWindow {
   QHash<QString, int> volumes_;
   /// The monitor chosen in the settings dialog, empty for the primary one.
   QString monitor_id_;
+  /// What the next share should carry besides the picture, as the settings
+  /// dialog last left it. Read from the configuration on the first share, so
+  /// that somebody who never opens the dialog still gets what their file says.
+  std::optional<client::app::ScreenAudio> screen_audio_;
 };
 
 }  // namespace dv::ui

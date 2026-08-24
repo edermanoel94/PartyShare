@@ -19,6 +19,7 @@
 // leave a test that cannot fail.
 
 #include "media_test_client.hpp"
+#include "tone_player.hpp"
 
 namespace {
 
@@ -478,6 +479,184 @@ TEST_F(MediaEndToEndTest, OnlyOneParticipantCanShareAtATime) {
   EXPECT_EQ(refused.error().code, "screen_share_busy");
   EXPECT_FALSE(bruno.session().sharing_screen());
 }
+
+#if defined(_WIN32)
+
+/// The bitrate a client is sending and the other is receiving, averaged over a
+/// stretch long enough for the statistics to have been collected twice.
+///
+/// The bitrate, and not the audio level: libwebrtc computes the level the RTP
+/// header extension carries *before* the frame processor runs, so it reports
+/// the microphone alone and never the screen audio mixed in after it. That is
+/// the right answer for a speaking indicator and the wrong instrument for this
+/// test - measured here, a track carrying 94 kbps of music reported a level of
+/// 0.0002.
+struct Flow {
+  double sent = 0;
+  double received = 0;
+};
+
+[[nodiscard]] Flow flow_between(Client& from, Client& to, std::chrono::milliseconds over) {
+  Flow peak;
+  const auto deadline = std::chrono::steady_clock::now() + over;
+  while (std::chrono::steady_clock::now() < deadline) {
+    peak.sent = std::max(peak.sent, from.session().stats().send_bitrate_kbps);
+    peak.received = std::max(peak.received, to.session().stats().receive_bitrate_kbps);
+    std::this_thread::sleep_for(100ms);
+  }
+  return peak;
+}
+
+TEST_F(MediaEndToEndTest, TheSoundOfASharedScreenReachesTheOtherParticipant) {
+  // The whole feature, end to end and with nothing stubbed: this process plays
+  // a tone, the loopback capture hears it, the mixer folds it into Ana's own
+  // audio track after the echo canceller, Opus encodes it, the SFU forwards it,
+  // and Bruno's client receives it.
+  //
+  // The share is started first and the tone second, so that what is compared is
+  // the same share carrying silence and then carrying sound. Comparing against
+  // "no share at all" would also be comparing mono against stereo.
+  //
+  // See docs/audio-da-tela-compartilhada.md.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  const std::string ana_id = ana.session().local_user().id;
+  ASSERT_TRUE(wait_until([&] { return server_->media_router()->audio_packets_forwarded() > 0; }));
+
+  // This test's own process tree, which is where the tone will come from. The
+  // "share the browser tab" case, with the test standing in for the browser.
+  const dv::client::app::ScreenAudio audio{
+      .mode = dv::client::app::ScreenAudio::Mode::Application,
+      .source_id = static_cast<std::uint32_t>(GetCurrentProcessId())};
+  const auto shared = ana.session().start_screen_share({}, audio);
+  ASSERT_TRUE(shared.ok()) << shared.error().message;
+
+  if (!ana.session().screen_audio_active()) {
+    GTEST_SKIP() << "the loopback would not start: "
+                 << ana.session().screen_audio_failure().message;
+  }
+
+  // Bruno is told, over signaling, that this share has sound in it. Without it
+  // he has no way to know why Ana's volume slider is now also the volume of
+  // whatever she is playing.
+  EXPECT_TRUE(wait_until([&] {
+    for (const Participant& participant : bruno.participants()) {
+      if (participant.user.id == ana_id) {
+        return participant.sharing_audio;
+      }
+    }
+    return false;
+  })) << "bruno was not told the share carries sound";
+
+  // Ana's microphone is muted for the rest of this, and that is not a detail to
+  // work around the room: it is the property phase 2 built. With a share on,
+  // muting silences the microphone inside the mixer and leaves the track
+  // carrying the share, so what crosses the wire below is the screen audio
+  // alone.
+  ASSERT_TRUE(ana.session().set_muted(true).ok());
+
+  dv::testing::TonePlayer tone(0.2);
+  if (!tone.start()) {
+    GTEST_SKIP() << "this machine has no playback device to render a tone to";
+  }
+  const Flow flow = flow_between(ana, bruno, 3000ms);
+  tone.stop();
+
+  const media::AudioStats stats = ana.session().stats();
+
+  // The assertion that matters, and the one this test was written a second time
+  // to make: the sound reached the *encoder*. Everything upstream of that can
+  // be perfectly healthy while nothing is mixed at all - measured here, on a
+  // machine whose microphone captures at 16 kHz, where the mixer expected the
+  // 48 kHz it had been given in every other setting and quietly passed the
+  // frame through instead. The capture counters below were all green while the
+  // share was silent for everybody.
+  EXPECT_GT(stats.screen_audio_mixed_blocks, 0U) << "nothing was ever mixed into the track";
+  EXPECT_LT(stats.screen_audio_starved_blocks, stats.screen_audio_mixed_blocks)
+      << "the buffer between the capture and the encoder spent most of its time empty";
+  EXPECT_EQ(stats.screen_audio_dropped_frames, 0U)
+      << "the encoder could not keep up with the capture";
+
+  // And the capture end was healthy too.
+  EXPECT_TRUE(stats.screen_audio_active);
+  EXPECT_GT(stats.screen_audio_blocks, 0U);
+  EXPECT_LT(stats.screen_audio_silent_blocks, stats.screen_audio_blocks);
+
+  // The track carried all of that with the microphone muted, which is the whole
+  // of "muting your microphone must not mute the film".
+  EXPECT_TRUE(ana.session().muted());
+
+  // What crossed the wire. A stereo track carrying sound sits far above what a
+  // muted microphone alone would cost, which is about a kilobit per second.
+  //
+  // Deliberately not a comparison against a "silent share" baseline: this
+  // process is itself an audio application, and a loopback capture pointed at
+  // it hears the call being played back. There is no silence to compare
+  // against from in here.
+  EXPECT_GT(flow.sent, 40.0) << "ana's track was not carrying sound";
+  EXPECT_GT(flow.received, 40.0) << "it reached the encoder but not bruno";
+}
+
+TEST_F(MediaEndToEndTest, StoppingTheShareTakesTheSoundWithIt) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  const dv::client::app::ScreenAudio audio{.mode = dv::client::app::ScreenAudio::Mode::System};
+  const auto shared = ana.session().start_screen_share({}, audio);
+  ASSERT_TRUE(shared.ok()) << shared.error().message;
+  if (!ana.session().screen_audio_active()) {
+    GTEST_SKIP() << "the loopback would not start: "
+                 << ana.session().screen_audio_failure().message;
+  }
+
+  const std::string ana_id = ana.session().local_user().id;
+  ASSERT_TRUE(wait_until([&] {
+    for (const Participant& participant : bruno.participants()) {
+      if (participant.user.id == ana_id) {
+        return participant.sharing_audio;
+      }
+    }
+    return false;
+  }));
+
+  ASSERT_TRUE(ana.session().stop_screen_share().ok());
+
+  EXPECT_FALSE(ana.session().screen_audio_active());
+  EXPECT_TRUE(wait_until([&] {
+    for (const Participant& participant : bruno.participants()) {
+      if (participant.user.id == ana_id) {
+        return !participant.sharing_audio && !participant.sharing_screen;
+      }
+    }
+    return false;
+  })) << "bruno still believes the share has sound";
+
+  // The call is untouched by any of it, which is the property that makes a
+  // share safe to start and stop in the middle of a conversation.
+  EXPECT_EQ(ana.session().state(), CallSession::State::InCall);
+  EXPECT_EQ(bruno.session().state(), CallSession::State::InCall);
+}
+
+#endif  // defined(_WIN32)
 
 TEST_F(MediaEndToEndTest, MutingStopsTheOutgoingAudio) {
   Client& ana = add("ana");

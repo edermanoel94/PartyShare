@@ -77,6 +77,8 @@ set(dv_client_test_libraries)
 
 if(TARGET dv::client_core)
   list(APPEND dv_unit_sources
+    unit/test_block_pacer.cpp
+    unit/test_screen_audio_mixer.cpp
     unit/test_video_pipeline.cpp
     unit/test_reconnect_delay.cpp
     unit/test_network_quality.cpp
@@ -88,6 +90,7 @@ if(TARGET dv::client_core)
     integration/test_signaling_client.cpp
     integration/test_sfu.cpp
     integration/test_call_session.cpp
+    integration/test_loopback_capture.cpp
   )
   list(APPEND dv_client_test_libraries dv::client_core)
 endif()

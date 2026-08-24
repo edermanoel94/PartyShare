@@ -383,6 +383,61 @@ TEST_F(HubTest, AJoinerLearnsAboutAShareAlreadyInProgress) {
   EXPECT_EQ(sharing->user_id, ana_user.id);
 }
 
+TEST_F(HubTest, AJoinerIsToldWhetherTheShareInProgressHasSound) {
+  // The sound needs nothing from the server: it rides in the sharer's own audio
+  // track. What the server has to carry is the fact, because somebody who joins
+  // mid-share has no other way to learn that the volume slider next to that
+  // name is now also the volume of a film.
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  const auto announced = send(
+      ana, proto::ScreenShareStarted{.room_id = room, .user_id = ana_user.id, .has_audio = true});
+  ASSERT_TRUE(find<proto::ScreenShareStarted>(announced, ana).has_value());
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const auto sharing = find<proto::ScreenShareStarted>(out, bruno);
+  ASSERT_TRUE(sharing.has_value());
+  EXPECT_TRUE(sharing->has_audio);
+}
+
+TEST_F(HubTest, ASilentShareStaysSilentForAJoiner) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(ana, proto::ScreenShareStarted{.room_id = room, .user_id = ana_user.id});
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const auto sharing = find<proto::ScreenShareStarted>(out, bruno);
+  ASSERT_TRUE(sharing.has_value());
+  EXPECT_FALSE(sharing->has_audio);
+}
+
+TEST_F(HubTest, StoppingAShareForgetsThatItHadSound) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(ana,
+             proto::ScreenShareStarted{.room_id = room, .user_id = ana_user.id, .has_audio = true});
+  (void)send(ana, proto::ScreenShareStopped{room, ana_user.id});
+
+  // Shared again, this time without. A server that remembered the first answer
+  // would tell a joiner to expect sound that is not coming.
+  (void)send(ana, proto::ScreenShareStarted{.room_id = room, .user_id = ana_user.id});
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const auto sharing = find<proto::ScreenShareStarted>(out, bruno);
+  ASSERT_TRUE(sharing.has_value());
+  EXPECT_FALSE(sharing->has_audio);
+}
+
 TEST_F(HubTest, DroppingWhileSharingReleasesTheScreen) {
   const auto [ana, ana_user] = login("ana");
   const auto [bruno, bruno_user] = login("bruno");

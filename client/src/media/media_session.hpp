@@ -10,6 +10,7 @@
 
 #include <dv/core/result.hpp>
 
+#include "audio/loopback_capturer.hpp"
 #include "video/screen_capturer.hpp"
 #include "video/video_frame.hpp"
 
@@ -67,6 +68,35 @@ struct AudioStats {
   /// How much of the echo the canceller is removing, in dB. Zero when it is
   /// not running, or when there is no echo to remove.
   double echo_return_loss_db = 0;
+
+  /// True while what the screen is playing is being mixed into this
+  /// participant's audio. See `start_screen_audio`.
+  bool screen_audio_active = false;
+  /// The microphone on its own, from 0 to 1, read before the screen audio is
+  /// added to it.
+  ///
+  /// Separate from the level in `AudioLevel` because once a share is on they
+  /// stop being the same number: everything downstream of the mixer carries
+  /// voice and music together, and a level taken from there would show somebody
+  /// as talking for the whole length of a video.
+  double microphone_level = 0;
+  /// Blocks of screen audio that carried silence because the application was
+  /// quiet, out of `screen_audio_blocks`. Both count from the start of the
+  /// process rather than from the start of the share.
+  std::uint64_t screen_audio_blocks = 0;
+  std::uint64_t screen_audio_silent_blocks = 0;
+  /// Blocks of screen audio that actually reached the encoder, and blocks the
+  /// mixer had to fill with silence because the buffer between the capture and
+  /// the encoder had run dry.
+  ///
+  /// Separate from the two above, which count what the capture produced. The
+  /// capture can be delivering perfectly while this starves, and it is only
+  /// here that the difference shows.
+  std::uint64_t screen_audio_mixed_blocks = 0;
+  std::uint64_t screen_audio_starved_blocks = 0;
+  /// Frames thrown away because that buffer went over its watermark, which is
+  /// the encoder falling behind the capture rather than the other way round.
+  std::uint64_t screen_audio_dropped_frames = 0;
 };
 
 /// What the screen share is doing, section 22 of SPEC.md.
@@ -200,8 +230,12 @@ class MediaSession {
   [[nodiscard]] virtual Result<std::monostate> add_remote_candidate(
       const IceCandidate& candidate) = 0;
 
-  /// Stops sending audio without renegotiating: the track stays in place and
-  /// simply carries nothing.
+  /// Stops sending the microphone without renegotiating.
+  ///
+  /// How depends on whether a screen audio share is on. Alone, the track is
+  /// disabled and carries nothing, which is free. With a share on, disabling
+  /// the track would take the shared sound with it, so the microphone is
+  /// silenced inside the mixer instead and the track keeps carrying the share.
   virtual void set_microphone_muted(bool muted) = 0;
   [[nodiscard]] virtual bool microphone_muted() const = 0;
 
@@ -235,6 +269,35 @@ class MediaSession {
   virtual void stop_screen_share() = 0;
 
   [[nodiscard]] virtual bool sharing_screen() const = 0;
+
+  /// Starts sending what the machine is playing, or what one application is
+  /// playing, mixed into this participant's own audio track.
+  ///
+  /// Needs no renegotiation and no second track, for the reason
+  /// docs/audio-da-tela-compartilhada.md gives at length: libwebrtc has one
+  /// capture stream per factory, so a second local audio track would carry the
+  /// same sound as the first. What it has instead is a hook that runs after the
+  /// echo canceller and before the encoder, and that is where the mixing
+  /// happens.
+  ///
+  /// `source_id` is a process id, and is read only in `LoopbackMode::Process`.
+  /// In `LoopbackMode::System` the capture is everything the machine plays
+  /// *except* this process, which is not a nicety: capturing our own output
+  /// would send every other participant their own voice back, past the echo
+  /// canceller, with nothing left to remove it.
+  ///
+  /// Fails with `capture_unavailable` on a platform or a Windows too old to do
+  /// it, and with `invalid_value` for a process id of zero in `Process` mode.
+  /// A capture that dies later - the application closing, the playback device
+  /// disappearing - simply stops, and `screen_audio_active` goes false.
+  [[nodiscard]] virtual Result<std::monostate> start_screen_audio(audio::LoopbackMode mode,
+                                                                  std::uint32_t source_id) = 0;
+
+  /// Stops mixing. The microphone carries on alone, and the track goes back to
+  /// being muted by being disabled rather than by being silenced.
+  virtual void stop_screen_audio() = 0;
+
+  [[nodiscard]] virtual bool screen_audio_active() const = 0;
 
   /// The range the screen encoder may use, in kbps. Section 6 of SPEC.md puts
   /// it between 1.5 and 3 Mbps by default, and makes it configurable.

@@ -131,6 +131,19 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   quality_hint_->setWordWrap(true);
   quality_hint_->setProperty("hint", true);
 
+  screen_audio_ = new QComboBox(video);
+  // The data is what config and CallSession call these, so nothing has to be
+  // translated between the box, the file and the capture.
+  screen_audio_->addItem(QStringLiteral("None"), QStringLiteral("none"));
+  screen_audio_->addItem(QStringLiteral("Everything but PartyShare"), QStringLiteral("system"));
+  screen_audio_->addItem(QStringLiteral("One application"), QStringLiteral("process"));
+
+  audio_source_ = new QComboBox(video);
+
+  screen_audio_hint_ = new QLabel(QString{}, video);
+  screen_audio_hint_->setWordWrap(true);
+  screen_audio_hint_->setProperty("hint", true);
+
   video_form->addRow(QStringLiteral("Monitor"), monitor_);
   video_form->addRow(QStringLiteral("Resolution"), resolution_);
   video_form->addRow(QStringLiteral("Frame rate"), frame_rate_);
@@ -140,6 +153,11 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   video_form->addRow(QStringLiteral("Bitrate"), auto_bitrate_);
   video_form->addRow(QStringLiteral("Minimum bitrate"), min_bitrate_);
   video_form->addRow(QStringLiteral("Maximum bitrate"), max_bitrate_);
+  // Under the picture settings, because it is part of what a share carries
+  // rather than a property of this machine's sound.
+  video_form->addRow(QStringLiteral("Share sound"), screen_audio_);
+  video_form->addRow(QStringLiteral("Application"), audio_source_);
+  video_form->addRow(screen_audio_hint_);
   // Spanning the form rather than in the value column, because it is a
   // sentence and the value column is as wide as a spin box.
   video_form->addRow(quality_hint_);
@@ -184,6 +202,17 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   load_devices();
   load_monitors();
   load_quality();
+
+  // What the configuration opens on, which is "system" unless somebody changed
+  // it. findData returns -1 for a mode this build does not offer, and leaving
+  // the box on its first row is the right answer to that.
+  if (const int mode = screen_audio_->findData(QString::fromUtf8(
+          client::app::to_string(session_.screen_audio_mode()).data(),
+          qsizetype(client::app::to_string(session_.screen_audio_mode()).size())));
+      mode >= 0) {
+    screen_audio_->setCurrentIndex(mode);
+  }
+  load_audio_sources();
   show_storage();
 
   // One call for all three, because in automatic mode the values and whether
@@ -208,6 +237,55 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   connect(max_bitrate_, &QSpinBox::valueChanged, this, &SettingsDialog::on_bitrate_changed);
   connect(resolution_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
   connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
+  connect(screen_audio_, &QComboBox::currentIndexChanged, this,
+          &SettingsDialog::on_screen_audio_changed);
+}
+
+void SettingsDialog::load_audio_sources() {
+  const bool one_application = screen_audio_->currentData().toString() == QStringLiteral("process");
+  audio_source_->setEnabled(one_application);
+  audio_source_->clear();
+  screen_audio_hint_->clear();
+
+  if (!client::audio::loopback_capture_is_available()) {
+    screen_audio_->setEnabled(false);
+    audio_source_->setEnabled(false);
+    screen_audio_hint_->setText(
+        QStringLiteral("This system cannot capture what an application is playing. On Windows "
+                       "that needs build 20348 or newer."));
+    return;
+  }
+
+  if (!one_application) {
+    return;
+  }
+
+  const auto listed = session_.audio_sources();
+  if (!listed) {
+    audio_source_->addItem(QStringLiteral("could not read the applications"), 0U);
+    audio_source_->setEnabled(false);
+    screen_audio_hint_->setText(QString::fromStdString(listed.error().message));
+    return;
+  }
+  for (const client::audio::AudioSource& source : listed.value()) {
+    audio_source_->addItem(
+        source.playing ? QStringLiteral("%1  (playing)").arg(QString::fromStdString(source.name))
+                       : QString::fromStdString(source.name),
+        static_cast<unsigned>(source.process_id));
+  }
+  if (audio_source_->count() == 0) {
+    audio_source_->addItem(QStringLiteral("nothing is playing"), 0U);
+    audio_source_->setEnabled(false);
+    screen_audio_hint_->setText(
+        QStringLiteral("Start playing something and open this dialog again."));
+  }
+}
+
+void SettingsDialog::on_screen_audio_changed() {
+  load_audio_sources();
+  stage({config::IniSetting{.section = "screen_audio",
+                            .key = "mode",
+                            .value = screen_audio_->currentData().toString().toStdString()}});
 }
 
 void SettingsDialog::load_devices() {
@@ -583,6 +661,18 @@ void SettingsDialog::on_quality_changed() {
 
 QString SettingsDialog::selected_monitor() const {
   return monitor_->currentData().toString();
+}
+
+client::app::ScreenAudio SettingsDialog::selected_screen_audio() const {
+  const QString mode = screen_audio_->currentData().toString();
+  if (mode == QStringLiteral("system")) {
+    return {.mode = client::app::ScreenAudio::Mode::System};
+  }
+  if (mode == QStringLiteral("process")) {
+    return {.mode = client::app::ScreenAudio::Mode::Application,
+            .source_id = audio_source_->currentData().toUInt()};
+  }
+  return {};
 }
 
 }  // namespace dv::ui

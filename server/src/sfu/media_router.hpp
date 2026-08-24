@@ -61,6 +61,15 @@ class MediaRouter : public MediaSignals {
     /// Opus at 48 kHz, as section 9 of SPEC.md requires. 111 is the payload
     /// type every browser and libwebrtc build uses for it.
     int opus_payload_type = 111;
+    /// The ceiling written into the Opus fmtp of every audio m-line, in kbps.
+    ///
+    /// It is what the offer asks a sender to stay under, and this server is
+    /// always the offerer, so it is the only place the number can come from.
+    /// Until the screen learned to carry sound it did not matter and was not
+    /// applied at all: voice fits in 48 kbps and nobody was near the ceiling.
+    /// Music is not voice, and a share is stereo. See
+    /// docs/audio-da-tela-compartilhada.md, section 5.
+    int opus_max_bitrate_kbps = 96;
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.
     int h264_payload_type = 96;

@@ -267,6 +267,12 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
     } else {
       known = false;
     }
+  } else if (section == "screen_audio") {
+    if (key == "mode") {
+      understood = as_text(config.screen_audio.mode);
+    } else {
+      known = false;
+    }
   } else if (section == "audio") {
     if (key == "sample_rate_hz") {
       understood = as_int(config.audio.sample_rate_hz);
@@ -627,6 +633,9 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "input_device", base.audio.input_device);
       read_field(audio, "output_device", base.audio.output_device);
     }
+    if (root.contains("screen_audio")) {
+      read_field(root.at("screen_audio"), "mode", base.screen_audio.mode);
+    }
     if (root.contains("network")) {
       const json& network = root.at("network");
       read_field(network, "signaling_url", base.network.signaling_url);
@@ -978,6 +987,10 @@ std::optional<Error> validate(const Config& config) {
   if (config.audio.bitrate_kbps < 6 || config.audio.bitrate_kbps > 510) {
     return invalid_value("audio.bitrate_kbps", "must be between 6 and 510");
   }
+  if (config.screen_audio.mode != "none" && config.screen_audio.mode != "system" &&
+      config.screen_audio.mode != "process") {
+    return invalid_value("screen_audio.mode", "must be none, system or process");
+  }
 
   if (config.database.enabled) {
     if (config.database.uri.empty()) {
@@ -1045,6 +1058,7 @@ std::string to_json(const Config& config) {
                        {"automatic_gain_control", config.audio.automatic_gain_control},
                        {"input_device", config.audio.input_device},
                        {"output_device", config.audio.output_device}}},
+                     {"screen_audio", {{"mode", config.screen_audio.mode}}},
                      {"network",
                       {{"signaling_url", config.network.signaling_url},
                        {"stun_servers", config.network.stun_servers},

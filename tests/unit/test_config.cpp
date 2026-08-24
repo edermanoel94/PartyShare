@@ -57,6 +57,39 @@ class ScopedEnv {
   std::optional<std::string> previous_;
 };
 
+/// Points the per-user configuration directory at one that does not exist, for
+/// the duration of a test.
+///
+/// Every test that calls load() without naming a file reads the cascade of
+/// default_config_paths(), and the last entry of that cascade is the config.ini
+/// of whoever is running the tests. Without this, the suite is testing the
+/// machine as much as the code.
+///
+/// That is not hypothetical. A client built from a branch that had a setting
+/// this one does not know wrote it to disk, and ten tests here began failing
+/// with "no such setting as [video] auto_bitrate" - on a branch where nothing
+/// about configuration had changed. The only way to get a green suite was to
+/// delete the file, which is a fine thing to have to do to a machine and a
+/// terrible thing to have to do to run tests.
+///
+/// A path that does not exist rather than an empty temporary directory: what
+/// these tests want is no user configuration at all, and a file that is not
+/// there is exactly that to the cascade. Forward slashes because
+/// std::filesystem takes them on Windows too.
+class ScopedEmptyConfigHome {
+ public:
+#ifdef _WIN32
+  ScopedEmptyConfigHome() : base_("LOCALAPPDATA", "C:/dv-test-appdata") {}
+#elif defined(__APPLE__)
+  ScopedEmptyConfigHome() : base_("HOME", "/dv-test-home") {}
+#else
+  ScopedEmptyConfigHome() : base_("XDG_CONFIG_HOME", "/dv-test-config") {}
+#endif
+
+ private:
+  ScopedEnv base_;
+};
+
 TEST(Config, DefaultsMatchTheSpec) {
   const Config config;
   EXPECT_EQ(config.video.width, 1280);
@@ -115,6 +148,7 @@ TEST(Config, EnvironmentOverridesTheFile) {
 }
 
 TEST(Config, CommandLineOverridesTheEnvironment) {
+  const ScopedEmptyConfigHome home;
   const ScopedEnv env("DV_VIDEO_FPS", "24");
   const char* argv[] = {"dv_client", "--fps=15"};
   const auto result = dv::config::load(2, argv);
@@ -123,12 +157,14 @@ TEST(Config, CommandLineOverridesTheEnvironment) {
 }
 
 TEST(Config, IgnoresArgumentsThatAreNotInKeyValueForm) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"dv_client", "--verbose", "positional", "-x"};
   const auto result = dv::config::load(4, argv);
   EXPECT_TRUE(result.ok()) << result.error().message;
 }
 
 TEST(Config, RejectingRefusesAnOptionNobodyDefined) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--prot=8080"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_FALSE(result.ok());
@@ -136,6 +172,7 @@ TEST(Config, RejectingRefusesAnOptionNobodyDefined) {
 }
 
 TEST(Config, RejectingRefusesAnOptionWithTheValueDetached) {
+  const ScopedEmptyConfigHome home;
   // The shape that let --help start a server instead of describing it.
   const char* argv[] = {"partyshare-server", "--port", "8080"};
   const auto result = dv::config::load(3, argv, dv::config::UnknownOptions::Reject);
@@ -144,6 +181,7 @@ TEST(Config, RejectingRefusesAnOptionWithTheValueDetached) {
 }
 
 TEST(Config, RejectingStillLetsHelpThrough) {
+  const ScopedEmptyConfigHome home;
   // main answers these before loading, so the parser must not refuse them.
   for (const char* flag : {"--help", "-h"}) {
     const char* argv[] = {"partyshare-server", flag};
@@ -153,6 +191,7 @@ TEST(Config, RejectingStillLetsHelpThrough) {
 }
 
 TEST(Config, RejectingLeavesPositionalArgumentsAlone) {
+  const ScopedEmptyConfigHome home;
   // Only a dash marks something as a mistyped option.
   const char* argv[] = {"partyshare-server", "positional"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
@@ -160,6 +199,7 @@ TEST(Config, RejectingLeavesPositionalArgumentsAlone) {
 }
 
 TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--port=9000"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -167,6 +207,7 @@ TEST(Config, RejectingKeepsReadingTheOptionsItKnows) {
 }
 
 TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
+  const ScopedEmptyConfigHome home;
   // Why the client cannot reject. Qt spells its own options with the value
   // detached, as "-platform offscreen", which is the very shape Reject refuses:
   // turning it on here would refuse an argument that is not ours to judge.
@@ -177,6 +218,7 @@ TEST(Config, IgnoringLetsThroughWhatQtWillReadItself) {
 }
 
 TEST(Config, ReportsAMissingConfigFile) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"dv_client", "--config=/nonexistent/path/config.json"};
   const auto result = dv::config::load(2, argv);
   ASSERT_FALSE(result.ok());
@@ -276,6 +318,7 @@ TEST(Config, TheIceRangeIsUnsetByDefault) {
 }
 
 TEST(Config, ReadsTheIceRangeFromOneOption) {
+  const ScopedEmptyConfigHome home;
   const char* argv[] = {"partyshare-server", "--ice-port-range=50000-50100"};
   const auto result = dv::config::load(2, argv, dv::config::UnknownOptions::Reject);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -284,6 +327,7 @@ TEST(Config, ReadsTheIceRangeFromOneOption) {
 }
 
 TEST(Config, RejectsAnIceRangeThatIsNotARange) {
+  const ScopedEmptyConfigHome home;
   for (const char* option :
        {"--ice-port-range=50000", "--ice-port-range=50000-", "--ice-port-range=-50100",
         "--ice-port-range=abc-def", "--ice-port-range=0-50100", "--ice-port-range=50000-70000"}) {
@@ -440,6 +484,36 @@ TEST(ConfigIni, ReadsTheAutomaticBitrateMode) {
   EXPECT_FALSE(off.value().video.auto_bitrate);
 }
 
+TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {
+  const auto parsed = dv::config::parse_ini("[screen_audio]\nmode = process\n", Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().screen_audio.mode, "process");
+}
+
+TEST(Config, TheDefaultShareCarriesTheMachinesSound) {
+  // Sharing a video and having nobody hear it is the surprise, not the other
+  // way round. It is not a silent default either: the settings dialog shows the
+  // choice before anything is shared.
+  EXPECT_EQ(Config{}.screen_audio.mode, "system");
+}
+
+TEST(Config, ValidationRefusesAShareSoundModeNobodyImplements) {
+  Config config;
+  config.screen_audio.mode = "everything";
+  const auto failure = dv::config::validate(config);
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_value");
+  EXPECT_NE(failure->message.find("screen_audio.mode"), std::string::npos);
+}
+
+TEST(Config, TheOpusCeilingDescribesWhatTheOfferAlreadyCarried) {
+  // It was 48 and was applied to nothing: what went on the wire was
+  // libdatachannel's own default of 96. Now that it reaches the offer, the
+  // default has to be the number that was already true, or turning the setting
+  // on would quietly halve every screen share's sound.
+  EXPECT_EQ(Config{}.audio.bitrate_kbps, 96);
+}
+
 TEST(ConfigIni, RefusesWhatItCannotApply) {
   // Every one of these would otherwise be a line that looks applied and is not,
   // which is the failure this format exists to make impossible.
@@ -449,6 +523,7 @@ TEST(ConfigIni, RefusesWhatItCannotApply) {
       {"[video]\nfps = many\n", "a number that is not one"},
       {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
       {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
+      {"[screen_audio]\nmodo = system\n", "a misspelled screen audio key"},
       {"[video]\nauto_bitrate = sometimes\n", "a mode that is not a boolean"},
       {"[server]\nport = 70000\n", "a port out of range"},
       {"signaling_url = ws://x:1\n", "a setting under no section"},

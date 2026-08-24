@@ -353,6 +353,10 @@ int main(int argc, char* argv[]) {
     options.sfu.bandwidth.start_kbps = config.video.min_bitrate_kbps;
     options.sfu.bandwidth.max_kbps = config.video.max_bitrate_kbps;
     options.sfu.bandwidth.min_kbps = config.video.floor_bitrate_kbps;
+    // The ceiling the offer puts on Opus. It has to hold a stereo screen share
+    // and not only a voice, so the default is well above audio.bitrate_kbps's
+    // own default of 48.
+    options.sfu.opus_max_bitrate_kbps = config.audio.bitrate_kbps;
     if (!config.network.turn_url.empty()) {
       options.sfu.ice_servers.push_back(build_turn_url(config.network));
     }

@@ -135,6 +135,34 @@ With five participants and one sharing a screen, and video at the 3000 kbps ceil
 The outbound side grows with the number of viewers, and it is what sizes the machine.
 A rule that works for planning: add 3.3 Mbps per screen viewer and 200 kbps per participant for audio.
 
+#### When the share carries sound
+
+The sound of a shared screen travels inside the sharer's own audio track rather
+than in one of its own, so it adds no stream to the table above and no work to
+the SFU. What it changes is the size of one of the streams already there: that
+participant's audio goes from a mono voice to a stereo mix of a voice and
+whatever is playing, and Opus is offered a ceiling of `audio.bitrate_kbps`,
+96 kbps by default.
+
+Measured end to end on this project, in
+`MediaEndToEndTest.TheSoundOfASharedScreenReachesTheOtherParticipant`:
+
+| The sharer's audio track | Bitrate |
+| --- | --- |
+| Voice only | tens of kbps |
+| Share on, nothing playing | ~1 kbps |
+| Share on, a tone playing | ~100 kbps |
+
+The middle row is the one worth knowing: a share whose application is quiet
+costs nothing at all. Opus opens the stereo stream at the ceiling and settles
+within a couple of seconds once it sees that the content is silence, so the
+ceiling is what the link has to be able to carry, not what it will carry.
+
+For planning, the worst case is one sharer at the ceiling: add 96 kbps inbound
+for them, and 96 kbps outbound per other participant. In a room of five that is
+~0.1 Mbps in and ~0.4 Mbps out on top of the table above - next to the 3.3 Mbps
+of the picture, it does not change how the machine is sized.
+
 ### Ports
 
 | Port | Protocol | Use |

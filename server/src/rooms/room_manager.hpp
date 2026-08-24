@@ -95,8 +95,14 @@ class RoomManager {
 
   /// Fails with screen_share_busy when someone else is already sharing.
   /// Starting a share the user already owns succeeds and changes nothing.
+  ///
+  /// `with_audio` is remembered rather than acted on: what the sharer's machine
+  /// is playing travels in their own audio track and never reaches the server
+  /// as a separate thing. It is kept so that somebody joining mid-share can be
+  /// told what they are about to hear.
   [[nodiscard]] std::optional<Error> start_screen_share(const std::string& room_id,
-                                                        const std::string& user_id);
+                                                        const std::string& user_id,
+                                                        bool with_audio = false);
 
   [[nodiscard]] std::optional<Error> stop_screen_share(const std::string& room_id,
                                                        const std::string& user_id);

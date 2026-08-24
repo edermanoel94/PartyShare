@@ -572,7 +572,11 @@ void MainWindow::wire_session() {
                 label += QStringLiteral("  (connected)");
               }
               if (participant.sharing_screen) {
-                label += QStringLiteral("  (sharing)");
+                // Two words apart, because they answer different questions:
+                // whose picture is on screen, and why this person's volume
+                // slider is now also the volume of a film.
+                label += participant.sharing_audio ? QStringLiteral("  (sharing with sound)")
+                                                   : QStringLiteral("  (sharing)");
               }
               label += QStringLiteral("\t") + QString::fromStdString(participant.user.id);
               label += QStringLiteral("\t") + name;
@@ -602,6 +606,23 @@ void MainWindow::wire_session() {
             } else if (video.frames_received > 0) {
               summary +=
                   QStringLiteral(" · screen %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
+            }
+
+            // While the share carries sound, the audio number above stops being
+            // about a voice: it is a voice and a film together, in stereo, and
+            // it climbs from tens of kbps to near a hundred. Saying so is what
+            // keeps somebody from reading their own screen share as a fault.
+            //
+            // How much of it was silence is the other half. A capture that is
+            // delivering nothing but silence looks exactly like a working one
+            // from the outside, and this is the only place that difference
+            // shows.
+            if (stats.screen_audio_active) {
+              const auto blocks = stats.screen_audio_blocks;
+              const int quiet =
+                  blocks == 0 ? 0
+                              : static_cast<int>((stats.screen_audio_silent_blocks * 100) / blocks);
+              summary += QStringLiteral(" · sound shared (%1% silent)").arg(quiet);
             }
             QMetaObject::invokeMethod(this, "apply_metrics", Qt::QueuedConnection,
                                       Q_ARG(QString, summary),
@@ -930,9 +951,29 @@ void MainWindow::on_toggle_share() {
     return;
   }
 
-  if (const auto started = session_.start_screen_share(monitor_id_.toStdString()); !started) {
+  // Whatever the dialog last chose, or what the configuration says for
+  // somebody who has never opened it.
+  const client::app::ScreenAudio audio =
+      screen_audio_.value_or(client::app::ScreenAudio{.mode = session_.screen_audio_mode()});
+
+  if (const auto started = session_.start_screen_share(monitor_id_.toStdString(), audio);
+      !started) {
     apply_error(QString::fromStdString(started.error().code),
                 QString::fromStdString(started.error().message));
+    refresh_controls();
+    return;
+  }
+
+  // Sound was asked for and did not start. The share is up either way - see
+  // CallSession::start_screen_share - so this is a note and not an error
+  // dialog, but it has to be said: a silent share that was meant to have sound
+  // is otherwise indistinguishable from one that does.
+  if (audio.mode != client::app::ScreenAudio::Mode::None && !session_.screen_audio_active()) {
+    const Error why = session_.screen_audio_failure();
+    status_->setText(
+        why.message.empty()
+            ? QStringLiteral("Sharing without sound")
+            : QStringLiteral("Sharing without sound: %1").arg(QString::fromStdString(why.message)));
   }
   refresh_controls();
 }
@@ -941,6 +982,7 @@ void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+  screen_audio_ = dialog.selected_screen_audio();
 }
 
 void MainWindow::on_open_metrics() {

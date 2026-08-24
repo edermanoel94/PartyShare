@@ -60,6 +60,7 @@ class SettingsDialog : public QDialog {
   void on_bitrate_changed();
   void on_auto_bitrate_changed(bool automatic);
   void on_quality_changed();
+  void on_screen_audio_changed();
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -68,6 +69,14 @@ class SettingsDialog : public QDialog {
  private:
   void load_devices();
   void load_monitors();
+
+  /// Fills the application box with what the machine can currently be heard
+  /// playing, and enables it only when one application is what was asked for.
+  ///
+  /// Refilled every time the mode changes rather than once on opening: the list
+  /// is of what is playing *now*, and a dialog left open while somebody starts
+  /// a video would otherwise offer a menu from a minute ago.
+  void load_audio_sources();
 
   /// Fills the resolution and frame rate boxes and selects what is in use.
   ///
@@ -135,6 +144,13 @@ class SettingsDialog : public QDialog {
   QComboBox* input_ = nullptr;
   QComboBox* output_ = nullptr;
   QComboBox* monitor_ = nullptr;
+  /// None, everything but this client, or one application.
+  QComboBox* screen_audio_ = nullptr;
+  /// Which application, when that is the mode. Its data is a process id.
+  QComboBox* audio_source_ = nullptr;
+  /// Says why the box is empty or disabled, which is otherwise a dead control
+  /// with no explanation: an old Windows, or a build without the capture.
+  QLabel* screen_audio_hint_ = nullptr;
   QComboBox* resolution_ = nullptr;
   QComboBox* frame_rate_ = nullptr;
   QCheckBox* auto_bitrate_ = nullptr;
@@ -155,6 +171,9 @@ class SettingsDialog : public QDialog {
  public:
   /// The monitor the user picked, for whoever starts the share.
   [[nodiscard]] QString selected_monitor() const;
+
+  /// What the next share should carry besides the picture.
+  [[nodiscard]] client::app::ScreenAudio selected_screen_audio() const;
 };
 
 }  // namespace dv::ui

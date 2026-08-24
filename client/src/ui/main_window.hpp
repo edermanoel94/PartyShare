@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QMainWindow>
 #include <QPoint>
@@ -9,6 +10,7 @@
 
 #include "app/call_session.hpp"
 #include "app/network_quality.hpp"
+#include "app/smoothing.hpp"
 
 class QLabel;
 class QLineEdit;
@@ -17,6 +19,7 @@ class QProgressBar;
 class QPushButton;
 class QSlider;
 class QStackedWidget;
+class QTimer;
 
 namespace dv::ui {
 
@@ -70,6 +73,12 @@ class MainWindow : public QMainWindow {
   void apply_participants(const QStringList& names);
   void apply_metrics(const QString& summary, int quality);
   void apply_local_level(double level, bool speaking);
+  /// Moves the microphone meter one frame closer to the last measurement.
+  ///
+  /// The measurements arrive five times a second and the bar is drawn sixty,
+  /// because five positions a second is not movement, it is a slideshow. See
+  /// app::LevelMeter for what decides how fast it is allowed to travel.
+  void animate_level();
   void apply_error(const QString& code, const QString& message);
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
@@ -121,6 +130,17 @@ class MainWindow : public QMainWindow {
   void clear_metrics();
   void show_page();
 
+  /// Puts a page on screen, fading it in.
+  ///
+  /// Short - under a fifth of a second - and only on the page that is
+  /// arriving. Long enough that the eye follows one screen into the next
+  /// instead of being handed a different window, short enough that nobody
+  /// waiting to type a room code is kept waiting for it.
+  void go_to_page(int index);
+
+  /// Puts the microphone meter back to nothing and stops animating it.
+  void quiet_level();
+
   client::app::CallSession& session_;
 
   QStackedWidget* pages_ = nullptr;
@@ -152,6 +172,22 @@ class MainWindow : public QMainWindow {
   QPushButton* settings_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
+
+  /// What the microphone meter is drawing, and the clock it moves against.
+  ///
+  /// A clock of its own rather than counting frames: a timer set to sixteen
+  /// milliseconds fires when the event loop gets to it, and a bar that falls
+  /// at one speed on an idle machine and half of it under load reads as the
+  /// interface stuttering.
+  client::app::LevelMeter level_;
+  QTimer* level_timer_ = nullptr;
+  QElapsedTimer level_clock_;
+  qint64 level_drawn_at_ms_ = 0;
+
+  /// The quality on screen, so the indicator is only restyled when it changes.
+  /// Setting a stylesheet re-resolves the widget's whole style, and the
+  /// measurement behind this arrives on a timer whether it moved or not.
+  int shown_quality_ = -1;
 
   // Chat. A list of plain text items rather than a rich text view: what goes
   // in it is typed by other people, and a widget that renders no markup cannot

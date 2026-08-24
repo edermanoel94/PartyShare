@@ -21,6 +21,7 @@ add_library(dv_client_core STATIC
   src/app/call_session.cpp
   src/app/call_session.hpp
   src/app/network_quality.hpp
+  src/app/smoothing.hpp
   src/media/media_session.cpp
   src/media/media_session.hpp
   src/media/network_impairment.cpp

@@ -356,6 +356,43 @@ int CallSession::video_floor_bitrate_kbps() const {
   return options_.media.video_floor_bitrate_kbps;
 }
 
+Result<std::monostate> CallSession::set_video_quality(video::Size size, int fps) {
+  if (size.empty() || fps < 1) {
+    return Result<std::monostate>::failure(
+        "invalid_value", "a capture size has to be positive and the frame rate at least one");
+  }
+
+  const video::ScreenCaptureOptions wanted{.max_size = size, .max_fps = fps};
+
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    session = audio_;
+  }
+
+  if (session) {
+    // Told first, kept second. The session is the one that can refuse, and
+    // recording a choice it did not take would leave the dialog showing a
+    // quality that is not being sent.
+    //
+    // Called with the lock let go, and it has to be. A restart that fails
+    // reports it through on_screen_share_ended, whose handler calls back into
+    // stop_screen_share, which wants this same mutex.
+    if (auto applied = session->set_capture_options(wanted); !applied) {
+      return applied;
+    }
+  }
+
+  const std::lock_guard<std::mutex> lock(mutex_);
+  options_.media.capture = wanted;
+  return std::monostate{};
+}
+
+video::ScreenCaptureOptions CallSession::video_quality() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.capture;
+}
+
 Result<std::monostate> CallSession::set_participant_volume(const std::string& user_id,
                                                            double volume) {
   std::shared_ptr<media::MediaSession> session;

@@ -10,12 +10,12 @@
 
 ## Why it is here
 
-NVENC has no library to link against: `libnvidia-encode.so` ships with the driver and is opened at runtime, and all the program needs at compile time is the declaration of the structs and enums that cross that boundary.
+NVENC has no library to link against: the encoder library ships with the driver — `libnvidia-encode.so` on Linux, `nvEncodeAPI64.dll` on Windows — and is opened at runtime, so all the program needs at compile time is the declaration of the structs and enums that cross that boundary.
 
 That declaration is not distributed as a package on every platform, and the project cannot depend on the developer having installed the Video Codec SDK.
 ffmpeg solves it the same way, and this file comes from there.
 
-Nothing is linked: `client/src/webrtc/hardware_encoder_nvenc.cpp` opens `libnvidia-encode.so.1` and `libcuda.so.1` with `dlopen`, so a binary compiled with NVENC runs just the same on a machine with no NVIDIA card at all.
+Nothing is linked: `client/src/webrtc/hardware_encoder_nvenc.cpp` opens the encoder library and the CUDA driver through `client/src/webrtc/dynamic_library.hpp`, which is `dlopen` on Linux and `LoadLibrary` on Windows, so a binary compiled with NVENC runs just the same on a machine with no NVIDIA card at all.
 
 ## How to update it
 

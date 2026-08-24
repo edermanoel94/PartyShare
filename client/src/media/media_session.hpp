@@ -243,6 +243,21 @@ class MediaSession {
   /// sender, not of the session.
   [[nodiscard]] virtual Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) = 0;
 
+  /// The size and rate the screen is captured and sent at.
+  ///
+  /// Needs no renegotiation either, for the same reason starting a share does
+  /// not: the m-line and the track are already there, and this only changes
+  /// what is pushed into them. A share that is running is restarted on the
+  /// same monitor, which costs a keyframe and the handful of frames the
+  /// platform takes to hand over the first one.
+  ///
+  /// Fails with `invalid_value` for an empty size or a rate below one. When
+  /// the restart itself fails, the share ends the way any other capture
+  /// failure ends it, through `on_screen_share_ended`, so that nothing is left
+  /// believing a share is still on.
+  [[nodiscard]] virtual Result<std::monostate> set_capture_options(
+      const video::ScreenCaptureOptions& options) = 0;
+
   /// The last stats snapshot. Collection is asynchronous, so this returns what
   /// was gathered most recently rather than blocking for a fresh reading.
   [[nodiscard]] virtual AudioStats stats() const = 0;

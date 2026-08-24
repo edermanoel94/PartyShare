@@ -257,7 +257,24 @@ class Engine {
     // ordering explicit instead of incidental, and this call is what libwebrtc
     // offers embedders in that position.
     preload_transport();
+
+    // All of which is true wherever the two copies collapse into one, and
+    // false on Windows, where they do not. Here vcpkg builds libsrtp as
+    // srtp2.dll and libdatachannel imports it, while libwebrtc keeps its own
+    // copy statically inside the executable - dumpbin shows datachannel.dll
+    // importing srtp2.dll and the executable importing no such thing. Two
+    // libraries, two crypto kernels, no conflict to avoid.
+    //
+    // Prohibiting the initialisation there does not prevent a clash, it
+    // creates one: libwebrtc's kernel is then never initialised at all, and
+    // srtp_create() answers init_fail. The symptom is the same one this whole
+    // comment is about - ICE connects, DTLS completes, no packet is ever
+    // encrypted - which is why it has to be said out loud that the cure and
+    // the disease look identical from the outside. Tell them apart by the
+    // error: err=2 at srtp_init is the clash, err=5 at srtp_create is this.
+#ifndef _WIN32
     webrtc::ProhibitLibsrtpInitialization();
+#endif
 
     webrtc::InitializeSSL();
 
@@ -620,6 +637,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     }
     video_sender_ = video_added.value();
     apply_video_bitrate();
+    apply_video_framerate();
 
     running_ = true;
     stats_thread_ = std::thread([this] { stats_loop(); });
@@ -739,6 +757,11 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     {
       const std::lock_guard<std::mutex> lock(video_mutex_);
       capturer_ = std::move(capturer);
+      // Kept so that changing the size or the rate can put the capture back on
+      // the monitor it was on. Asking the capturer would not answer it: an
+      // empty id means "the primary one", and resolving it to a real id here
+      // would pin the share to whichever monitor was primary at the time.
+      shared_monitor_ = monitor_id;
     }
 
     sharing_.store(true);
@@ -778,6 +801,43 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     options_.video_max_bitrate_kbps = max_kbps;
     apply_video_bitrate();
     return std::monostate{};
+  }
+
+  Result<std::monostate> set_capture_options(const video::ScreenCaptureOptions& options) override {
+    if (options.max_size.empty() || options.max_fps < 1) {
+      return Result<std::monostate>::failure(
+          "invalid_value", "a capture size has to be positive and the frame rate at least one");
+    }
+
+    options_.capture = options;
+    apply_video_framerate();
+
+    if (!sharing_.load()) {
+      // Nothing to restart. What was chosen is in the options and the next
+      // share picks it up, which is what makes this settable before a call.
+      return std::monostate{};
+    }
+
+    std::string monitor;
+    {
+      const std::lock_guard<std::mutex> lock(video_mutex_);
+      monitor = shared_monitor_;
+    }
+
+    // Stops the old capture first, which start_screen_share does for us.
+    auto restarted = start_screen_share(monitor);
+    if (!restarted) {
+      // The share is off now and the room has not been told. Out through the
+      // same door a capture that dies on its own uses, so that whoever is
+      // holding the floor is corrected exactly once and in one place.
+      DV_LOG_WARN("Media: could not restart the share at {}x{} at {} fps: {}",
+                  options.max_size.width, options.max_size.height, options.max_fps,
+                  restarted.error().message);
+      if (callbacks_.on_screen_share_ended) {
+        callbacks_.on_screen_share_ended(restarted.error());
+      }
+    }
+    return restarted;
   }
 
   [[nodiscard]] VideoStats video_stats() const override {
@@ -1265,6 +1325,33 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     }
   }
 
+  /// Tells the encoder the rate the capture is producing.
+  ///
+  /// Left unset, an encoding is capped at libwebrtc's own
+  /// kDefaultVideoMaxFramerate, which is 60, so 60 FPS arrives with or without
+  /// this. What it buys is the other direction: at 30 the rate allocator stops
+  /// budgeting for frames that are never coming, and gives the bits to the
+  /// ones that are.
+  ///
+  /// Separate from apply_video_bitrate because it answers a separate question,
+  /// and because it is called from set_capture_options, where the bitrate has
+  /// not changed and re-sending it would be a second reason for the encoder to
+  /// refuse.
+  void apply_video_framerate() {
+    if (video_sender_ == nullptr) {
+      return;
+    }
+    webrtc::RtpParameters parameters = video_sender_->GetParameters();
+    if (parameters.encodings.empty()) {
+      return;
+    }
+    parameters.encodings[0].max_framerate = options_.capture.max_fps;
+    if (const webrtc::RTCError error = video_sender_->SetParameters(parameters); !error.ok()) {
+      DV_LOG_WARN("Media: the encoder refused {} fps: {}", options_.capture.max_fps,
+                  error.message());
+    }
+  }
+
   void levels_loop() {
     while (running_) {
       std::this_thread::sleep_for(kLevelInterval);
@@ -1315,6 +1402,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   mutable std::mutex video_mutex_;
   std::unique_ptr<video::ScreenCapturer> capturer_;
+  /// The monitor the running share was asked for, empty for the primary one.
+  std::string shared_monitor_;
   VideoStats video_stats_;
   /// The previous reading, so that a total from the report can become a rate.
   std::uint64_t video_bytes_sent_ = 0;

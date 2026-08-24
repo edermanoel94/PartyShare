@@ -72,7 +72,14 @@ class BlockPacer {
     std::uint64_t blocks_silent = 0;
   };
 
-  explicit BlockPacer(Options options = {}) : options_(options) {
+  // Two constructors rather than one with a default argument. GCC will not
+  // have `Options` defaulted in the declaration - "default member initializer
+  // required before the end of its enclosing class", because the defaults of a
+  // nested type are not available while the enclosing one is still being
+  // defined. MSVC takes it, which is how it got written that way.
+  BlockPacer() : BlockPacer(Options{}) {}
+
+  explicit BlockPacer(Options options) : options_(options) {
     // Room for the watermark plus a couple of blocks, so that a push that
     // arrives just under the limit still fits before the trim runs.
     ring_.assign((options_.high_watermark_frames + (kFramesPerBlock * 2)) * kChannels, 0);

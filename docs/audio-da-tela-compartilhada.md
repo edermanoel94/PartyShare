@@ -617,8 +617,15 @@ não muda como a máquina é dimensionada.
 - **Linux e macOS.** No Linux é módulo de loopback do PulseAudio/PipeWire, no
   macOS é `ScreenCaptureKit` com `SCStreamOutputType.audio` (ou um dispositivo
   agregado em versões antigas). São implementações inteiras, não ressalvas — a
-  interface `LoopbackCapturer` fica pronta para elas, o `_stub.cpp` responde por
-  elas até lá.
+  interface `LoopbackCapturer` fica pronta para elas, o `loopback_stub.cpp`
+  responde por elas até lá.
+
+  O Linux foi validado no WSL, Ubuntu 24.04 com GCC 13.3: **520 testes passam**,
+  o stub responde `capture_unavailable` e o teste de loopback se pula sozinho. O
+  GCC recusou uma coisa que o MSVC aceita — `Options options = {}` como
+  argumento padrão de um tipo aninhado, por "default member initializer required
+  before the end of its enclosing class". Dois construtores no lugar de um com
+  argumento padrão resolvem, e a razão está comentada no `BlockPacer`.
 - **Captura por janela.** Compartilhar só a janela do Chrome, em vez do monitor,
   é uma mudança do lado do vídeo e não depende deste trabalho.
 - **Volume separado por fonte no receptor.** Só existe na Opção B.

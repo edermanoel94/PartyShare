@@ -60,6 +60,11 @@ struct FakeMediaState {
   std::atomic<bool> muted{false};
   std::atomic<bool> closed{false};
   std::atomic<bool> sharing{false};
+  std::atomic<bool> screen_audio{false};
+  std::atomic<std::uint32_t> screen_audio_source{0};
+  /// Set to make start_screen_audio fail, the way a Windows too old to capture
+  /// per process does.
+  std::string screen_audio_failure;
   std::string shared_monitor;
   /// Set to make start_screen_share fail, the way a refused permission does.
   std::string share_failure;
@@ -184,6 +189,21 @@ class FakeMediaSession : public media::MediaSession {
   }
 
   [[nodiscard]] bool sharing_screen() const override { return state_->sharing.load(); }
+
+  dv::Result<std::monostate> start_screen_audio(dv::client::audio::LoopbackMode /*mode*/,
+                                                std::uint32_t source_id) override {
+    if (!state_->screen_audio_failure.empty()) {
+      return dv::Result<std::monostate>::failure("capture_unavailable",
+                                                 state_->screen_audio_failure);
+    }
+    state_->screen_audio = true;
+    state_->screen_audio_source = source_id;
+    return std::monostate{};
+  }
+
+  void stop_screen_audio() override { state_->screen_audio = false; }
+
+  [[nodiscard]] bool screen_audio_active() const override { return state_->screen_audio.load(); }
 
   dv::Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
     if (min_kbps <= 0 || max_kbps < min_kbps) {

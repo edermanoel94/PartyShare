@@ -23,8 +23,11 @@
 #include <vector>
 
 #include <api/audio/audio_device.h>
+#include <api/audio/audio_frame.h>
+#include <api/audio/audio_frame_processor.h>
 #include <api/audio/audio_processing.h>
 #include <api/audio/builtin_audio_processing_builder.h>
+#include <api/audio/channel_layout.h>
 #include <api/audio/create_audio_device_module.h>
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
 #include <api/audio_codecs/builtin_audio_encoder_factory.h>
@@ -61,6 +64,7 @@
 
 #include <dv/logging/logger.hpp>
 
+#include "audio/screen_audio_mixer.hpp"
 #include "media/media_session.hpp"
 #include "media/network_impairment.hpp"
 #include "network/transport_globals.hpp"
@@ -68,6 +72,7 @@
 #include "video/screen_capturer.hpp"
 #include "webrtc/hardware_encoder.hpp"
 #include "webrtc/impaired_socket_factory.hpp"
+#include "webrtc/screen_audio_frame_processor.hpp"
 #include "webrtc/video_encoder_factory.hpp"
 
 namespace dv::client::media {
@@ -104,6 +109,12 @@ class Engine {
 
   [[nodiscard]] webrtc::PeerConnectionFactoryInterface* factory() const { return factory_.get(); }
   [[nodiscard]] const std::string& failure() const { return failure_; }
+
+  /// One mixer for the whole process, for the same reason there is one
+  /// microphone source: it is attached to the factory, and the factory is
+  /// process wide. A client has one local user, so a second one would have
+  /// nothing to mix.
+  [[nodiscard]] audio::ScreenAudioMixer& screen_audio() { return screen_audio_; }
 
   /// One microphone source for the whole process, created on first use.
   ///
@@ -358,6 +369,12 @@ class Engine {
     dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
     dependencies.audio_processing_builder =
         std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
+    // Where the screen audio joins the microphone, after everything above has
+    // run. Installed for the life of the process whether or not anybody ever
+    // shares: with nothing to mix it copies the frame through, and adding it
+    // later would mean rebuilding the factory mid-call.
+    dependencies.audio_frame_processor =
+        std::make_unique<ScreenAudioFrameProcessor>(&screen_audio_);
     // Hardware when the machine has it, software when it does not. See
     // webrtc/video_encoder_factory.hpp.
     //
@@ -384,6 +401,9 @@ class Engine {
   std::unique_ptr<webrtc::Thread> signaling_thread_;
   std::mutex mutex_;
   webrtc::scoped_refptr<webrtc::AudioSourceInterface> microphone_;
+  /// Declared before the factory, because the factory is handed a pointer to
+  /// it in the constructor body and outlives nothing.
+  audio::ScreenAudioMixer screen_audio_;
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
   std::string failure_;
@@ -679,11 +699,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   void set_microphone_muted(bool muted) override {
     muted_ = muted;
-    if (local_track_ != nullptr) {
-      // Disabling the track keeps the transceiver in place and sends silence,
-      // so muting costs nothing and needs no renegotiation.
-      local_track_->set_enabled(!muted);
-    }
+    Engine::instance().screen_audio().set_microphone_muted(muted);
+    apply_track_enabled();
   }
 
   [[nodiscard]] bool microphone_muted() const override { return muted_.load(); }
@@ -790,6 +807,28 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   [[nodiscard]] bool sharing_screen() const override { return sharing_.load(); }
 
+  Result<std::monostate> start_screen_audio(audio::LoopbackMode mode,
+                                            std::uint32_t source_id) override {
+    audio::ScreenAudioMixer& mixer = Engine::instance().screen_audio();
+    if (auto started = mixer.start(mode, source_id); !started) {
+      return started;
+    }
+    // The track has to be carrying again even if the microphone is muted, or
+    // the share would be silent for everyone until the user unmuted.
+    apply_track_enabled();
+    DV_LOG_INFO("Media: the screen audio is now mixed into the microphone track");
+    return std::monostate{};
+  }
+
+  void stop_screen_audio() override {
+    Engine::instance().screen_audio().stop();
+    apply_track_enabled();
+  }
+
+  [[nodiscard]] bool screen_audio_active() const override {
+    return Engine::instance().screen_audio().active();
+  }
+
   Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
     if (min_kbps <= 0 || max_kbps < min_kbps) {
       return Result<std::monostate>::failure(
@@ -851,8 +890,21 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   }
 
   [[nodiscard]] AudioStats stats() const override {
-    const std::lock_guard<std::mutex> lock(stats_mutex_);
-    return stats_;
+    AudioStats copy;
+    {
+      const std::lock_guard<std::mutex> lock(stats_mutex_);
+      copy = stats_;
+    }
+    // Read here rather than folded into the collection loop: these come from
+    // the mixer, which is not part of the WebRTC statistics and does not need
+    // to wait for the next report to be true.
+    audio::ScreenAudioMixer& mixer = Engine::instance().screen_audio();
+    copy.screen_audio_active = mixer.active();
+    copy.microphone_level = mixer.microphone_level();
+    const audio::LoopbackStats capture = mixer.capture_stats();
+    copy.screen_audio_blocks = capture.blocks_delivered;
+    copy.screen_audio_silent_blocks = capture.blocks_silent;
+    return copy;
   }
 
   [[nodiscard]] MediaState state() const override { return state_.load(); }
@@ -862,6 +914,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // Before the connection goes: the pump thread touches the track source,
     // and the capture thread touches the queue the pump reads from.
     stop_screen_share();
+    // The mixer belongs to the process rather than to this session, so a call
+    // that ends without stopping the share first would leave a WASAPI capture
+    // running with nowhere to go.
+    stop_screen_audio();
     if (connection_ != nullptr) {
       connection_->Close();
       connection_ = nullptr;
@@ -1101,9 +1157,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
         collected.echo_cancellation_active = true;
         collected.echo_return_loss_db = *source->echo_return_loss;
       }
-      if (source->audio_level.has_value()) {
-        local_level_.store(*source->audio_level);
-      }
+      // The source's own audio_level is deliberately not read. It is measured
+      // after the mixer, so once a screen audio share is on it is the level of
+      // the voice and the film together. audio::ScreenAudioMixer publishes the
+      // microphone on its own, and that is what collect_levels uses.
     }
 
     // Round trip time is only known from the other end's receiver reports.
@@ -1214,6 +1271,17 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     return std::pow(10.0, -static_cast<double>(dbov) / 20.0);
   }
 
+  /// The track carries nothing while the microphone is muted, unless it is also
+  /// carrying a screen audio share - in which case muting is the mixer's job
+  /// and the track has to stay alive to deliver the share.
+  void apply_track_enabled() {
+    if (local_track_ == nullptr) {
+      return;
+    }
+    const bool enabled = !muted_.load() || Engine::instance().screen_audio().active();
+    local_track_->set_enabled(enabled);
+  }
+
   void collect_levels() {
     if (!callbacks_.on_levels) {
       return;
@@ -1222,10 +1290,15 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     std::vector<AudioLevel> levels;
     const auto now = std::chrono::steady_clock::now();
 
-    // The local microphone, as the last stats report saw it. An empty user id
-    // is what marks the local level apart from the remote ones.
+    // The local microphone on its own. Taken from the mixer, which sees it
+    // before the screen audio is added and before the mute gain: a level read
+    // from the encoder or from the outbound statistics would show the user as
+    // talking for the whole length of whatever they are sharing.
+    //
+    // An empty user id is what marks the local level apart from the remote
+    // ones.
     if (local_track_ != nullptr && !muted_.load()) {
-      const double level = local_level_.load();
+      const double level = Engine::instance().screen_audio().microphone_level();
       levels.push_back(AudioLevel{{}, level, level > kSpeakingThreshold});
     }
 
@@ -1423,8 +1496,6 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   std::unordered_map<std::string, std::chrono::steady_clock::time_point> speaking_until_;
 
   std::atomic<bool> muted_{false};
-  /// The microphone level from the last stats report, on a scale of 0 to 1.
-  std::atomic<double> local_level_{0.0};
   std::atomic<MediaState> state_{MediaState::New};
 
   mutable std::mutex stats_mutex_;

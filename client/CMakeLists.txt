@@ -17,7 +17,25 @@
 # fails with media_unavailable and everything above it still works.
 option(DV_BUILD_CLIENT_MEDIA "Build the client media layer on libwebrtc" OFF)
 
+# Capturing what an application is playing is a platform API and nothing else:
+# it needs no libwebrtc, so it lives in the core rather than behind
+# DV_BUILD_CLIENT_MEDIA. See docs/audio-da-tela-compartilhada.md.
+if(WIN32)
+  set(dv_loopback_sources
+    src/audio/loopback_capturer_windows.cpp
+    src/audio/audio_sources_windows.cpp
+  )
+else()
+  set(dv_loopback_sources src/audio/loopback_stub.cpp)
+endif()
+
 add_library(dv_client_core STATIC
+  ${dv_loopback_sources}
+  src/audio/audio_sources.hpp
+  src/audio/block_pacer.hpp
+  src/audio/loopback_capturer.hpp
+  src/audio/screen_audio_mixer.cpp
+  src/audio/screen_audio_mixer.hpp
   src/app/call_session.cpp
   src/app/call_session.hpp
   src/app/metrics_history.cpp
@@ -48,6 +66,12 @@ target_link_libraries(dv_client_core PUBLIC
   LibDataChannel::LibDataChannel
 )
 
+if(WIN32)
+  # ole32 for COM, mmdevapi for ActivateAudioInterfaceAsync and the device
+  # enumerator. Both are part of Windows; nothing is downloaded for this.
+  target_link_libraries(dv_client_core PRIVATE ole32 mmdevapi)
+endif()
+
 dv_set_target_warnings(dv_client_core)
 dv_enable_sanitizers(dv_client_core)
 
@@ -77,6 +101,7 @@ if(DV_BUILD_CLIENT_MEDIA)
     src/webrtc/video_encoder_factory.hpp
     src/webrtc/libwebrtc_media_session.cpp
     src/webrtc/libwebrtc_screen_capturer.cpp
+    src/webrtc/screen_audio_frame_processor.hpp
   )
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

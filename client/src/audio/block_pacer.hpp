@@ -79,7 +79,7 @@ class BlockPacer {
   // defined. MSVC takes it, which is how it got written that way.
   BlockPacer() : BlockPacer(Options{}) {}
 
-  explicit BlockPacer(Options options) : options_(options) {
+  explicit BlockPacer(const Options& options) : options_(options) {
     // Room for the watermark plus a couple of blocks, so that a push that
     // arrives just under the limit still fits before the trim runs.
     ring_.assign((options_.high_watermark_frames + (kFramesPerBlock * 2)) * kChannels, 0);

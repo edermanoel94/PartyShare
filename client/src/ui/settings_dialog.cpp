@@ -108,6 +108,16 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   max_bitrate_->setSingleStep(kBitrateStepKbps);
   max_bitrate_->setSuffix(QStringLiteral(" kbps"));
 
+  // Off, which is what makes valueChanged usable below. With tracking on, a
+  // spin box reports every keystroke, so typing 2000 into it announces 2, then
+  // 20, then 200 - three bitrates nobody asked for, each one applied to a live
+  // call and written down as a choice. Off, it reports when an arrow is
+  // pressed and when a typed number is committed, which is the same list of
+  // moments a person would call "I changed it".
+  for (QSpinBox* box : {min_bitrate_, max_bitrate_}) {
+    box->setKeyboardTracking(false);
+  }
+
   resolution_ = new QComboBox(video);
   frame_rate_ = new QComboBox(video);
 
@@ -177,8 +187,14 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // does not look like the user changing something.
   connect(input_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_input_changed);
   connect(output_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_output_changed);
-  connect(min_bitrate_, &QSpinBox::editingFinished, this, &SettingsDialog::on_bitrate_changed);
-  connect(max_bitrate_, &QSpinBox::editingFinished, this, &SettingsDialog::on_bitrate_changed);
+  // valueChanged and not editingFinished, which only fires when the box gives
+  // up the focus. Pressing the arrow moved the number on screen and nothing
+  // else: the call kept the old rate, and the line at the bottom went on
+  // saying everything was saved, over a box showing a figure that was neither
+  // in use nor written down. Whoever pressed it once and looked at the result
+  // had every reason to believe it had taken.
+  connect(min_bitrate_, &QSpinBox::valueChanged, this, &SettingsDialog::on_bitrate_changed);
+  connect(max_bitrate_, &QSpinBox::valueChanged, this, &SettingsDialog::on_bitrate_changed);
   connect(resolution_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
   connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
 }
@@ -412,7 +428,12 @@ void SettingsDialog::on_output_changed(int index) {
 void SettingsDialog::on_bitrate_changed() {
   // The maximum cannot sit below the minimum, and rather than refusing the
   // edit the other end is moved to keep it sensible.
+  //
+  // Quietly, now that this runs off valueChanged: moving the other box would
+  // otherwise come straight back here as a change of its own, and the range
+  // would be applied and staged twice for one thing the person did.
   if (max_bitrate_->value() < min_bitrate_->value()) {
+    const QSignalBlocker quiet(max_bitrate_);
     max_bitrate_->setValue(min_bitrate_->value());
   }
   const int minimum = min_bitrate_->value();

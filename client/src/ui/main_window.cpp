@@ -6,13 +6,16 @@
 #include <dv/logging/logger.hpp>
 #include <dv/models/chat.hpp>
 
+#include <QAbstractAnimation>
 #include <QAbstractItemView>
 #include <QClipboard>
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QEasingCurve>
 #include <QFont>
 #include <QFormLayout>
+#include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
@@ -26,6 +29,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QProgressBar>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -35,11 +39,14 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "app/smoothing.hpp"
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
+#include "ui/metrics_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
 #include "ui/theme.hpp"
@@ -145,18 +152,20 @@ constexpr int kEmojiColumns = 8;
 /// scale for an eye: ordinary speech sits around a twentieth of full scale and
 /// would barely lift a linear bar off the floor. Meters are read in decibels,
 /// so the bottom of this one is -60 dBFS and the top is full scale.
-[[nodiscard]] int bar_percentage(double level) {
-  constexpr double kFloorDb = -60.0;
-  if (level <= 0.0) {
-    return 0;
-  }
-  const double decibels = 20.0 * std::log10(level);
-  if (decibels <= kFloorDb) {
-    return 0;
-  }
-  const double filled = (decibels - kFloorDb) / -kFloorDb;
-  return static_cast<int>(std::clamp(filled, 0.0, 1.0) * 100.0);
-}
+/// How many steps the microphone meter has.
+///
+/// A thousand and not a hundred. The bar is drawn sixty times a second now, and
+/// on a hundred steps a bar eight pixels tall crossing its whole width takes a
+/// hundred visible stops - which is the staircase the animation exists to get
+/// rid of, at a tenth of the size.
+constexpr int kMeterSteps = 1000;
+
+/// How long the incoming page takes to fade in.
+constexpr int kPageFadeMs = 140;
+
+/// How often the microphone meter is redrawn while it is moving. Sixty a
+/// second, and stopped the moment it has nothing left to do.
+constexpr int kLevelFrameMs = 16;
 
 /// What to put in front of the user for an error the core reported.
 ///
@@ -218,6 +227,14 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   statusBar()->addWidget(status_);
   statusBar()->addWidget(quality_);
   statusBar()->addPermanentWidget(metrics_);
+
+  // Runs only while the meter has somewhere to go. A timer beating sixty times
+  // a second for the whole time a window is open, to redraw a bar that is not
+  // moving, is a program that never lets a laptop idle.
+  level_timer_ = new QTimer(this);
+  level_timer_->setInterval(kLevelFrameMs);
+  connect(level_timer_, &QTimer::timeout, this, &MainWindow::animate_level);
+  level_clock_.start();
 
   wire_session();
   refresh_controls();
@@ -375,7 +392,7 @@ void MainWindow::build_room_page() {
   participants_->setContextMenuPolicy(Qt::CustomContextMenu);
 
   microphone_level_ = new QProgressBar(people);
-  microphone_level_->setRange(0, 100);
+  microphone_level_->setRange(0, kMeterSteps);
   microphone_level_->setTextVisible(false);
   microphone_level_->setFixedHeight(8);
 
@@ -478,8 +495,13 @@ void MainWindow::build_room_page() {
   share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
   share_button_->setCheckable(true);
   settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
+  metrics_button_ = new QPushButton(QStringLiteral("Metrics"), page);
+  metrics_button_->setToolTip(
+      QStringLiteral("What the call is carrying, and the three measurements behind the network "
+                     "indicator in the status bar."));
   leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
-  for (QPushButton* button : {mute_button_, share_button_, settings_button_, leave_button_}) {
+  for (QPushButton* button :
+       {mute_button_, share_button_, settings_button_, metrics_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
   // What each toggle looks like when it is on. Sharing is the good state and
@@ -490,6 +512,7 @@ void MainWindow::build_room_page() {
   controls->addWidget(mute_button_);
   controls->addWidget(share_button_);
   controls->addWidget(settings_button_);
+  controls->addWidget(metrics_button_);
   controls->addStretch();
   controls->addWidget(leave_button_);
 
@@ -507,6 +530,7 @@ void MainWindow::build_room_page() {
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
+  connect(metrics_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
@@ -791,6 +815,10 @@ void MainWindow::on_leave_room() {
   chat_view_->clear();
   chat_input_->clear();
   clear_metrics();
+  // Nothing is being captured any more, so nothing will arrive to bring the
+  // meter down. Left as it was, it would hold whatever the last syllable of
+  // the call measured, on a page nobody is speaking into.
+  quiet_level();
   refresh_controls();
   show_page();
 }
@@ -798,6 +826,11 @@ void MainWindow::on_leave_room() {
 void MainWindow::clear_metrics() {
   metrics_->clear();
   quality_->clear();
+  // And the verdict this window believes is on screen. apply_metrics only
+  // restyles the indicator when the verdict moves, so without this the next
+  // call would find the label already showing what it is about to report, skip
+  // the write, and leave the two labels cleared for the rest of the call.
+  shown_quality_ = -1;
 }
 
 void MainWindow::on_send_chat() {
@@ -906,6 +939,18 @@ void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+}
+
+void MainWindow::on_open_metrics() {
+  // Raised rather than opened a second time. Pressing the button while the
+  // charts are already up should bring them forward, not start a second window
+  // charting the same call from a minute later than the first.
+  if (metrics_dialog_.isNull()) {
+    metrics_dialog_ = new MetricsDialog(session_, this);
+  }
+  metrics_dialog_->show();
+  metrics_dialog_->raise();
+  metrics_dialog_->activateWindow();
 }
 
 void MainWindow::on_copy_room_id() {
@@ -1047,6 +1092,15 @@ void MainWindow::apply_participants(const QStringList& names) {
 void MainWindow::apply_metrics(const QString& summary, int quality) {
   metrics_->setText(summary);
 
+  // Only when the verdict has actually moved. Setting a stylesheet makes Qt
+  // re-resolve the widget's whole style, and this arrives on a timer whether
+  // anything changed or not, so most of the time it was that work to arrive at
+  // the colour the label already had.
+  if (quality == shown_quality_) {
+    return;
+  }
+  shown_quality_ = quality;
+
   const auto measured = static_cast<client::app::NetworkQuality>(quality);
   // From the theme, so the three of them follow the colour scheme along with
   // everything else rather than staying at their light-window values.
@@ -1069,7 +1123,14 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
 }
 
 void MainWindow::apply_local_level(double level, bool speaking) {
-  microphone_level_->setValue(bar_percentage(level));
+  // Aimed at, not written to. The bar travels there over the next few frames,
+  // fast on the way up and slowly on the way down, which is what makes a
+  // syllable readable instead of a flicker. See app::LevelMeter.
+  level_.observe(client::app::meter_fraction(level));
+  if (!level_.at_rest() && !level_timer_->isActive()) {
+    level_drawn_at_ms_ = level_clock_.elapsed();
+    level_timer_->start();
+  }
 
   // The meter turns the accent colour while somebody is actually speaking into
   // it, which the stylesheet does off this property. Only on a change: this
@@ -1081,6 +1142,27 @@ void MainWindow::apply_local_level(double level, bool speaking) {
   microphone_level_->setProperty("speaking", speaking);
   microphone_level_->style()->unpolish(microphone_level_);
   microphone_level_->style()->polish(microphone_level_);
+}
+
+void MainWindow::animate_level() {
+  const qint64 now = level_clock_.elapsed();
+  const auto elapsed = static_cast<double>(now - level_drawn_at_ms_);
+  level_drawn_at_ms_ = now;
+
+  const double filled = level_.advance(elapsed);
+  microphone_level_->setValue(static_cast<int>(std::lround(filled * kMeterSteps)));
+
+  if (level_.at_rest()) {
+    // Arrived. The next measurement is what starts this again, and between two
+    // of them there is nothing here to draw that is not already drawn.
+    level_timer_->stop();
+  }
+}
+
+void MainWindow::quiet_level() {
+  level_timer_->stop();
+  level_ = client::app::LevelMeter{};
+  microphone_level_->setValue(0);
 }
 
 void MainWindow::apply_error(const QString& code, const QString& message) {
@@ -1154,7 +1236,7 @@ void MainWindow::build_admin_page() {
 
 void MainWindow::on_open_administration() {
   previous_page_ = pages_->currentIndex();
-  pages_->setCurrentIndex(kAdminPage);
+  go_to_page(kAdminPage);
   // Asked for on the way in, never cached from last time: the accounts and the
   // rooms belong to the server and other people change them.
   admin_panel_->refresh();
@@ -1163,7 +1245,7 @@ void MainWindow::on_open_administration() {
 void MainWindow::on_close_administration() {
   // Back where they came from, which is the home page unless they opened the
   // panel during a call.
-  pages_->setCurrentIndex(previous_page_ == kAdminPage ? kHomePage : previous_page_);
+  go_to_page(previous_page_ == kAdminPage ? kHomePage : previous_page_);
 }
 
 void MainWindow::on_participant_menu(const QPoint& where) {
@@ -1363,14 +1445,52 @@ void MainWindow::show_page() {
     case client::app::CallSession::State::Failed:
     case client::app::CallSession::State::Connecting:
     case client::app::CallSession::State::Authenticated:
-      pages_->setCurrentIndex(session_.local_user().id.empty() ? kLoginPage : kHomePage);
+      go_to_page(session_.local_user().id.empty() ? kLoginPage : kHomePage);
       break;
     case client::app::CallSession::State::InCall:
-      pages_->setCurrentIndex(kRoomPage);
+      go_to_page(kRoomPage);
       room_title_->setText(
           QStringLiteral("Room: %1").arg(QString::fromStdString(session_.room_id())));
       break;
   }
+}
+
+void MainWindow::go_to_page(int index) {
+  // Nothing to cross to. show_page() is called from every state change, and
+  // most of them land on the page that is already up; fading that in would be
+  // the interface blinking at news that changed nothing.
+  if (pages_->currentIndex() == index) {
+    return;
+  }
+  pages_->setCurrentIndex(index);
+
+  QWidget* page = pages_->widget(index);
+  if (page == nullptr) {
+    return;
+  }
+
+  auto* fade = new QGraphicsOpacityEffect(page);
+  fade->setOpacity(0.0);
+  page->setGraphicsEffect(fade);
+
+  auto* animation = new QPropertyAnimation(fade, "opacity", page);
+  animation->setDuration(kPageFadeMs);
+  animation->setStartValue(0.0);
+  animation->setEndValue(1.0);
+  animation->setEasingCurve(QEasingCurve::OutCubic);
+
+  // Taken off again when it is over, and never left in place. A graphics
+  // effect makes Qt render the whole page into an offscreen pixmap on every
+  // repaint, and the room page repaints thirty times a second for as long as
+  // somebody is sharing a screen.
+  //
+  // Queued, so the effect is deleted on the next turn of the event loop rather
+  // than from inside the signal of the animation that is driving it.
+  connect(
+      animation, &QPropertyAnimation::finished, this, [page] { page->setGraphicsEffect(nullptr); },
+      Qt::QueuedConnection);
+
+  animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void MainWindow::refresh_controls() {

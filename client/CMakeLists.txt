@@ -20,7 +20,10 @@ option(DV_BUILD_CLIENT_MEDIA "Build the client media layer on libwebrtc" OFF)
 add_library(dv_client_core STATIC
   src/app/call_session.cpp
   src/app/call_session.hpp
+  src/app/metrics_history.cpp
+  src/app/metrics_history.hpp
   src/app/network_quality.hpp
+  src/app/smoothing.hpp
   src/media/media_session.cpp
   src/media/media_session.hpp
   src/media/network_impairment.cpp
@@ -187,6 +190,10 @@ qt_add_executable(dv_client
   src/ui/admin_panel.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
+  src/ui/metrics_chart.cpp
+  src/ui/metrics_chart.hpp
+  src/ui/metrics_dialog.cpp
+  src/ui/metrics_dialog.hpp
   src/ui/screen_view.cpp
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp

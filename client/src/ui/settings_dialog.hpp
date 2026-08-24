@@ -11,6 +11,7 @@
 
 class QComboBox;
 class QLabel;
+class QPushButton;
 class QSpinBox;
 
 namespace dv::ui {
@@ -25,10 +26,18 @@ namespace dv::ui {
 /// only takes effect after a dialog is dismissed cannot be tested by speaking
 /// into it.
 ///
-/// The two audio devices, the bitrate range and the screen quality are also
-/// written to this user's config.ini as they are chosen, so the choice survives
-/// the program closing. Chosen once and then forgotten is only true of a
-/// setting that is still there next time.
+/// Keeping them is a separate act, and that is what the Save button is for.
+/// The two used to be one - every change went straight into this user's
+/// config.ini as it was made - and that is a worse arrangement than it looks.
+/// Trying four microphones to find the right one wrote four times, each write
+/// a read, a parse, a validate and a replace of the whole file, and the three
+/// microphones nobody chose were saved just as firmly as the one they did. It
+/// also left no way to try something and put it back, because there was no
+/// point at which it had not already been kept.
+///
+/// So a change is applied and remembered as pending, and Save writes every
+/// pending one in a single pass. Closing with changes outstanding asks, rather
+/// than deciding on somebody's behalf in either direction.
 ///
 /// The monitor is deliberately not among them: it is which screen to share
 /// next, which is a decision per share rather than a setting.
@@ -38,11 +47,18 @@ class SettingsDialog : public QDialog {
  public:
   explicit SettingsDialog(client::app::CallSession& session, QWidget* parent = nullptr);
 
+ protected:
+  /// The one door out of a QDialog: the Close button, the window's own close
+  /// box and the escape key all arrive here. Overridden so that none of the
+  /// three can quietly drop settings that are in use but not written down.
+  void done(int result) override;
+
  private slots:
   void on_input_changed(int index);
   void on_output_changed(int index);
   void on_bitrate_changed();
   void on_quality_changed();
+  void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
   // needs as its own specifier, and these members are not slots.
@@ -68,18 +84,25 @@ class SettingsDialog : public QDialog {
   /// to fit a link that cannot carry more.
   void show_quality_hint();
 
-  /// Writes settings to this user's config.ini and says on screen how it went.
+  /// Adds settings to what Save will write, replacing any earlier value for
+  /// the same key.
   ///
-  /// Reported rather than swallowed. A dialog that accepts a microphone, cannot
-  /// save it and says nothing produces "it keeps forgetting my settings", which
-  /// is a bug report with nothing in it to act on.
+  /// Replacing rather than appending, because the file is written from this
+  /// list in one pass: three visits to the microphone box would otherwise put
+  /// three input_device lines into it, and which one survives would come down
+  /// to the order the writer happens to walk them in.
   ///
-  /// Takes a list because some settings only make sense together: the two ends
-  /// of the bitrate range have to reach the file in the same pass, or something
-  /// reading it in between finds a maximum below its minimum.
-  void remember(const std::vector<config::IniSetting>& settings);
+  /// Takes a list because some settings only make sense together. The two ends
+  /// of the bitrate range are the case: staged apart, a Save between the two
+  /// would leave a file whose maximum sits below its minimum.
+  void stage(const std::vector<config::IniSetting>& settings);
 
-  /// Says which file the settings are kept in, in its resting wording.
+  /// Says which file the settings are kept in, whether anything is waiting to
+  /// go into it, and what went wrong when it could not be written.
+  ///
+  /// Reported rather than swallowed. A dialog that accepts a microphone,
+  /// cannot save it and says nothing produces "it keeps forgetting my
+  /// settings", which is a bug report with nothing in it to act on.
   void show_storage();
 
   /// Makes the storage line pick up a change to its `error` property.
@@ -99,6 +122,12 @@ class SettingsDialog : public QDialog {
   /// Which file the settings are kept in, and what went wrong when one could
   /// not be written to it.
   QLabel* storage_ = nullptr;
+  /// Enabled only when there is something to write, so that the button says
+  /// whether anything is outstanding without needing a word for it.
+  QPushButton* save_ = nullptr;
+
+  /// In use, and not yet in the file. Empty is the resting state.
+  std::vector<config::IniSetting> pending_;
 
  public:
   /// The monitor the user picked, for whoever starts the share.

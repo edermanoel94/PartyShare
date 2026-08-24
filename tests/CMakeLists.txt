@@ -81,6 +81,8 @@ if(TARGET dv::client_core)
     unit/test_reconnect_delay.cpp
     unit/test_network_quality.cpp
     unit/test_network_impairment.cpp
+    unit/test_metrics_history.cpp
+    unit/test_smoothing.cpp
   )
   list(APPEND dv_integration_sources
     integration/test_signaling_client.cpp

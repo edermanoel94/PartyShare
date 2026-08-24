@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -102,8 +103,25 @@ constexpr double kThresholdHeadroom = 1.2;
   if (value <= 0.0) {
     return QStringLiteral("0");
   }
-  const int decimals = top >= 10.0 ? 0 : (top >= 1.0 ? 1 : 2);
+  int decimals = 2;
+  if (top >= 10.0) {
+    decimals = 0;
+  } else if (top >= 1.0) {
+    decimals = 1;
+  }
   return QString::number(value, 'f', decimals);
+}
+
+/// The colour a reading has earned against its two thresholds.
+[[nodiscard]] QColor verdict_for(double reading, double fair_above, double poor_above,
+                                 const theme::Colors& colours) {
+  if (reading > poor_above) {
+    return colours.danger;
+  }
+  if (reading > fair_above) {
+    return colours.warn;
+  }
+  return colours.success;
 }
 
 /// Under this many pixels apart, two readings are joined with a straight line.
@@ -230,11 +248,8 @@ void MetricsChart::advance(double now_ms, double elapsed_ms) {
   }
 
   if (has_thresholds_ && !lines_.empty()) {
-    const theme::Colors& colours = theme::colors();
-    const double reading = lines_.front().reading;
-    const QColor verdict = reading > poor_above_   ? colours.danger
-                           : reading > fair_above_ ? colours.warn
-                                                   : colours.success;
+    const QColor verdict =
+        verdict_for(lines_.front().reading, fair_above_, poor_above_, theme::colors());
     settling = settling || (coloured_ && drawn_colour_ != verdict);
     // The first verdict is taken rather than eased into. Fading up from
     // whatever colour the widget was built with would make the chart's opening
@@ -313,15 +328,18 @@ void MetricsChart::paintEvent(QPaintEvent* /*event*/) {
     painter.drawText(header, Qt::AlignRight | Qt::AlignVCenter,
                      QStringLiteral("%1 %2").arg(format_value(lines_.front().reading), unit_));
   } else if (lines_.size() > 1) {
+    // Right to left, because that is the direction the space runs out in: each
+    // reading is placed against the edge left by the one after it, and the
+    // last line named is the one nearest the corner.
     double right = whole.width() - kPadding;
-    for (auto line = lines_.rbegin(); line != lines_.rend(); ++line) {
-      if (!line->has_reading) {
+    for (const Line& line : std::views::reverse(lines_)) {
+      if (!line.has_reading) {
         continue;
       }
       const QString text =
-          QStringLiteral("%1 %2 %3").arg(line->name, format_value(line->reading), unit_);
+          QStringLiteral("%1 %2 %3").arg(line.name, format_value(line.reading), unit_);
       const double width = measured.horizontalAdvance(text);
-      painter.setPen(line->colour);
+      painter.setPen(line.colour);
       painter.drawText(QRectF(right - width, 0.0, width, kHeaderHeight),
                        Qt::AlignRight | Qt::AlignVCenter, text);
       right -= width + 14.0;

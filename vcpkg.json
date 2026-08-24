@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "partyshare",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Screen sharing and voice rooms for small groups",
   "builtin-baseline": "d1f2fece60ad5c8271ace08e9836bcc743ebd05b",
   "dependencies": [

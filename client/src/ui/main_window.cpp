@@ -790,8 +790,14 @@ void MainWindow::on_leave_room() {
   // screen would put one room's messages above the next room's history.
   chat_view_->clear();
   chat_input_->clear();
+  clear_metrics();
   refresh_controls();
   show_page();
+}
+
+void MainWindow::clear_metrics() {
+  metrics_->clear();
+  quality_->clear();
 }
 
 void MainWindow::on_send_chat() {
@@ -1001,6 +1007,15 @@ void MainWindow::apply_state(int state, const QString& detail) {
       user.display_name.empty()
           ? QStringLiteral("PartyShare")
           : QStringLiteral("Hello, %1").arg(QString::fromStdString(user.display_name)));
+
+  // Again here, and not only where the button was pressed. The metrics arrive
+  // through a queued call, so one measured a moment before the call ended can
+  // be delivered after on_leave_room has already emptied the labels, and it
+  // would write the last numbers of a finished call back onto the lobby. This
+  // runs once the state itself says there is no call, which is after that.
+  if (state_ != client::app::CallSession::State::InCall) {
+    clear_metrics();
+  }
 
   refresh_controls();
   show_page();

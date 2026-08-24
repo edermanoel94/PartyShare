@@ -16,6 +16,18 @@ struct VideoConfig {
   int width = 1280;
   int height = 720;
   int fps = 30;
+  /// Whether the two below are worked out from the width, height and rate
+  /// above instead of being read from here.
+  ///
+  /// Off by default, and deliberately: a file that already names a bitrate
+  /// names it for a reason, often a link that cannot carry more, and a default
+  /// of on would quietly overrule every one of them on the next upgrade. It is
+  /// the settings dialog that turns this on, per user, once.
+  ///
+  /// When it is on the two values below are still read, still written and still
+  /// validated. They hold what automatic mode last worked out, so that turning
+  /// it off leaves the range where it was rather than back at the defaults.
+  bool auto_bitrate = false;
   /// Where the encoder starts and what it aims for on a healthy link, section
   /// 6 of SPEC.md.
   int min_bitrate_kbps = 1500;

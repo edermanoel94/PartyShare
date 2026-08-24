@@ -5,6 +5,8 @@
 
 #include <dv/logging/logger.hpp>
 
+#include "video/screen_quality.hpp"
+
 namespace dv::client::app {
 namespace {
 
@@ -334,6 +336,15 @@ Result<std::monostate> CallSession::set_video_bitrate(int min_kbps, int max_kbps
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
+    if (options_.auto_bitrate) {
+      // Refused rather than accepted and then overwritten. Automatic mode
+      // rewrites this range on the next change of resolution or rate, so
+      // taking a number here would be honest for as long as nothing else
+      // moved, and a caller cannot tell when that stops being true.
+      return Result<std::monostate>::failure(
+          "automatic_bitrate",
+          "the bitrate range follows the resolution and frame rate while automatic mode is on");
+    }
     options_.media.video_min_bitrate_kbps = min_kbps;
     options_.media.video_max_bitrate_kbps = max_kbps;
     session = audio_;
@@ -354,6 +365,36 @@ std::pair<int, int> CallSession::video_bitrate() const {
 int CallSession::video_floor_bitrate_kbps() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return options_.media.video_floor_bitrate_kbps;
+}
+
+Result<std::monostate> CallSession::set_auto_bitrate(bool automatic) {
+  std::shared_ptr<media::MediaSession> session;
+  video::BitrateRange range;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.auto_bitrate = automatic;
+    if (!automatic) {
+      // Nothing else to do. The range stays where automatic mode left it,
+      // which is the point: turning the mode off hands over a sensible pair to
+      // edit rather than whatever preceded it.
+      return std::monostate{};
+    }
+    range = video::recommended_bitrate_kbps(options_.media.capture.max_size,
+                                            options_.media.capture.max_fps,
+                                            options_.media.video_floor_bitrate_kbps);
+    options_.media.video_min_bitrate_kbps = range.min_kbps;
+    options_.media.video_max_bitrate_kbps = range.max_kbps;
+    session = audio_;
+  }
+  if (session) {
+    return session->set_video_bitrate(range.min_kbps, range.max_kbps);
+  }
+  return std::monostate{};
+}
+
+bool CallSession::auto_bitrate() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.auto_bitrate;
 }
 
 Result<std::monostate> CallSession::set_video_quality(video::Size size, int fps) {
@@ -383,8 +424,28 @@ Result<std::monostate> CallSession::set_video_quality(video::Size size, int fps)
     }
   }
 
-  const std::lock_guard<std::mutex> lock(mutex_);
-  options_.media.capture = wanted;
+  video::BitrateRange range;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.media.capture = wanted;
+    if (!options_.auto_bitrate) {
+      return std::monostate{};
+    }
+    range = video::recommended_bitrate_kbps(size, fps, options_.media.video_floor_bitrate_kbps);
+    options_.media.video_min_bitrate_kbps = range.min_kbps;
+    options_.media.video_max_bitrate_kbps = range.max_kbps;
+  }
+
+  if (session) {
+    // Logged and not returned. The quality above is already applied and
+    // already recorded, so reporting a failure here would send the caller back
+    // to a resolution that is being captured, over a bitrate that is only the
+    // ceiling for it.
+    if (const auto applied = session->set_video_bitrate(range.min_kbps, range.max_kbps); !applied) {
+      DV_LOG_WARN("Automatic bitrate of {} to {} kbps was refused: {}", range.min_kbps,
+                  range.max_kbps, applied.error().message);
+    }
+  }
   return std::monostate{};
 }
 

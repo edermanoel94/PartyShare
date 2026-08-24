@@ -1,0 +1,12 @@
+# O repositorio e clonado no Windows com core.autocrlf=true, que escreve cada
+# arquivo com CRLF. O Go nao quer isso: o gofmt reformata um arquivo CRLF para
+# LF, entao `gofmt -l .` nomeia os dezessete arquivos do modulo e enterra os
+# que a mudanca de fato tocou. A mesma linha no Linux fica calada, porque os
+# blobs sempre foram LF - o CRLF existe so na arvore de trabalho do Windows, e
+# so ali o modulo parece permanentemente mal formatado.
+#
+# eol=lf fixa o checkout, nao o conteudo: nada aqui muda o que esta guardado,
+# apenas o que chega ao disco. text=auto em vez de uma lista de sufixos para
+# que um golden file ou qualquer outro binario que este modulo venha a ter
+# continue sendo detectado e deixado em paz.
+* text=auto eol=lf

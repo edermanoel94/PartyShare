@@ -46,6 +46,7 @@
 #include "app/smoothing.hpp"
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
+#include "ui/metrics_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
 #include "ui/theme.hpp"
@@ -494,8 +495,13 @@ void MainWindow::build_room_page() {
   share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
   share_button_->setCheckable(true);
   settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
+  metrics_button_ = new QPushButton(QStringLiteral("Metrics"), page);
+  metrics_button_->setToolTip(
+      QStringLiteral("What the call is carrying, and the three measurements behind the network "
+                     "indicator in the status bar."));
   leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
-  for (QPushButton* button : {mute_button_, share_button_, settings_button_, leave_button_}) {
+  for (QPushButton* button :
+       {mute_button_, share_button_, settings_button_, metrics_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
   // What each toggle looks like when it is on. Sharing is the good state and
@@ -506,6 +512,7 @@ void MainWindow::build_room_page() {
   controls->addWidget(mute_button_);
   controls->addWidget(share_button_);
   controls->addWidget(settings_button_);
+  controls->addWidget(metrics_button_);
   controls->addStretch();
   controls->addWidget(leave_button_);
 
@@ -523,6 +530,7 @@ void MainWindow::build_room_page() {
   connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
+  connect(metrics_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
@@ -931,6 +939,18 @@ void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+}
+
+void MainWindow::on_open_metrics() {
+  // Raised rather than opened a second time. Pressing the button while the
+  // charts are already up should bring them forward, not start a second window
+  // charting the same call from a minute later than the first.
+  if (metrics_dialog_.isNull()) {
+    metrics_dialog_ = new MetricsDialog(session_, this);
+  }
+  metrics_dialog_->show();
+  metrics_dialog_->raise();
+  metrics_dialog_->activateWindow();
 }
 
 void MainWindow::on_copy_room_id() {

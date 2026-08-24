@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QMainWindow>
 #include <QPoint>
+#include <QPointer>
 #include <QString>
 
 #include "app/call_session.hpp"
@@ -24,6 +25,7 @@ class QTimer;
 namespace dv::ui {
 
 class AdminPanel;
+class MetricsDialog;
 class ScreenView;
 
 /// The interface of section 19 of SPEC.md: three screens and a settings
@@ -59,6 +61,7 @@ class MainWindow : public QMainWindow {
   void on_toggle_mute();
   void on_toggle_share();
   void on_open_settings();
+  void on_open_metrics();
   void on_open_administration();
   void on_close_administration();
   void on_copy_room_id();
@@ -170,8 +173,15 @@ class MainWindow : public QMainWindow {
   QPushButton* mute_button_ = nullptr;
   QPushButton* share_button_ = nullptr;
   QPushButton* settings_button_ = nullptr;
+  QPushButton* metrics_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
+
+  /// The charts, while they are open. A QPointer and not a raw one because the
+  /// window deletes itself when it is closed - by its own Close button, by the
+  /// title bar, or by noticing that the call it belongs to has ended - and a
+  /// raw pointer would be left aimed at the space where it was.
+  QPointer<MetricsDialog> metrics_dialog_ = nullptr;
 
   /// What the microphone meter is drawing, and the clock it moves against.
   ///

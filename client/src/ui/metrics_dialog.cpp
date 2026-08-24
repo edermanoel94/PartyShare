@@ -68,7 +68,11 @@ constexpr int kFrameMs = 33;
 }  // namespace
 
 MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
-    : QDialog(parent), session_(session), history_(kWindowMs) {
+    : QDialog(parent),
+      session_(session),
+      history_(kWindowMs),
+      poller_(new QTimer(this)),
+      frames_(new QTimer(this)) {
   setWindowTitle(QStringLiteral("Call metrics"));
   // Not modal, and deleted when it is closed. Not modal because the mute and
   // share buttons have to stay reachable while this is open - a window about
@@ -135,11 +139,9 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   layout->addWidget(loss_, 1);
   layout->addWidget(buttons);
 
-  poller_ = new QTimer(this);
   poller_->setInterval(kPollMs);
   connect(poller_, &QTimer::timeout, this, &MetricsDialog::poll);
 
-  frames_ = new QTimer(this);
   frames_->setInterval(kFrameMs);
   connect(frames_, &QTimer::timeout, this, &MetricsDialog::animate);
 

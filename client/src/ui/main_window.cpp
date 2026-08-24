@@ -204,7 +204,10 @@ constexpr int kLevelFrameMs = 16;
 }  // namespace
 
 MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
-    : QMainWindow(parent), session_(session), pages_(new QStackedWidget(this)) {
+    : QMainWindow(parent),
+      session_(session),
+      pages_(new QStackedWidget(this)),
+      level_timer_(new QTimer(this)) {
   setWindowTitle(QStringLiteral("PartyShare"));
   setMinimumSize(720, 560);
   resize(960, 760);
@@ -231,7 +234,6 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   // Runs only while the meter has somewhere to go. A timer beating sixty times
   // a second for the whole time a window is open, to redraw a bar that is not
   // moving, is a program that never lets a laptop idle.
-  level_timer_ = new QTimer(this);
   level_timer_->setInterval(kLevelFrameMs);
   connect(level_timer_, &QTimer::timeout, this, &MainWindow::animate_level);
   level_clock_.start();

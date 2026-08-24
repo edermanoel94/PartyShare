@@ -111,6 +111,14 @@ class MainWindow : public QMainWindow {
   /// the focus back.
   void insert_emoji(const QString& emoji);
   void update_volume_label(const QString& participant, int volume);
+  /// Empties the two status bar labels a call fills.
+  ///
+  /// Their numbers belong to one call, and nothing outside a call writes them
+  /// again. Left where they are, they do not go stale by a second but by
+  /// however long the window stays open, and the green "network good" is the
+  /// half that misleads: it reads as a live measurement of a connection that
+  /// is no longer carrying anything.
+  void clear_metrics();
   void show_page();
 
   client::app::CallSession& session_;

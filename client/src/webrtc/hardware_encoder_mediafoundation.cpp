@@ -81,6 +81,15 @@ constexpr const char* kMediaFoundationLibrary = "mfplat.dll";
 /// the oldest: on a screen, the newest frame is the true one.
 constexpr std::size_t kMaxQueuedFrames = 3;
 
+/// The lowest quantiser the encoder may choose, which is what stops it
+/// spending the whole allowance on a picture nobody is changing.
+///
+/// The same value the NVENC backend uses. It is the point libwebrtc's own
+/// quality scaler treats as the good end of the H.264 range, so encoding past
+/// it produces a stream the rest of the stack already considers over
+/// provisioned. Valid range for the property is 0 to 51.
+constexpr ULONG kMinQp = 24;
+
 /// The mfplat.dll entry points this needs.
 ///
 /// STDAPICALLTYPE is __stdcall, which x64 ignores, but it is what the headers
@@ -366,6 +375,10 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
       bitrate_bps_ = 1500000;
     }
 
+    // The ceiling, which is a different number from the allowance above and
+    // has to be known before the output type is set. See apply_bitrate.
+    peak_bps_ = std::max<UINT32>(bitrate_bps_, codec_settings->maxBitrate * 1000);
+
     transform_ = platform.activate();
     if (transform_ == nullptr) {
       DV_LOG_WARN("Media Foundation: the transform would not activate, falling back to software");
@@ -382,8 +395,13 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
       return WEBRTC_VIDEO_CODEC_FALLBACK_SOFTWARE;
     }
 
-    DV_LOG_INFO("Media Foundation: encoding {}x{} at up to {} fps, {} kbps", width_, height_,
-                framerate_, bitrate_bps_ / 1000);
+    // The rate control mode is named because it is the difference between a
+    // still screen costing 25 kbps and costing all of the number beside it,
+    // and because which one an encoder accepted is otherwise invisible from a
+    // log somebody sends in.
+    DV_LOG_INFO("Media Foundation: encoding {}x{} at up to {} fps, {} kbps, {}", width_, height_,
+                framerate_, bitrate_bps_ / 1000,
+                constrained_vbr_ ? "constrained VBR" : "CBR, because it refused constrained VBR");
     return WEBRTC_VIDEO_CODEC_OK;
   }
 
@@ -498,11 +516,7 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
     // precedence over MF_MT_AVG_BITRATE on the output type. Reconfiguring
     // rather than restarting, because the congestion controller moves this
     // every second and a restart would mean a keyframe every second.
-    VARIANT value;
-    ::VariantInit(&value);
-    value.vt = VT_UI4;
-    value.ulVal = bitrate;
-    (void)codec_api_->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &value);
+    apply_bitrate();
   }
 
   webrtc::VideoEncoder::EncoderInfo GetEncoderInfo() const override {
@@ -687,18 +701,75 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
     // one after it has been encoded, and on a screen share that delay buys
     // nothing anybody wants.
     set_codec_value(CODECAPI_AVEncMPVDefaultBPictureCount, VT_UI4, 0U);
+
+    // Here rather than with the bitrate, for the same reason: the rate control
+    // mode is read when the output type is set, and one written afterwards is
+    // a mode the encoder is not running in.
+    //
+    // Constrained VBR and not CBR, which is the difference between encoding a
+    // screen on the card being worth it and not. CBR fills its target whatever
+    // the picture is doing: measured against a still screen at 720p30 this
+    // encoder sent between 1.5 and 2.9 Mbps, chasing whatever the congestion
+    // controller allowed, where the NVENC backend on the same screen sent 25
+    // kbps. A shared screen is still most of the time, and a still screen has
+    // to cost almost nothing.
+    //
+    // The peak is set equal to the mean further down, so the drain rate of the
+    // leaky bucket is exactly what congestion control allowed: nothing may
+    // exceed it and anything may stay under it.
+    //
+    // Windows 8 and later. An encoder that refuses the mode is put back on
+    // CBR, which is what this did before and is at least bounded, rather than
+    // left on the encoder's own default of unconstrained VBR chasing
+    // MF_MT_AVG_BITRATE.
+    constrained_vbr_ =
+        set_codec_value(CODECAPI_AVEncCommonRateControlMode, VT_UI4,
+                        static_cast<ULONG>(eAVEncCommonRateControlMode_PeakConstrainedVBR));
+    if (!constrained_vbr_) {
+      set_codec_value(CODECAPI_AVEncCommonRateControlMode, VT_UI4,
+                      static_cast<ULONG>(eAVEncCommonRateControlMode_CBR));
+    }
+
+    // The rest of the rate control, and it has to be here with it. Written
+    // after the output type, this transform keeps its own defaults instead:
+    // measured on an NVIDIA encoder, a 1500 kbps share was draining a 6912
+    // kbps bucket with no floor under the quantiser, which is most of why a
+    // still screen cost megabits.
+    apply_bitrate();
+
+    // The ceiling the bucket drains at, and the one number here that cannot be
+    // corrected later: this transform accepts a SetValue on it while streaming,
+    // answers success, and goes on using the value it was given before the
+    // output type. So it is not the current allowance, which moves every
+    // second, but the maximum the client promises never to cross.
+    //
+    // Not equal to the mean, the way the NVENC backend sets it. There the peak
+    // is rewritten with every estimate, so it can afford to be exact; here a
+    // peak equal to the first allowance would pin the share to whatever the
+    // call started at and never let it use a link that got better.
+    if (constrained_vbr_) {
+      set_codec_value(CODECAPI_AVEncCommonMaxBitRate, VT_UI4, peak_bps_);
+    }
+
+    // One second of that ceiling in the leaky bucket.
+    set_codec_value(CODECAPI_AVEncCommonBufferSize, VT_UI4, peak_bps_);
+
+    // The floor on quantisation, which is what actually makes a still screen
+    // cheap. Without it the rate controller has no reason to stop: it drives
+    // the quantiser down until the allowed bitrate is spent, so a picture that
+    // is not moving gets encoded closer and closer to lossless and the link
+    // pays for it. The floor says the encoder may stop once the frame is good
+    // enough.
+    //
+    // Documented as applying to every rate control mode, and optional even for
+    // a certified encoder, so it is probed like everything else here.
+    set_codec_value(CODECAPI_AVEncVideoMinQP, VT_UI4, kMinQp);
   }
 
   void apply_dynamic_codec_settings() {
     if (codec_api_ == nullptr) {
       return;
     }
-
-    set_codec_value(CODECAPI_AVEncCommonRateControlMode, VT_UI4,
-                    static_cast<ULONG>(eAVEncCommonRateControlMode_CBR));
-    set_codec_value(CODECAPI_AVEncCommonMeanBitRate, VT_UI4, bitrate_bps_);
-    // One second of video in the leaky bucket.
-    set_codec_value(CODECAPI_AVEncCommonBufferSize, VT_UI4, bitrate_bps_);
 
     // Named rather than left to the encoder: libwebrtc asks for a keyframe
     // when it needs one, and an encoder inserting its own on a schedule of its
@@ -721,15 +792,27 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
     }
   }
 
-  void set_codec_value(const GUID& property, VARTYPE type, ULONG number) {
+  /// Writes what congestion control currently allows into the encoder.
+  ///
+  /// The mean only. Under constrained VBR that is the number the encoder aims
+  /// at, and it is the one property here this transform really does take while
+  /// streaming: written and read back again, frame after frame. The peak is
+  /// set once before the output type and stays there, for the reason given in
+  /// apply_static_codec_settings.
+  void apply_bitrate() { set_codec_value(CODECAPI_AVEncCommonMeanBitRate, VT_UI4, bitrate_bps_); }
+
+  /// Whether the encoder took the property, which is not the same as whether
+  /// it has it: an unsupported property is skipped, and a supported one can
+  /// still refuse the value.
+  bool set_codec_value(const GUID& property, VARTYPE type, ULONG number) {
     if (codec_api_ == nullptr || codec_api_->IsSupported(&property) != S_OK) {
-      return;
+      return false;
     }
     VARIANT value;
     ::VariantInit(&value);
     value.vt = type;
     value.ulVal = number;
-    (void)codec_api_->SetValue(&property, &value);
+    return SUCCEEDED(codec_api_->SetValue(&property, &value));
   }
 
   [[nodiscard]] bool set_output_type() {
@@ -971,7 +1054,12 @@ class MediaFoundationVideoEncoder final : public webrtc::VideoEncoder {
   int height_ = 0;
   UINT32 framerate_ = 30;
   UINT32 bitrate_bps_ = 0;
+  /// The configured ceiling, written into the encoder once and never again.
+  UINT32 peak_bps_ = 0;
   std::uint64_t frame_index_ = 0;
+  /// Whether the encoder took constrained VBR. False means it is on CBR, and
+  /// that the peak has nowhere to be written. See apply_static_codec_settings.
+  bool constrained_vbr_ = false;
 
   /// From MFT_OUTPUT_STREAM_INFO, once the output type is set. Written before
   /// streaming starts and only read afterwards, so no lock guards them.

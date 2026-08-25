@@ -17,57 +17,9 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include "ui/table.hpp"
+
 namespace dv::ui {
-namespace {
-
-/// Where the identifier of a row lives, the same idea as the participant list.
-constexpr int kIdRole = Qt::UserRole;
-
-/// Fills a table from rows of tab separated fields.
-///
-/// The first field is the identifier and is not shown; the rest are the
-/// columns, in order. Rebuilt wholesale on every answer, because the answer is
-/// the whole list and merging it into what is on screen would be a second
-/// implementation of the truth.
-void fill(QTableWidget* table, const QStringList& rows) {
-  const QString selected =
-      table->currentRow() >= 0 && table->item(table->currentRow(), 0) != nullptr
-          ? table->item(table->currentRow(), 0)->data(kIdRole).toString()
-          : QString();
-
-  table->setRowCount(static_cast<int>(rows.size()));
-  for (int row = 0; row < rows.size(); ++row) {
-    const QStringList fields = rows.at(row).split(QLatin1Char('\t'));
-    for (int column = 0; column < table->columnCount(); ++column) {
-      // The identifier is field 0, so the columns start at 1.
-      auto* item = new QTableWidgetItem(fields.value(column + 1));
-      item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-      if (column == 0) {
-        item->setData(kIdRole, fields.value(0));
-      }
-      table->setItem(row, column, item);
-    }
-    // Restored by identity rather than by row: the order changes as accounts
-    // and rooms come and go, and a selection that jumps to a different account
-    // between a refresh and a click is how the wrong person gets deleted.
-    if (!selected.isEmpty() && fields.value(0) == selected) {
-      table->selectRow(row);
-    }
-  }
-}
-
-QTableWidget* make_table(const QStringList& headers, QWidget* parent) {
-  auto* table = new QTableWidget(0, static_cast<int>(headers.size()), parent);
-  table->setHorizontalHeaderLabels(headers);
-  table->setSelectionBehavior(QAbstractItemView::SelectRows);
-  table->setSelectionMode(QAbstractItemView::SingleSelection);
-  table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  table->verticalHeader()->setVisible(false);
-  table->horizontalHeader()->setStretchLastSection(true);
-  return table;
-}
-
-}  // namespace
 
 AdminPanel::AdminPanel(client::app::CallSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
@@ -132,13 +84,15 @@ QWidget* AdminPanel::build_rooms_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
 
-  rooms_ = make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People"),
-                       QStringLiteral("Persistent")},
-                      page);
+  // No "Persistent" column: it read "yes" on every row from the moment every
+  // room started outliving its participants, and a column with one value in it
+  // is width spent on nothing.
+  rooms_ =
+      make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, page);
   column->addWidget(rooms_, 1);
 
   auto* controls = new QHBoxLayout();
-  create_room_ = new QPushButton(QStringLiteral("New persistent room"), page);
+  create_room_ = new QPushButton(QStringLiteral("New room"), page);
   create_room_->setProperty("accent", true);
   close_room_ = new QPushButton(QStringLiteral("Close room"), page);
   close_room_->setProperty("danger", true);
@@ -196,14 +150,6 @@ bool AdminPanel::send(const Result<std::monostate>& request) {
     return false;
   }
   return true;
-}
-
-QString AdminPanel::selected_id(const QTableWidget* table) {
-  const int row = table->currentRow();
-  if (row < 0 || table->item(row, 0) == nullptr) {
-    return {};
-  }
-  return table->item(row, 0)->data(kIdRole).toString();
 }
 
 void AdminPanel::apply_users(const QStringList& rows) {
@@ -377,8 +323,8 @@ void AdminPanel::on_delete_user() {
 void AdminPanel::on_create_room() {
   bool accepted = false;
   const QString name =
-      QInputDialog::getText(this, QStringLiteral("New persistent room"),
-                            QStringLiteral("Room name"), QLineEdit::Normal, QString(), &accepted);
+      QInputDialog::getText(this, QStringLiteral("New room"), QStringLiteral("Room name"),
+                            QLineEdit::Normal, QString(), &accepted);
   if (!accepted) {
     return;
   }

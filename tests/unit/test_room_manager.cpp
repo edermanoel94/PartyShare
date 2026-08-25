@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "rooms/room_manager.hpp"
+#include "store/memory_store.hpp"
 
 namespace {
 
@@ -90,8 +91,9 @@ TEST(RoomManager, JoiningASecondRoomLeavesTheFirst) {
   EXPECT_FALSE(manager.join(first, user("u1")).has_value());
   EXPECT_FALSE(manager.join(second, user("u1")).has_value());
 
-  // The first room became empty and was therefore removed.
-  EXPECT_EQ(manager.find(first), nullptr);
+  // The first room is empty but still there, and still theirs to come back to.
+  ASSERT_NE(manager.find(first), nullptr);
+  EXPECT_TRUE(manager.find(first)->participants.empty());
   EXPECT_TRUE(manager.find(second)->contains("u1"));
   EXPECT_EQ(manager.room_of("u1"), second);
 }
@@ -106,14 +108,71 @@ TEST(RoomManager, LeavingRemovesTheParticipant) {
   EXPECT_TRUE(manager.find(id)->contains("u2"));
 }
 
-TEST(RoomManager, TheRoomDisappearsOnceEmpty) {
+TEST(RoomManager, TheRoomSurvivesOnceEmpty) {
+  // It used to be erased here, which meant stepping out of your own room
+  // destroyed it and the identifier stopped working.
   RoomManager manager = make_manager();
   const std::string id = create(manager);
   EXPECT_FALSE(manager.join(id, user("u1")).has_value());
   EXPECT_FALSE(manager.leave(id, "u1").has_value());
-  EXPECT_EQ(manager.find(id), nullptr);
-  EXPECT_EQ(manager.room_count(), 0u);
+  ASSERT_NE(manager.find(id), nullptr);
+  EXPECT_TRUE(manager.find(id)->participants.empty());
+  EXPECT_EQ(manager.room_count(), 1u);
   EXPECT_FALSE(manager.room_of("u1").has_value());
+
+  // And it can be walked back into, which is the whole point.
+  EXPECT_FALSE(manager.join(id, user("u1")).has_value());
+  EXPECT_EQ(manager.find(id)->participants.size(), 1u);
+}
+
+TEST(RoomManager, CreatingARoomWritesItToTheStore) {
+  // Nothing used to reach the store unless an administrator had asked for a
+  // persistent room, so an ordinary one existed only in this process and the
+  // database stayed empty.
+  dv::server::store::MemoryRoomStore store;
+  RoomManager manager(
+      RoomManager::Options{.max_participants_per_room = 5, .id_seed = 1234u, .store = &store});
+  const std::string id = create(manager, "dev-room");
+
+  const auto record = store.find(id);
+  ASSERT_TRUE(record.has_value());
+  EXPECT_EQ(record->id, id);
+  EXPECT_EQ(record->name, "dev-room");
+  EXPECT_TRUE(record->persistent);
+  EXPECT_EQ(store.list().size(), 1u);
+}
+
+TEST(RoomManager, RoomsComeBackFromTheStoreOnStartup) {
+  dv::server::store::MemoryRoomStore store;
+  std::string id;
+  {
+    RoomManager before(
+        RoomManager::Options{.max_participants_per_room = 5, .id_seed = 1234u, .store = &store});
+    id = create(before, "dev-room");
+    EXPECT_FALSE(before.join(id, user("u1")).has_value());
+    EXPECT_FALSE(before.leave(id, "u1").has_value());
+  }
+
+  // A new manager over the same store is what a restart looks like.
+  RoomManager after(
+      RoomManager::Options{.max_participants_per_room = 5, .id_seed = 4321u, .store = &store});
+  EXPECT_EQ(after.load_rooms(), 1u);
+  ASSERT_NE(after.find(id), nullptr);
+  EXPECT_EQ(after.find(id)->name, "dev-room");
+  // Empty: who was inside did not survive the process.
+  EXPECT_TRUE(after.find(id)->participants.empty());
+}
+
+TEST(RoomManager, ClosingARoomTakesItOutOfTheStore) {
+  // The one path that ends a room now, so it is the one that has to clean up
+  // after itself: a record left behind would be reloaded at the next restart.
+  dv::server::store::MemoryRoomStore store;
+  RoomManager manager(
+      RoomManager::Options{.max_participants_per_room = 5, .id_seed = 1234u, .store = &store});
+  const std::string id = create(manager);
+  ASSERT_TRUE(manager.remove_room(id).ok());
+  EXPECT_FALSE(store.find(id).has_value());
+  EXPECT_EQ(manager.find(id), nullptr);
 }
 
 TEST(RoomManager, LeavingARoomTheUserIsNotInFails) {

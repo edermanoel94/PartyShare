@@ -361,11 +361,11 @@ TEST_F(MongoStoreTest, ARestrictionSurvivesTheProcessThatAppliedIt) {
 // tools/dbadmin/internal/store, which strips the field from a real database and
 // reads it back.
 
-TEST_F(MongoStoreTest, APersistentRoomComesBackAfterARestart) {
+TEST_F(MongoStoreTest, ARoomComesBackAfterARestart) {
   const std::string room_id = [this] {
     Hub hub(Hub::Options{
         .users = &stores_->users(), .rooms = &stores_->rooms(), .audit = &stores_->audit()});
-    const auto created = hub.rooms().create_room("standup", "id-ana", true);
+    const auto created = hub.rooms().create_room("standup", "id-ana");
     EXPECT_TRUE(created.ok());
     return created.ok() ? created.value() : std::string{};
   }();
@@ -384,14 +384,20 @@ TEST_F(MongoStoreTest, APersistentRoomComesBackAfterARestart) {
   EXPECT_TRUE(room->participants.empty());
 }
 
-TEST_F(MongoStoreTest, AnOrdinaryRoomIsNotWrittenAtAll) {
+TEST_F(MongoStoreTest, EveryRoomIsWrittenAsItIsCreated) {
+  // This asserted the opposite until rooms stopped being of two kinds: an
+  // ordinary room reached no database at all, so it could not be listed at the
+  // next start and its identifier stopped working the moment it emptied.
   Hub hub(Hub::Options{
       .users = &stores_->users(), .rooms = &stores_->rooms(), .audit = &stores_->audit()});
-  const auto created = hub.rooms().create_room("ad hoc", "id-ana", false);
+  const auto created = hub.rooms().create_room("ad hoc", "id-ana");
   ASSERT_TRUE(created.ok());
 
-  EXPECT_FALSE(stores_->rooms().find(created.value()).has_value());
-  EXPECT_TRUE(stores_->rooms().list().empty());
+  const auto record = stores_->rooms().find(created.value());
+  ASSERT_TRUE(record.has_value());
+  EXPECT_EQ(record->name, "ad hoc");
+  EXPECT_EQ(record->owner_id, "id-ana");
+  EXPECT_EQ(stores_->rooms().list().size(), 1U);
 }
 
 TEST_F(MongoStoreTest, ARefusedConnectionFailsRatherThanFallingBackToMemory) {

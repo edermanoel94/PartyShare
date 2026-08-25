@@ -347,6 +347,92 @@ jobs:
       - name: Tests
         run: ctest --test-dir build/asan --output-on-failure
 
+  # MongoDB persistence had no job at all, so tests/integration/test_mongo_store.cpp
+  # was never compiled here, let alone run: DV_ENABLE_MONGO is off by default
+  # and nothing turned it on. The mongo:7 service further up belongs to the Go
+  # database tool and does not reach the C++ suite. An edit to that file could
+  # therefore be merged green without a compiler having read it.
+  #
+  # Its own job rather than a flag on the Linux build, because the driver is a
+  # long source build that the other jobs should not wait on, and because
+  # DV_ENABLE_MONGO changes what dv_server_core links: keeping the ordinary
+  # build free of it is what proves the server still builds without a database.
+  mongo:
+    name: MongoDB persistence
+    runs-on: ubuntu-24.04
+    services:
+      mongo:
+        image: mongo:7
+        ports: ['27017:27017']
+        # The same health check as the database tool job, for the same reason:
+        # without one the job races the container and the driver gives up on a
+        # server that was seconds from being ready.
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev
+
+      # A key of its own, because this is the only job whose vcpkg tree holds
+      # the driver, and it falls back to the shared one so that a first run
+      # starts from the dependencies every other job already built.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-mongo-ubuntu-24.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-mongo-ubuntu-24.04-
+            vcpkg-ubuntu-24.04-
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+        shell: bash
+
+      # No client: Qt is minutes of build time and nothing in the database
+      # layer or its tests touches it.
+      - name: Configure
+        run: >
+          cmake -S . -B build/mongo -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
+          -DCMAKE_BUILD_TYPE=Release
+          -DDV_WARNINGS_AS_ERRORS=ON
+          -DDV_ENABLE_MONGO=ON
+          -DVCPKG_MANIFEST_FEATURES=mongo
+          -DDV_BUILD_CLIENT=OFF
+
+      - name: Build
+        run: cmake --build build/mongo
+
+      - name: Tests
+        run: ctest --test-dir build/mongo --output-on-failure --no-tests=error -L mongo | tee mongo-tests.log
+        shell: bash
+        env:
+          DV_TEST_MONGO_URI: mongodb://127.0.0.1:27017
+
+      # A mongo test with no DV_TEST_MONGO_URI skips itself, and ctest counts a
+      # skip as a pass. A job that never reached the database would therefore be
+      # green having verified nothing, which is entry 11 of docs/postmortems.md
+      # wearing a different hat and is guarded the same way.
+      - name: The tests reached the database instead of skipping themselves
+        shell: bash
+        run: |
+          if grep -q 'Skipped' mongo-tests.log; then
+            echo "::error::the mongo tests skipped themselves, so DV_TEST_MONGO_URI never reached them"
+            exit 1
+          fi
+          echo "no test skipped, so every one of them spoke to the database"
+
   static-analysis:
     name: Static analysis
     runs-on: ubuntu-24.04

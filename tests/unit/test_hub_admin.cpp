@@ -492,18 +492,29 @@ TEST_F(HubAdminTest, DeletingAnAccountRemovesThemFromTheirRoomAndEndsTheirSessio
 
 // --- rooms -------------------------------------------------------------------
 
-TEST_F(HubAdminTest, OnlyAnAdministratorCreatesAPersistentRoom) {
+TEST_F(HubAdminTest, AnybodyCreatesARoomAndTheOldPersistentFlagIsIgnored) {
+  // The gate this replaces refused `persistent` to anybody but an
+  // administrator, because a room that outlived its participants was a favour.
+  // Every room outlives them now, so the request asks for what it was going to
+  // get. The field is still accepted on the wire so that a client built before
+  // this still connects; it decides nothing.
   const auto [connection, admin] = login("ana", Role::Admin);
   const auto [other, bruno] = login("bruno", Role::User);
 
-  const auto refused = send(other, proto::CreateRoom{bruno.id, "permanent", true});
-  const auto error = find<proto::ErrorMessage>(refused, other);
-  ASSERT_TRUE(error.has_value());
-  EXPECT_EQ(error->code, "forbidden");
+  const auto asked = send(other, proto::CreateRoom{bruno.id, "permanent", true});
+  EXPECT_FALSE(find<proto::ErrorMessage>(asked, other).has_value());
+  const auto created = find<proto::RoomCreated>(asked, other);
+  ASSERT_TRUE(created.has_value());
 
-  const auto allowed = find<proto::RoomCreated>(
-      send(connection, proto::CreateRoom{admin.id, "permanent", true}), connection);
-  ASSERT_TRUE(allowed.has_value());
+  const auto* room = hub_.rooms().find(created->room_id);
+  ASSERT_NE(room, nullptr);
+  EXPECT_TRUE(room->persistent);
+
+  // And asking for nothing gets a room exactly as permanent.
+  const auto plain =
+      find<proto::RoomCreated>(send(connection, proto::CreateRoom{admin.id, "ad hoc"}), connection);
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_TRUE(hub_.rooms().find(plain->room_id)->persistent);
 }
 
 TEST_F(HubAdminTest, APersistentRoomOutlivesItsLastParticipant) {
@@ -525,7 +536,9 @@ TEST_F(HubAdminTest, APersistentRoomOutlivesItsLastParticipant) {
   EXPECT_FALSE(find<proto::ErrorMessage>(rejoined, connection).has_value());
 }
 
-TEST_F(HubAdminTest, AnOrdinaryRoomStillDisappearsWhenItEmpties) {
+TEST_F(HubAdminTest, ARoomStaysWhenItEmptiesAndCanBeWalkedBackInto) {
+  // This asserted the opposite: leaving your own room destroyed it, which is
+  // what made a room appear in the list and then refuse the join.
   const auto [connection, admin] = login("ana", Role::Admin);
   const auto created =
       find<proto::RoomCreated>(send(connection, proto::CreateRoom{admin.id, "ad hoc"}), connection);
@@ -534,7 +547,10 @@ TEST_F(HubAdminTest, AnOrdinaryRoomStillDisappearsWhenItEmpties) {
   (void)send(connection, proto::JoinRoom{created->room_id, admin.id, "Ana"});
   (void)send(connection, proto::LeaveRoom{created->room_id, admin.id});
 
-  EXPECT_EQ(hub_.rooms().find(created->room_id), nullptr);
+  ASSERT_NE(hub_.rooms().find(created->room_id), nullptr);
+  const auto rejoined = send(connection, proto::JoinRoom{created->room_id, admin.id, "Ana"});
+  EXPECT_FALSE(find<proto::ErrorMessage>(rejoined, connection).has_value());
+  EXPECT_EQ(hub_.rooms().find(created->room_id)->size(), 1U);
 }
 
 TEST_F(HubAdminTest, ClosingARoomEmptiesItAndTellsEveryone) {
@@ -559,6 +575,23 @@ TEST_F(HubAdminTest, ClosingARoomThatNeverExistedIsAnError) {
   EXPECT_EQ(error->code, "room_not_found");
 }
 
+TEST_F(HubAdminTest, ClosingARoomReachesEverybodyElsesList) {
+  // The other half of CreatingARoomReachesEverybodyElsesList in test_hub.cpp:
+  // a closed room used to stay on every other client's screen until somebody
+  // tried to join it and was told it did not exist.
+  const auto [admin, admin_user] = login("ana", Role::Admin);
+  const auto [bruno, bruno_user] = login("bruno", Role::User);
+  const auto created = send(admin, proto::CreateRoom{admin_user.id, "dev-room"});
+  const auto room = find<proto::RoomCreated>(created, admin);
+  ASSERT_TRUE(room.has_value());
+
+  const auto out = send(admin, proto::DeleteRoom{.room_id = room->room_id});
+
+  const auto bruno_list = find<proto::RoomList>(out, bruno);
+  ASSERT_TRUE(bruno_list.has_value()) << "bruno was not told the room is gone";
+  EXPECT_TRUE(bruno_list->rooms.empty());
+}
+
 TEST_F(HubAdminTest, TheRoomListCountsWhoIsInside) {
   set_up_room();
 
@@ -569,7 +602,8 @@ TEST_F(HubAdminTest, TheRoomListCountsWhoIsInside) {
   EXPECT_EQ(list->rooms.front().id, room_);
   EXPECT_EQ(list->rooms.front().participant_count, 2);
   EXPECT_EQ(list->rooms.front().owner_id, admin_.id);
-  EXPECT_FALSE(list->rooms.front().persistent);
+  // Every room outlives its participants now; there is no other kind.
+  EXPECT_TRUE(list->rooms.front().persistent);
 }
 
 // --- account restrictions ----------------------------------------------------

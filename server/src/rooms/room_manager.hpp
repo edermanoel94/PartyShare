@@ -54,18 +54,20 @@ class RoomManager {
   /// Creates a room with a fresh identifier. Fails only if no free identifier
   /// could be found, which needs the identifier space to be nearly exhausted.
   ///
-  /// A persistent room outlives its last participant and is written to the
-  /// store; an ordinary one is forgotten when it empties, as before.
-  [[nodiscard]] Result<std::string> create_room(std::string name, std::string owner_id = {},
-                                                bool persistent = false);
+  /// Every room is written to the store and outlives its last participant.
+  /// There used to be two kinds, and the ordinary one evaporated the moment it
+  /// emptied: somebody who stepped out of their own room came back to an
+  /// identifier that no longer existed, and a list that still showed it. A
+  /// room now ends only when somebody closes it, which is `remove_room`.
+  [[nodiscard]] Result<std::string> create_room(std::string name, std::string owner_id = {});
 
-  /// Reads the persistent rooms back from the store, so that an identifier
-  /// somebody wrote down still works after a restart. Rooms come back empty:
-  /// who was inside did not survive the process and pretending otherwise would
-  /// be a participant list nobody is connected to.
+  /// Reads the rooms back from the store, so that an identifier somebody wrote
+  /// down still works after a restart. Rooms come back empty: who was inside
+  /// did not survive the process and pretending otherwise would be a
+  /// participant list nobody is connected to.
   ///
   /// Returns how many were loaded. Does nothing without a store.
-  std::size_t load_persistent();
+  std::size_t load_rooms();
 
   /// Deletes a room whatever its state, persistent or not, and reports who was
   /// in it so the caller can tell them. This is the administrative close, and

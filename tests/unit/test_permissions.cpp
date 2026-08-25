@@ -47,7 +47,6 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
            proto::MessageType::CreateUser,
            proto::MessageType::UpdateUser,
            proto::MessageType::DeleteUser,
-           proto::MessageType::ListRooms,
            proto::MessageType::DeleteRoom,
            proto::MessageType::ListAudit,
        }) {
@@ -55,6 +54,18 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
     EXPECT_FALSE(is_allowed(Role::User, type)) << proto::type_name(type);
     EXPECT_TRUE(is_allowed(Role::Admin, type)) << proto::type_name(type);
   }
+}
+
+TEST(Permissions, AnybodySignedInMaySeeWhichRoomsExist) {
+  // Administration until the room list moved to the first screen everybody
+  // sees. Ending a room is still administration: seeing one and closing one
+  // are not the same power.
+  EXPECT_EQ(access_for(proto::MessageType::ListRooms), Access::Authenticated);
+  EXPECT_TRUE(is_allowed(Role::User, proto::MessageType::ListRooms));
+  EXPECT_TRUE(is_allowed(Role::Admin, proto::MessageType::ListRooms));
+
+  EXPECT_EQ(access_for(proto::MessageType::DeleteRoom), Access::AdminOnly);
+  EXPECT_FALSE(is_allowed(Role::User, proto::MessageType::DeleteRoom));
 }
 
 TEST(Permissions, AnnouncementsAreRefusedToEverybody) {

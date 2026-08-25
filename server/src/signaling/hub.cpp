@@ -361,6 +361,29 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
+  // One room each, for anybody who is not an administrator.
+  //
+  // The limit is what a room outliving its last participant costs. Before
+  // that, a room evaporated when the last person walked out and nobody could
+  // accumulate anything; now a room stays until somebody closes it, and only
+  // an administrator can close one. Without a limit, every ordinary user is
+  // free to leave rooms behind that only somebody else can clear away.
+  //
+  // Refused rather than silently reusing the room they already have: they may
+  // have meant to make a second one, and finding out is better than being
+  // handed an identifier that is not new. The message names the room so the
+  // client can say which one is in the way.
+  if (current_role(user->id) != models::Role::Admin) {
+    if (const auto existing = rooms_.room_owned_by(user->id)) {
+      reply_error(out, connection.id,
+                  Error{.code = "room_limit_reached",
+                        .message = "you already have room " + *existing +
+                                   "; an administrator has to close it before you can make "
+                                   "another"});
+      return;
+    }
+  }
+
   // `message.persistent` is read no more. Every room outlives its last
   // participant now, so asking for one is asking for what you were going to
   // get, and the administrator gate that used to guard the request guarded

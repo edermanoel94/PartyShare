@@ -828,8 +828,16 @@ void MainWindow::wire_session() {
             // walked into, and neither of them is the owner of the list.
             QMetaObject::invokeMethod(admin_panel_, "apply_rooms", Qt::QueuedConnection,
                                       Q_ARG(QStringList, rows));
+            // Worked out here rather than in the window, because this is where
+            // the summaries still carry who owns what: the rows are flattened
+            // to what the table shows.
+            const models::User me = session_.local_user();
+            const bool may_create =
+                me.role == models::Role::Admin ||
+                std::none_of(rooms.begin(), rooms.end(),
+                             [&](const protocol::RoomSummary& s) { return s.owner_id == me.id; });
             QMetaObject::invokeMethod(this, "apply_room_list", Qt::QueuedConnection,
-                                      Q_ARG(QStringList, rows));
+                                      Q_ARG(QStringList, rows), Q_ARG(bool, may_create));
           },
       .on_audit_list =
           [this](const std::vector<models::AuditEntry>& entries) {
@@ -1256,11 +1264,20 @@ void MainWindow::apply_state(int state, const QString& detail) {
   show_page();
 }
 
-void MainWindow::apply_room_list(const QStringList& rows) {
+void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
   fill(room_list_, rows);
   const bool empty = rows.isEmpty();
   room_list_->setVisible(!empty);
   rooms_empty_->setVisible(empty);
+
+  // Disabled rather than left to be refused on the click. The server answers
+  // room_limit_reached either way, and a button that always fails is a worse
+  // way to learn a rule than a button that is plainly not available.
+  create_button_->setEnabled(may_create);
+  create_button_->setToolTip(may_create
+                                 ? QString()
+                                 : QStringLiteral("You already have a room. An administrator has "
+                                                  "to close it before you can make another."));
 }
 
 void MainWindow::apply_participants(const QStringList& names) {

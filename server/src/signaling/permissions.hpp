@@ -51,6 +51,16 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::ListChat:
     case protocol::MessageType::Ping:
     case protocol::MessageType::Pong:
+    // Which rooms exist, and how many people are in each. This was
+    // administration for as long as the only place a room list appeared was an
+    // administrator's panel, and knowing a room existed meant having been told
+    // its six characters. The list is now the first thing anybody sees after
+    // signing in, which is the whole point of it: somebody who has to be told
+    // a code before they can go anywhere has no use for a list.
+    //
+    // Closing a room stays administration. Seeing one and ending one are not
+    // the same power.
+    case protocol::MessageType::ListRooms:
       return Access::Authenticated;
 
     // Administration.
@@ -61,7 +71,6 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::CreateUser:
     case protocol::MessageType::UpdateUser:
     case protocol::MessageType::DeleteUser:
-    case protocol::MessageType::ListRooms:
     case protocol::MessageType::DeleteRoom:
     case protocol::MessageType::ListAudit:
       return Access::AdminOnly;

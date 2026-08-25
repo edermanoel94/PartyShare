@@ -474,6 +474,10 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
 
   broadcast(out, message.room_id, protocol::UserJoined{.room_id = message.room_id, .user = user},
             user.id);
+  // Everybody else's list carries how many are in each room, and it is on the
+  // first screen they see. A count that only moved when a room appeared or was
+  // closed showed nought for a room somebody was sitting in.
+  broadcast_room_list(out);
   DV_LOG_INFO("User {} joined room {} ({} participants)", user.id, message.room_id, room->size());
 
   // Last, so that the participant already knows who is in the room by the time
@@ -510,6 +514,7 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
   }
   broadcast(out, message.room_id,
             protocol::UserLeft{.room_id = message.room_id, .user_id = message.user_id});
+  broadcast_room_list(out);
   DV_LOG_INFO("User {} left room {}", message.user_id, message.room_id);
 
   if (media_signals_ != nullptr) {
@@ -792,6 +797,7 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
     broadcast(out, *room_id, protocol::ScreenShareStopped{.room_id = *room_id, .user_id = user_id});
   }
   broadcast(out, *room_id, protocol::UserLeft{.room_id = *room_id, .user_id = user_id});
+  broadcast_room_list(out);
 
   if (media_signals_ != nullptr) {
     media_signals_->on_participant_left(*room_id, user_id);
@@ -846,6 +852,7 @@ void Hub::evict(std::vector<Outgoing>& out, const std::string& room_id, const st
   // The same two things a voluntary leave does, so a kicked participant and one
   // who left are indistinguishable to everybody else's client and to the SFU.
   broadcast(out, room_id, protocol::UserLeft{.room_id = room_id, .user_id = user_id});
+  broadcast_room_list(out);
   if (media_signals_ != nullptr) {
     media_signals_->on_participant_left(room_id, user_id);
   }
@@ -1156,12 +1163,20 @@ protocol::RoomList Hub::room_list() const {
 
 void Hub::broadcast_room_list(std::vector<Outgoing>& out) const {
   // Every authenticated connection, not just whoever caused the change. A room
-  // list is only ever asked for once, when a client opens the panel, and it
-  // used to stay frozen from then on: a room created or closed by somebody
-  // else left every other client showing a list that no longer matched the
-  // server. Joining one of those rows failed with room_not_found, which reads
-  // like the server losing rooms and is really the client holding an old
-  // answer.
+  // list is only ever asked for once, when a client opens a screen that shows
+  // one, and it used to stay frozen from then on: a room created or closed by
+  // somebody else left every other client showing a list that no longer
+  // matched the server. Joining one of those rows failed with room_not_found,
+  // which reads like the server losing rooms and is really the client holding
+  // an old answer.
+  //
+  // Sent on every arrival and departure too, not only when a room appears or
+  // goes. The list carries how many people are in each room and it is the
+  // first thing somebody sees after signing in, so a count frozen at whatever
+  // it was when the room was created is a wrong number on the main screen
+  // rather than a stale detail in an administrator's tab. That costs one
+  // message per connection per join, which a room of five bounded by
+  // max_participants makes a rounding error.
   const protocol::RoomList list = room_list();
   for (const auto& entry : user_to_connection_) {
     out.push_back(Outgoing{.connection = entry.second, .message = list});

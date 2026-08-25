@@ -20,6 +20,7 @@ class QProgressBar;
 class QPushButton;
 class QSlider;
 class QStackedWidget;
+class QTableWidget;
 class QTimer;
 
 namespace dv::ui {
@@ -52,6 +53,12 @@ class MainWindow : public QMainWindow {
  public:
   explicit MainWindow(client::app::CallSession& session, QWidget* parent = nullptr);
   ~MainWindow() override;
+
+ public slots:
+  /// Rows of tab separated fields, identifier first, as ui::fill expects.
+  /// Invoked from the signalling thread through a queued connection, which is
+  /// why it is a slot and not a plain member.
+  void apply_room_list(const QStringList& rows);
 
  private slots:
   void on_connect();
@@ -183,6 +190,10 @@ class MainWindow : public QMainWindow {
   QLineEdit* room_id_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
+  /// Every room that exists, so that arriving here does not require already
+  /// knowing a six character code. See build_home_page.
+  QTableWidget* room_list_ = nullptr;
+  QLabel* rooms_empty_ = nullptr;
   /// Shown only to an administrator. See on_open_administration.
   QPushButton* admin_button_ = nullptr;
 

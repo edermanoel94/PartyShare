@@ -727,6 +727,28 @@ TEST_F(HubTest, CreatingARoomReachesEverybodyElsesList) {
   EXPECT_EQ(bruno_list->rooms.front().owner_id, ana_user.id);
 }
 
+TEST_F(HubTest, TheCountOfWhoIsInsideReachesEverybodyElsesList) {
+  // The list is the first screen after signing in, and it says how many people
+  // are in each room. Broadcasting only on create and close froze that number
+  // at nought: the room is empty at the moment it is created, and the join
+  // arrives as a separate message that told nobody.
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+
+  const auto joined = send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  const auto after_join = find<proto::RoomList>(joined, bruno);
+  ASSERT_TRUE(after_join.has_value()) << "bruno was not told somebody went in";
+  ASSERT_EQ(after_join->rooms.size(), 1U);
+  EXPECT_EQ(after_join->rooms.front().participant_count, 1);
+
+  const auto left = send(ana, proto::LeaveRoom{room, ana_user.id});
+  const auto after_leave = find<proto::RoomList>(left, bruno);
+  ASSERT_TRUE(after_leave.has_value()) << "bruno was not told the room emptied";
+  ASSERT_EQ(after_leave->rooms.size(), 1U);
+  EXPECT_EQ(after_leave->rooms.front().participant_count, 0);
+}
+
 TEST_F(HubTest, AnUnauthenticatedConnectionIsNotSentTheRoomList) {
   // The list names who owns what. A socket that has not said who it is has no
   // business receiving it unasked.

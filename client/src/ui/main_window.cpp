@@ -40,6 +40,7 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
+#include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -50,6 +51,7 @@
 #include "ui/metrics_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
+#include "ui/table.hpp"
 #include "ui/theme.hpp"
 
 namespace dv::ui {
@@ -350,8 +352,34 @@ void MainWindow::build_home_page() {
   welcome_->setAlignment(Qt::AlignCenter);
 
   auto* box = new QWidget(page);
-  box->setMaximumWidth(420);
+  // Wider than it was, because a list of rooms needs room to be a list. The
+  // page held two buttons and a six character field before, and 420 was
+  // generous for that.
+  box->setMaximumWidth(560);
   auto* column = new QVBoxLayout(box);
+
+  // Somebody arriving here used to need a code before they could go anywhere:
+  // the only way to learn that a room existed was to be told its six
+  // characters. Rooms outlive their participants now, so there is a list to
+  // show, and this is where it belongs.
+  auto* rooms_label = new QLabel(QStringLiteral("Rooms"), box);
+  QFont label_font = rooms_label->font();
+  label_font.setBold(true);
+  rooms_label->setFont(label_font);
+
+  // The same column order as the administrator's tab, because both are filled
+  // from the same row: identifier, then name, then how many are inside. The
+  // code is a column rather than something hidden because it is what somebody
+  // reads out to invite a person who is not looking at this list.
+  room_list_ =
+      make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, box);
+  room_list_->setMinimumHeight(160);
+
+  // A table with no rows is indistinguishable from a table that failed to
+  // load, so the empty case says which one it is.
+  rooms_empty_ = new QLabel(QStringLiteral("No rooms yet. Create the first one."), box);
+  rooms_empty_->setAlignment(Qt::AlignCenter);
+  rooms_empty_->setProperty("hint", true);
 
   create_button_ = new QPushButton(QStringLiteral("Create room"), box);
   create_button_->setMinimumHeight(44);
@@ -384,8 +412,15 @@ void MainWindow::build_home_page() {
   auto* sign_out = new QPushButton(QStringLiteral("Sign out"), box);
   sign_out->setMinimumHeight(36);
 
+  column->addWidget(rooms_label);
+  column->addWidget(room_list_, 1);
+  column->addWidget(rooms_empty_);
+  column->addSpacing(12);
   column->addWidget(create_button_);
   column->addSpacing(16);
+  // The field stays. A list is how you find a room nobody told you about; a
+  // code is still how somebody hands you one particular room, and that is not
+  // the same errand.
   column->addWidget(room_id_);
   column->addWidget(join_button_);
   column->addSpacing(16);
@@ -401,6 +436,27 @@ void MainWindow::build_home_page() {
   outer->addSpacing(24);
   outer->addLayout(centred);
   outer->addStretch();
+
+  // Selecting writes the code into the field rather than joining, so that the
+  // row you are reading and the room you are about to enter are the same one
+  // even if the list is refreshed underneath you. Entering is the deliberate
+  // second act: a double click, or the button below.
+  connect(room_list_, &QTableWidget::itemSelectionChanged, this, [this] {
+    const QString id = selected_id(room_list_);
+    if (!id.isEmpty()) {
+      room_id_->setText(id);
+    }
+  });
+  connect(room_list_, &QTableWidget::itemDoubleClicked, this, [this](const QTableWidgetItem* item) {
+    if (item == nullptr) {
+      return;
+    }
+    const QString id = selected_id(room_list_);
+    if (!id.isEmpty()) {
+      room_id_->setText(id);
+      on_join_room();
+    }
+  });
 
   connect(create_button_, &QPushButton::clicked, this, &MainWindow::on_create_room);
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
@@ -760,13 +816,19 @@ void MainWindow::wire_session() {
             rows.reserve(static_cast<qsizetype>(rooms.size()));
             for (const protocol::RoomSummary& summary : rooms) {
               QStringList fields;
+              // Identifier first and unshown, then the columns in the order
+              // both tables declare them. See ui::fill.
               fields << QString::fromStdString(summary.id) << QString::fromStdString(summary.id)
                      << QString::fromStdString(summary.name)
-                     << QString::number(summary.participant_count)
-                     << (summary.persistent ? QStringLiteral("yes") : QString());
+                     << QString::number(summary.participant_count);
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
+            // Both screens, from the one answer. The administrator's tab is
+            // where rooms are closed and the home page is where they are
+            // walked into, and neither of them is the owner of the list.
             QMetaObject::invokeMethod(admin_panel_, "apply_rooms", Qt::QueuedConnection,
+                                      Q_ARG(QStringList, rows));
+            QMetaObject::invokeMethod(this, "apply_room_list", Qt::QueuedConnection,
                                       Q_ARG(QStringList, rows));
           },
       .on_audit_list =
@@ -1192,6 +1254,13 @@ void MainWindow::apply_state(int state, const QString& detail) {
 
   refresh_controls();
   show_page();
+}
+
+void MainWindow::apply_room_list(const QStringList& rows) {
+  fill(room_list_, rows);
+  const bool empty = rows.isEmpty();
+  room_list_->setVisible(!empty);
+  rooms_empty_->setVisible(empty);
 }
 
 void MainWindow::apply_participants(const QStringList& names) {
@@ -1635,6 +1704,14 @@ void MainWindow::go_to_page(int index) {
     return;
   }
   pages_->setCurrentIndex(index);
+
+  // Arriving at the home page asks for the list, which covers both ways of
+  // getting here: signing in, and coming back out of a call. The server pushes
+  // it after that, whenever a room appears or is closed, so this is the only
+  // place that has to ask.
+  if (index == kHomePage) {
+    (void)session_.list_rooms();
+  }
 
   QWidget* page = pages_->widget(index);
   if (page == nullptr) {

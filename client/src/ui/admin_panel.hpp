@@ -75,7 +75,6 @@ class AdminPanel : public QWidget {
 
   /// The user id in the selected row of `table`, or empty when nothing is
   /// selected.
-  [[nodiscard]] static QString selected_id(const QTableWidget* table);
 
   /// Sends `request`, turning a local failure into the `failed` signal.
   /// Answers whether it went out, so a caller making several requests can stop

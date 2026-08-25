@@ -206,9 +206,11 @@ TEST_F(AdminFlowTest, ClosingARoomEmptiesItForEverybody) {
   admin->send(proto::DeleteRoom{room});
 
   ASSERT_TRUE(plain->wait_for<proto::UserKicked>(kTimeout).has_value());
-  const auto rooms = admin->wait_for<proto::RoomList>(kTimeout);
-  ASSERT_TRUE(rooms.has_value());
-  EXPECT_TRUE(rooms->rooms.empty());
+  // The list that reflects the close, not merely the next one: the two joins
+  // above each pushed one of their own, and they are still in the queue.
+  const auto rooms = admin->wait_for_matching<proto::RoomList>(
+      kTimeout, [](const proto::RoomList& list) { return list.rooms.empty(); });
+  ASSERT_TRUE(rooms.has_value()) << "no room list arrived saying the room was gone";
 
   // And the identifier is genuinely gone, not merely emptied.
   plain->send(proto::JoinRoom{room, bruno.id, "Bruno"});

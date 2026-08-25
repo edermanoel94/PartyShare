@@ -223,6 +223,8 @@ qt_add_executable(dv_client
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp
   src/ui/settings_dialog.hpp
+  src/ui/table.cpp
+  src/ui/table.hpp
   src/ui/theme.cpp
   src/ui/theme.hpp
 )

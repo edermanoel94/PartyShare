@@ -99,6 +99,33 @@ class WebSocketTestClient {
     }
   }
 
+  /// Waits for the first message of type T that `matches`, consuming
+  /// everything before it.
+  ///
+  /// Where a client is sent several announcements of the same kind and only
+  /// one of them is the one under test. The room list is pushed on every
+  /// arrival and departure, so "the next room list" stopped meaning "the room
+  /// list caused by what I just did": the queue can already hold one from
+  /// somebody joining a moment earlier.
+  template <typename T, typename Predicate>
+  [[nodiscard]] std::optional<T> wait_for_matching(std::chrono::milliseconds timeout,
+                                                   Predicate matches) {
+    const auto deadline = Clock::now() + timeout;
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (true) {
+      while (!received_.empty()) {
+        protocol::Message message = std::move(received_.front());
+        received_.pop_front();
+        if (std::holds_alternative<T>(message) && matches(std::get<T>(message))) {
+          return std::get<T>(message);
+        }
+      }
+      if (changed_.wait_until(lock, deadline) == std::cv_status::timeout && received_.empty()) {
+        return std::nullopt;
+      }
+    }
+  }
+
   /// Collects messages of type T until `timeout` elapses. Used where the order
   /// of several announcements matters.
   template <typename T>

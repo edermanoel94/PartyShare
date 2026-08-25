@@ -92,13 +92,16 @@ std::size_t SignalingServer::connection_count() {
 
 void SignalingServer::on_client(const std::shared_ptr<rtc::WebSocket>& socket) {
   ConnectionId id = 0;
+  std::string remote_address;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     id = next_connection_id_++;
+    remote_address = socket->remoteAddress().value_or("unknown");
     sockets_.emplace(id, socket);
   }
 
-  socket->onOpen([this, id] {
+  socket->onOpen([this, id, remote_address] {
+    DV_LOG_INFO("Connection {} opened from {}", id, remote_address);
     const std::lock_guard<std::mutex> lock(mutex_);
     hub_.on_connect(id, Hub::Clock::now());
   });
@@ -130,8 +133,8 @@ void SignalingServer::on_client(const std::shared_ptr<rtc::WebSocket>& socket) {
     }
   });
 
-  socket->onError([id](const std::string& error) {
-    DV_LOG_WARN("Connection {} reported an error: {}", id, error);
+  socket->onError([id, remote_address](const std::string& error) {
+    DV_LOG_WARN("Connection {} ({}) reported an error: {}", id, remote_address, error);
   });
 }
 

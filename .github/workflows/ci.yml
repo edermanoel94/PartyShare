@@ -106,7 +106,7 @@ jobs:
             everything "nothing resolved as changed"
           fi
           echo "changed:"
-          echo "$changed" | sed 's/^/  /'
+          echo "$changed"
 
           # Anything outside the Go module can reach the C++ build, this file
           # included: a change to the pipeline has to be run to be trusted.

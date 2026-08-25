@@ -144,6 +144,8 @@ func key(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "right":
@@ -373,7 +375,9 @@ func TestTheAuditTabReadsTheLog(t *testing.T) {
 	screen := start(t, database)
 	screen.awaits(t, "Ana Souza")
 
-	screen.press("tab")
+	// 3 rather than tab: the rooms screen sits between the two now, and this
+	// test is about the log rather than about how you get to it.
+	screen.press("3")
 	screen.awaits(t, "create_user")
 	screen.awaits(t, "username=bruno role=user")
 
@@ -405,7 +409,7 @@ func TestTheAuditLimitIsPartOfTheQuery(t *testing.T) {
 	screen := start(t, database)
 	screen.awaits(t, "Ana Souza")
 
-	screen.press("tab")
+	screen.press("3")
 	screen.awaits(t, "create_user")
 	screen.press("l")
 	screen.awaits(t, "read 1000")
@@ -434,8 +438,33 @@ func TestAnEmptyDatabaseSaysWhatToDo(t *testing.T) {
 	screen := start(t, &fakeDatabase{})
 
 	screen.awaits(t, "No accounts in this database yet")
-	screen.press("tab")
+	screen.press("2")
+	screen.awaits(t, "No rooms in this database")
+	screen.press("3")
 	screen.awaits(t, "The audit log is empty")
+	screen.finish(t)
+}
+
+// The cycle was `1 - tab` while there were two screens, which is an expression
+// with the count welded into it. A third screen is what turns that into a
+// wrong answer rather than a clever one.
+func TestTabCyclesThroughEveryScreenAndBack(t *testing.T) {
+	t.Parallel()
+	screen := start(t, roomsAndAccounts())
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("tab")
+	screen.awaits(t, "8F42A1")
+	screen.press("tab")
+	screen.awaits(t, "create_user")
+	screen.press("tab")
+	screen.awaits(t, "Ana Souza")
+
+	// And backwards, which used to be the same key doing the same thing.
+	screen.press("shift+tab")
+	screen.awaits(t, "create_user")
+	screen.press("shift+tab")
+	screen.awaits(t, "8F42A1")
 	screen.finish(t)
 }
 

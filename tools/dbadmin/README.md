@@ -68,8 +68,23 @@ A terminal program that clears the screen and then says it cannot reach the data
 | `d` | delete, after a confirmation |
 | `/` | filter by username, display name or identifier |
 | `r` | read everything again |
-| `tab` | the other screen |
+| `tab` | the next screen |
 | `q` | quit |
+
+**Rooms** lists every room the database holds, oldest first, which is the order the server's own room list uses.
+
+A room used to be out of scope here, on the grounds that the server made and destroyed one while people were inside it.
+That stopped being true: a room now outlives its last participant and only an administrator ever closes one, so a room is exactly the kind of thing that is still there when every server process is gone.
+
+| Key | |
+| --- | --- |
+| `↑` `↓` | move |
+| `d` | delete, after a confirmation |
+| `/` | filter by room, name or owner |
+| `r` | read everything again |
+
+The owner column shows a username, resolved from the account list the users screen reads.
+A room whose owner has been deleted shows the identifier instead of a blank, because a blank reads like a bug in the column.
 
 **Audit** lists what administrators did, newest first.
 
@@ -90,7 +105,11 @@ A password is stored the way the server's `Authenticator` stores it: scrypt with
 Those parameters are not tunable here.
 A password stored under different ones is not a weaker password, it is a password nobody can log in with, and `TestDerivedKeyMatchesTheServer` pins them against vectors produced by OpenSSL through the call the server makes.
 
-Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user` and `restrict_user`, with the detail naming what actually moved.
+A room is one document of the `rooms` collection: `id`, `name`, `owner_id`, `persistent` and `created_at`.
+Nothing here ever writes one — the server does that when somebody creates a room — and the only change this program makes to that collection is removing a document.
+
+Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user`, `restrict_user` and `delete_room`, with the detail naming what actually moved.
+A `delete_room` entry carries the room in both `target_id` and `room_id`, which is what the server writes for its own: an entry the two programs disagree on is one somebody has to know the origin of before they can read it.
 When the change succeeds and the entry cannot be written, the change stands and the status line says so in the colour of a warning rather than a success.
 Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/security-review.md](../../docs/security-review.md) already states for the server.
 
@@ -134,8 +153,13 @@ It does not create collections or indexes.
 The schema belongs to the server, and a tool pointed at a mistyped database name should leave an empty database empty rather than furnish it.
 Until the server has run once against a database, the unique index on `username` is not there, and a duplicate is refused by the check before the insert rather than by the database.
 
-It does not manage rooms.
-A room is a thing the server creates and destroys while people are inside it.
+It does not create rooms.
+Deleting one is removing a record; creating one is deciding that six characters are free, which is the server's job and needs the live map to answer.
+
+It does not close a room on a running server.
+Deleting the document means the room does not come back at the next start; it does not evict anybody, and the identifier goes on working until that process ends.
+The confirmation screen says so.
+With the server up, close it from the client's admin panel instead, where all of it takes effect at once.
 
 It does not kick anybody out of a room, and it does not mute a microphone that is on right now.
 Both are about a room, and a room is memory in a process this program has no connection to.

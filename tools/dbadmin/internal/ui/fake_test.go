@@ -20,6 +20,7 @@ import (
 type fakeDatabase struct {
 	mutex    sync.Mutex
 	accounts []store.Account
+	rooms    []store.Room
 	entries  []store.AuditEntry
 
 	// Set by a test to make the next change fail. Its own field rather than a
@@ -34,7 +35,11 @@ type fakeDatabase struct {
 	passwords  []string
 	restricted []restrictionCall
 	deleted    []string
-	queries    []store.AuditQuery
+	// Room identifiers this screen asked to delete, kept apart from `deleted`
+	// so that a test can tell a room deletion from an account one rather than
+	// matching on the shape of an identifier.
+	deletedRooms []string
+	queries      []store.AuditQuery
 }
 
 // restrictionCall is one SetRestrictions, kept whole so that a test can say
@@ -59,6 +64,7 @@ func (f *fakeDatabase) Summary(context.Context) (store.Summary, error) {
 	defer f.lock()()
 	summary := store.Summary{
 		Users:        int64(len(f.accounts)),
+		Rooms:        int64(len(f.rooms)),
 		AuditEntries: int64(len(f.entries)),
 	}
 	for _, account := range f.accounts {
@@ -148,6 +154,31 @@ func (f *fakeDatabase) SetRestrictions(
 	return nil
 }
 
+func (f *fakeDatabase) Rooms(context.Context) ([]store.Room, error) {
+	defer f.lock()()
+	if f.failure != nil {
+		return nil, f.failure
+	}
+	return append([]store.Room(nil), f.rooms...), nil
+}
+
+func (f *fakeDatabase) DeleteRoom(_ context.Context, roomID string) error {
+	defer f.lock()()
+	f.deletedRooms = append(f.deletedRooms, roomID)
+	if f.failure != nil {
+		return f.failure
+	}
+	kept := f.rooms[:0]
+	for _, room := range f.rooms {
+		if room.ID != roomID {
+			kept = append(kept, room)
+		}
+	}
+	f.rooms = kept
+	f.append(store.ActionDeleteRoom, roomID, "name=gone")
+	return nil
+}
+
 func (f *fakeDatabase) DeleteAccount(_ context.Context, userID string) error {
 	defer f.lock()()
 	f.deleted = append(f.deleted, userID)
@@ -200,6 +231,25 @@ func twoAccounts() *fakeDatabase {
 			Detail: "username=bruno role=user", TimestampSeconds: now - 60,
 		}},
 	}
+}
+
+// roomsAndAccounts is twoAccounts with rooms in it: one owned by an account
+// that exists, and one whose owner has been deleted out from under it, which
+// is the case the owner column has to say something sensible about.
+func roomsAndAccounts() *fakeDatabase {
+	database := twoAccounts()
+	now := time.Now().Unix()
+	database.rooms = []store.Room{
+		{
+			ID: "8F42A1", Name: "standup", OwnerID: "id-ana",
+			Persistent: true, CreatedAt: now - 3600,
+		},
+		{
+			ID: "9FF0D8", Name: "retro", OwnerID: "id-nobody",
+			Persistent: true, CreatedAt: now - 120,
+		},
+	}
+	return database
 }
 
 var errDatabaseUnreachable = errors.New("could not reach the database")

@@ -24,6 +24,9 @@ var (
 	// ErrLastAdmin refuses the two ways to end up with a system nobody can
 	// administer: deleting the last administrator, and demoting them.
 	ErrLastAdmin = errors.New("the last administrator cannot be removed or demoted")
+
+	// ErrRoomNotFound is a room identifier nothing in the collection matches.
+	ErrRoomNotFound = errors.New("no room with that identifier")
 	// ErrEmptyCredentials matches the server's own refusal.
 	ErrEmptyCredentials = errors.New("username and password must not be empty")
 	// ErrAuditNotWritten wraps the result of an action that happened and was
@@ -67,11 +70,14 @@ type Config struct {
 	Actor Actor
 }
 
-// Store is the users and audit collections of one PartyShare database.
+// Store is the users, rooms and audit collections of one PartyShare database.
 //
-// Deliberately not the rooms collection: this program manages accounts and the
-// record of what was done to them, and a room is a thing the server creates
-// and destroys while people are inside it.
+// The rooms collection used to be deliberately left out, on the grounds that a
+// room was something the server made and destroyed while people were inside
+// it. That stopped being true: a room now outlives its last participant and
+// only an administrator ever closes one, so a room is exactly the kind of
+// thing that is still there when every server process is gone. Which makes it
+// this program's business.
 //
 // The schema belongs to the server. Nothing here creates a collection or an
 // index on purpose, so that pointing this tool at a mistyped database name
@@ -79,6 +85,7 @@ type Config struct {
 type Store struct {
 	client   *mongo.Client
 	users    *mongo.Collection
+	rooms    *mongo.Collection
 	audit    *mongo.Collection
 	actor    Actor
 	timeout  time.Duration
@@ -121,6 +128,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 	return &Store{
 		client:   client,
 		users:    database.Collection("users"),
+		rooms:    database.Collection("rooms"),
 		audit:    database.Collection("audit"),
 		actor:    config.Actor,
 		timeout:  config.Timeout,
@@ -208,11 +216,15 @@ func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	if err != nil {
 		return Summary{}, fmt.Errorf("could not count the administrators: %w", err)
 	}
+	rooms, err := s.rooms.CountDocuments(scopedContext, bson.D{})
+	if err != nil {
+		return Summary{}, fmt.Errorf("could not count the rooms: %w", err)
+	}
 	entries, err := s.audit.CountDocuments(scopedContext, bson.D{})
 	if err != nil {
 		return Summary{}, fmt.Errorf("could not count the audit entries: %w", err)
 	}
-	return Summary{Users: users, Admins: admins, AuditEntries: entries}, nil
+	return Summary{Users: users, Admins: admins, Rooms: rooms, AuditEntries: entries}, nil
 }
 
 // countAdmins is the guard behind ErrLastAdmin.
@@ -586,12 +598,72 @@ func (s *Store) Audit(ctx context.Context, query AuditQuery) ([]AuditEntry, erro
 //
 // The returned error wraps ErrAuditNotWritten and never means the action was
 // undone. The caller shows it as a warning next to a change that stands.
+// Rooms is every room, oldest first, which is the order the server's own room
+// list uses.
+func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
+	scopedContext, cancel := s.scoped(ctx)
+	defer cancel()
+
+	cursor, err := s.rooms.Find(scopedContext, bson.D{},
+		options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
+	if err != nil {
+		return nil, fmt.Errorf("could not list the rooms: %w", err)
+	}
+
+	var rooms []Room
+	if err := cursor.All(scopedContext, &rooms); err != nil {
+		return nil, fmt.Errorf("could not read the rooms: %w", err)
+	}
+	return rooms, nil
+}
+
+// DeleteRoom removes a room from the database.
+//
+// This is not the same as the server's own close, and the difference matters
+// enough to be worth stating: a running server holds its rooms in memory and
+// learns nothing from a document disappearing underneath it. Nobody is
+// evicted, and the room stays usable until that process ends. What this
+// guarantees is the other half — that the room does not come back at the next
+// start. Emptying a database that a server is live against is a thing to do
+// deliberately, and the screen says so before it asks.
+func (s *Store) DeleteRoom(ctx context.Context, roomID string) error {
+	scopedContext, cancel := s.scoped(ctx)
+	defer cancel()
+
+	var room Room
+	err := s.rooms.FindOne(scopedContext, bson.D{{Key: "id", Value: roomID}}).Decode(&room)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return ErrRoomNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("could not read the room: %w", err)
+	}
+
+	result, err := s.rooms.DeleteOne(scopedContext, bson.D{{Key: "id", Value: roomID}})
+	if err != nil {
+		return fmt.Errorf("could not delete the room: %w", err)
+	}
+	if result.DeletedCount == 0 {
+		return ErrRoomNotFound
+	}
+
+	// target_id and room_id are both the room, which is what the server writes
+	// for its own delete_room. An entry the two programs disagree on is an
+	// entry somebody has to know the origin of before they can read it.
+	return s.recordRoom(scopedContext, ActionDeleteRoom, roomID, roomID, "name="+room.Name)
+}
+
 func (s *Store) record(ctx context.Context, action, targetID, detail string) error {
+	return s.recordRoom(ctx, action, targetID, "", detail)
+}
+
+func (s *Store) recordRoom(ctx context.Context, action, targetID, roomID, detail string) error {
 	entry := AuditEntry{
 		ActorID:          s.actor.ID,
 		ActorUsername:    s.actor.Username,
 		Action:           action,
 		TargetID:         targetID,
+		RoomID:           roomID,
 		Detail:           detail,
 		TimestampSeconds: time.Now().Unix(),
 	}

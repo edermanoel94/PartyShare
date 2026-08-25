@@ -36,6 +36,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which halves of the repository moved, so that a change to one of them does
+  # not spend the other one's minutes.
+  #
+  # The Go module under tools/dbadmin builds, lints and tests entirely on its
+  # own: nothing in the C++ pipeline compiles a line of it, and nothing in it
+  # reads a line of C++. A commit that only touches it was costing fifteen
+  # minutes of Windows, nine of static analysis and six of MongoDB to prove
+  # something none of them can see.
+  #
+  # A gate job rather than a second `paths-ignore`, which is per workflow and
+  # would take the Go job down with the rest. The trade the filter at the top
+  # of this file warns about does not apply here, for the opposite reason: a
+  # job skipped by `if` reports itself as skipped, where a run that never
+  # starts reports nothing at all. This is the shape that could survive the
+  # branch becoming protected.
+  #
+  # Everything below fails towards running. An unrecognised event, a diff that
+  # does not resolve, a branch with no previous commit: all of them run the
+  # whole pipeline. A wrong "run" costs minutes and a wrong "skip" hides a
+  # break, and those are not the same mistake.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    outputs:
+      cpp: ${{ steps.what.outputs.cpp }}
+      go: ${{ steps.what.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff needs both ends of it, and the default checkout has the
+          # tip with nothing behind it to compare against.
+          fetch-depth: 0
+
+      - name: Work out what moved
+        id: what
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          everything() {
+            echo "cpp=true" >> "$GITHUB_OUTPUT"
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "running everything: $1"
+            exit 0
+          }
+
+          case "$EVENT" in
+            pull_request)
+              range="origin/$BASE_REF...HEAD"
+              ;;
+            push)
+              # Forty zeroes on the first push of a branch: there is no earlier
+              # commit for the diff to start from.
+              if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                everything "a branch with no previous commit"
+              fi
+              range="$BEFORE..HEAD"
+              ;;
+            *)
+              everything "$EVENT is somebody asking for the pipeline"
+              ;;
+          esac
+
+          changed=$(git diff --name-only "$range") || everything "the diff did not resolve"
+          if [ -z "$changed" ]; then
+            everything "nothing resolved as changed"
+          fi
+          echo "changed:"
+          echo "$changed"
+
+          # Anything outside the Go module can reach the C++ build, this file
+          # included: a change to the pipeline has to be run to be trusted.
+          if printf '%s\n' "$changed" | grep -qv '^tools/dbadmin/'; then
+            echo "cpp=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cpp=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # The Go job runs for its own module, and for a change to the
+          # workflow that runs it.
+          if printf '%s\n' "$changed" | grep -qE '^(tools/dbadmin/|[.]github/)'; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
   format:
     name: Format
     runs-on: ubuntu-24.04
@@ -75,6 +163,8 @@ jobs:
   dbadmin:
     name: Database tool
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     services:
       mongo:
         image: mongo:7
@@ -132,6 +222,8 @@ jobs:
   packaging:
     name: Packaging
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -217,6 +309,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -311,6 +405,8 @@ jobs:
   sanitizers:
     name: Sanitizers
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -360,6 +456,8 @@ jobs:
   mongo:
     name: MongoDB persistence
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     services:
       mongo:
         image: mongo:7
@@ -436,6 +534,8 @@ jobs:
   static-analysis:
     name: Static analysis
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     steps:
       - uses: actions/checkout@v4
 

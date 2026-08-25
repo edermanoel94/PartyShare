@@ -24,6 +24,7 @@ type Database interface {
 
 	Accounts(ctx context.Context) ([]store.Account, error)
 	Summary(ctx context.Context) (store.Summary, error)
+	Rooms(ctx context.Context) ([]store.Room, error)
 	Audit(ctx context.Context, query store.AuditQuery) ([]store.AuditEntry, error)
 
 	CreateAccount(ctx context.Context, spec store.NewAccount) (store.Account, error)
@@ -31,6 +32,7 @@ type Database interface {
 	SetPassword(ctx context.Context, userID, password string) error
 	SetRestrictions(ctx context.Context, userID string, restrictions store.Restrictions) error
 	DeleteAccount(ctx context.Context, userID string) error
+	DeleteRoom(ctx context.Context, roomID string) error
 }
 
 // The store is the implementation this program ships with. Checked here, at

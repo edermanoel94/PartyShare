@@ -334,7 +334,13 @@ macOS is still unmeasured. Nothing here says which of the two shapes it will hav
 - [x] Spike running on Windows x64, see [webrtc-validation.md](webrtc-validation.md).
       One monitor enumerated, a real 1920x1080 frame captured, six audio devices listed, and `dv::shared`
       linked and interoperating. It also found a missing `dwmapi` in this file's own Windows library list.
-- [ ] Spike running on macOS ARM64.
+- [x] Media layer running on macOS ARM64, which answers the spike's question and more.
+      22 of the 25 media tests pass, one skips because `scripts/virtual_audio.sh` is Linux, and two
+      fail on the audio device rather than on transport: turning the echo canceller off leaves
+      `echo_cancellation_active` true, because the canceller on macOS is not the one that setting
+      reaches, and switching the microphone takes 2.4 s to resume audio against a 500 ms budget,
+      which is what re-opening a CoreAudio input costs.
+      Getting there needed the libsrtp collision in entry 3 of [postmortems.md](postmortems.md).
 - [x] Media layer running on Windows x64, over a source build.
       All 25 media tests pass. The one that did not, `TheEchoCancellerRunsOnTheCapturedAudio`,
       was reporting a real difference and not a defect: Windows has an echo canceller of its

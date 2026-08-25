@@ -74,7 +74,7 @@ AdminPanel::AdminPanel(client::app::CallSession& session, QWidget* parent)
   auto* outer = new QVBoxLayout(this);
 
   auto* header = new QHBoxLayout();
-  auto* title = new QLabel(QStringLiteral("Administration"), this);
+  auto* title = new QLabel(QStringLiteral("Admin"), this);
   QFont bold = title->font();
   bold.setBold(true);
   title->setFont(bold);

@@ -5,8 +5,10 @@
 // server. That is what proves the two halves agree, rather than each half
 // agreeing with the test's idea of the protocol.
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -14,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -85,6 +88,38 @@ class Recorder {
       }
       return false;
     });
+  }
+
+  /// Waits until `state` has been published at least `times` over.
+  ///
+  /// The count is what separates "it is going to retry" from "it has retried",
+  /// and an assertion about where a retry went is worth nothing against the
+  /// first of those.
+  [[nodiscard]] bool wait_for_states(SignalingClient::State state, std::size_t times,
+                                     std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, timeout, [&] {
+      return static_cast<std::size_t>(std::count_if(
+                 states_.begin(), states_.end(),
+                 [state](const auto& entry) { return entry.first == state; })) >= times;
+    });
+  }
+
+  /// Every detail published alongside `state`, in the order they arrived.
+  ///
+  /// The address is what this client publishes as the detail of Connecting and
+  /// Connected, which makes it the only way from outside to see *which* server
+  /// an attempt went to. That is the whole question in the two set_url tests
+  /// below, and a state on its own cannot answer it.
+  [[nodiscard]] std::vector<std::string> details(SignalingClient::State state) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> found;
+    for (const auto& entry : states_) {
+      if (entry.first == state) {
+        found.push_back(entry.second);
+      }
+    }
+    return found;
   }
 
  private:
@@ -163,6 +198,113 @@ TEST_F(SignalingClientTest, RejectsAUrlThatIsNotWebSocket) {
   ASSERT_FALSE(connected.ok());
   EXPECT_EQ(connected.error().code, "invalid_value");
   EXPECT_EQ(client.state(), SignalingClient::State::Disconnected);
+}
+
+TEST_F(SignalingClientTest, AnAddressChangedBeforeConnectingIsTheOneUsed) {
+  // The settings dialog is reachable from the login screen, and this is what
+  // it is reachable for: a client whose configured address is wrong has to be
+  // able to be pointed somewhere else without the program being restarted.
+  Recorder& recorder = new_recorder();
+  SignalingClient client(SignalingClient::Options{"ws://127.0.0.1:1"});
+  recorder.attach(client);
+
+  client.set_url(url());
+  EXPECT_EQ(client.url(), url());
+
+  ASSERT_TRUE(client.connect().ok());
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
+  EXPECT_TRUE(client.is_connected());
+}
+
+TEST_F(SignalingClientTest, AnAddressChangedMidCallIsNotAdoptedByAReconnection) {
+  // The half that matters. A socket that drops has to come back on the server
+  // the call was placed on: the room, and everybody in it, exist only there.
+  // Without this, changing the address in the settings dialog would move a
+  // running call at the first hiccup, to a server that has never heard of it.
+  Recorder& recorder = new_recorder();
+  SignalingClient::Options options;
+  options.url = url();
+  options.reconnect_initial_delay = 50ms;
+  SignalingClient client(options);
+  recorder.attach(client);
+
+  const std::string original = url();
+  ASSERT_TRUE(client.connect().ok());
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
+
+  // Somebody opens settings during the call and types a different server.
+  client.set_url("ws://127.0.0.1:1");
+  EXPECT_EQ(client.url(), "ws://127.0.0.1:1");
+  EXPECT_TRUE(client.is_connected()) << "changing the address must not touch the open socket";
+
+  // The server goes away, which is what sets the client retrying on its own.
+  // stop() is idempotent, so the fixture's own teardown is unaffected.
+  server_->stop();
+
+  // A second Connecting, and not merely a Reconnecting. Reconnecting says a
+  // retry is scheduled; the assertion below is about where one *went*, and
+  // against a retry that never happened it would pass over an empty list -
+  // which is the failure mode this whole suite exists to avoid.
+  ASSERT_TRUE(recorder.wait_for_states(SignalingClient::State::Connecting, 2, kGiveUpTimeout));
+
+  client.disconnect();
+  for (const std::string& attempted : recorder.details(SignalingClient::State::Connecting)) {
+    EXPECT_EQ(attempted, original) << "a retry went to the address typed during the call";
+  }
+}
+
+TEST_F(SignalingClientTest, MeasuresTheRoundTripToTheServerBeforeSigningIn) {
+  // Before authenticating on purpose. This measurement is what the network
+  // indicator shows outside a call, and the login screen is one of the places
+  // it has to answer on. Section 4.1 of docs/protocol.md exempts the heartbeat
+  // from the authentication gate, which is what makes that possible.
+  Recorder& recorder = new_recorder();
+  SignalingClient client(SignalingClient::Options{url()});
+  recorder.attach(client);
+
+  ASSERT_TRUE(client.connect().ok());
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
+  EXPECT_FALSE(client.round_trip().has_value()) << "nothing has been measured yet";
+
+  ASSERT_TRUE(client.probe().ok());
+
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (!client.round_trip() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(5ms);
+  }
+  const auto measured = client.round_trip();
+  ASSERT_TRUE(measured.has_value()) << "the server did not answer the probe";
+  EXPECT_LT(*measured, kTimeout) << "a loopback round trip taking seconds is not a measurement";
+}
+
+TEST_F(SignalingClientTest, TheRoundTripDiesWithTheConnectionItDescribes) {
+  // The whole reason the measurement is an optional. A number left behind by a
+  // connection that no longer exists is worse than no number, because it is
+  // indistinguishable from a live one - which is how a lobby screen comes to
+  // report a healthy link to a server that has gone.
+  Recorder& recorder = new_recorder();
+  SignalingClient::Options options;
+  options.url = url();
+  options.auto_reconnect = false;
+  SignalingClient client(options);
+  recorder.attach(client);
+
+  ASSERT_TRUE(client.connect().ok());
+  ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
+  ASSERT_TRUE(client.probe().ok());
+
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (!client.round_trip() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(5ms);
+  }
+  ASSERT_TRUE(client.round_trip().has_value()) << "nothing was measured, so nothing is proved";
+
+  client.disconnect();
+  EXPECT_FALSE(client.round_trip().has_value());
+
+  const auto probed = client.probe();
+  EXPECT_FALSE(probed.ok());
+  EXPECT_EQ(probed.error().code, "not_connected");
 }
 
 TEST_F(SignalingClientTest, RefusesToSendBeforeConnecting) {

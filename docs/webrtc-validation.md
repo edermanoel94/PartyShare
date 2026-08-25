@@ -8,7 +8,7 @@ What remains to be validated is listed in section 6 of [webrtc-toolchain.md](web
 | Question | Where |
 | --- | --- |
 | ~~Does libwebrtc link and run on Windows x64?~~ | Answered: yes, section 5.1 |
-| Does libwebrtc link and run on macOS ARM64? | A macOS machine |
+| ~~Does libwebrtc link and run on macOS ARM64?~~ | Answered: yes, the media layer builds and runs there |
 | Does capture work on Wayland, and not only on X11? | Linux with a Wayland session |
 | Does `std::string` cross the libwebrtc boundary intact? | Windows and macOS |
 
@@ -156,9 +156,11 @@ About that last line, the symptom of the conflict differs by platform:
   The real validation on Linux is over the tree `scripts/build_webrtc.sh` produces, and it has been done: the spike passes over it with `dv::shared` linked.
 - On **Windows** the spike links `dv::shared` directly, and the answer is in: the conflict is **not** there.
   The package carries no `std::__Cr::` symbol, and the line reads `dv::shared linked and interoperating`.
-- On **macOS** the spike tries the same thing and nobody has run it yet.
-  If the conflict exists there, it **does not compile**: the link fails with `std::__Cr::` symbols.
-  That failure is precisely the result we need to know, so send the output rather than trying to work around it.
+- On **macOS** the conflict is not there either, and the answer came from further along than the spike:
+  the media layer itself builds and runs over a source build, so `std::string` crosses the boundary in
+  anger rather than in a probe.
+  If it ever comes back on a new package, it **does not compile**: the link fails with `std::__Cr::` symbols.
+  That failure is precisely the result we need to know, so send the output rather than working around it.
 
 ## 7. If it fails
 

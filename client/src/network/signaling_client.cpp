@@ -54,7 +54,8 @@ std::chrono::milliseconds reconnect_delay(int attempt, const SignalingClient::Op
   return std::min(delay, options.reconnect_max_delay);
 }
 
-SignalingClient::SignalingClient(Options options) : options_(std::move(options)) {}
+SignalingClient::SignalingClient(Options options)
+    : options_(std::move(options)), url_(options_.url), next_url_(options_.url) {}
 
 SignalingClient::~SignalingClient() {
   disconnect();
@@ -86,21 +87,70 @@ void SignalingClient::on_state(StateHandler handler) {
   state_handler_ = std::move(handler);
 }
 
-Result<std::monostate> SignalingClient::connect() {
-  if (options_.url.empty()) {
-    return Result<std::monostate>::failure("invalid_value", "the signaling URL is empty");
-  }
-  if (!options_.url.starts_with("ws://") && !options_.url.starts_with("wss://")) {
-    return Result<std::monostate>::failure(
-        "invalid_value", "the signaling URL must start with ws:// or wss://: " + options_.url);
-  }
+void SignalingClient::set_url(std::string url) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  next_url_ = std::move(url);
+}
 
+std::string SignalingClient::url() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return next_url_;
+}
+
+Result<std::monostate> SignalingClient::probe() {
+  std::string nonce;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!socket_) {
+      return Result<std::monostate>::failure("not_connected", "there is no signaling connection");
+    }
+    // Stamped before the send rather than after it, so that whatever queueing
+    // the send itself costs is counted. It is part of the round trip a message
+    // of ours actually takes, and leaving it out would flatter the number.
+    nonce = "probe-" + std::to_string(++probes_sent_);
+    probe_nonce_ = nonce;
+    probe_sent_at_ = std::chrono::steady_clock::now();
+  }
+  return send(protocol::Ping{nonce});
+}
+
+std::optional<std::chrono::milliseconds> SignalingClient::round_trip() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return round_trip_;
+}
+
+void SignalingClient::forget_round_trip() {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  probe_nonce_.clear();
+  round_trip_.reset();
+}
+
+Result<std::monostate> SignalingClient::connect() {
+  std::string url;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (socket_) {
       return Result<std::monostate>::failure("already_connected",
                                              "disconnect() before connecting again");
     }
+    url = next_url_;
+  }
+
+  if (url.empty()) {
+    return Result<std::monostate>::failure("invalid_value", "the signaling URL is empty");
+  }
+  if (!url.starts_with("ws://") && !url.starts_with("wss://")) {
+    return Result<std::monostate>::failure(
+        "invalid_value", "the signaling URL must start with ws:// or wss://: " + url);
+  }
+
+  {
+    // Adopted here and nowhere else, which is what makes set_url mean "from
+    // the next sign-in". A reconnection reads url_ and so goes on knocking at
+    // the server the call was placed on. Refused addresses above never get
+    // this far, so a typo cannot leave the client pointed at nothing.
+    const std::lock_guard<std::mutex> lock(mutex_);
+    url_ = url;
   }
 
   {
@@ -117,19 +167,31 @@ Result<std::monostate> SignalingClient::connect() {
 
 Result<std::monostate> SignalingClient::open_socket() {
   auto socket = std::make_shared<rtc::WebSocket>();
+
+  // Read once, here, and carried into the callbacks by value. The address can
+  // be changed from the interface while this socket is up, and every line
+  // below is about *this* attempt: a state that named the address somebody has
+  // just typed, over a connection to a different server, would be a lie in the
+  // one place a person goes to find out where they are connected.
+  std::string url;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     socket_ = socket;
+    url = url_;
+    // A new socket starts with nothing measured on it, including on a retry,
+    // where the previous one's number would otherwise survive the gap.
+    probe_nonce_.clear();
+    round_trip_.reset();
   }
 
   // Outside the lock, because publishing a state runs the interface's handler
   // and that handler is free to call back into this client.
-  set_state(State::Connecting, options_.url);
+  set_state(State::Connecting, url);
 
   // The callbacks outlive this call and run on libdatachannel's threads.
   // Capturing `this` is safe because the destructor closes the socket and
   // clears the handlers before any member goes away.
-  socket->onOpen([this] {
+  socket->onOpen([this, url] {
     {
       const std::lock_guard<std::mutex> lock(retry_mutex_);
       if (attempts_ > 0) {
@@ -139,7 +201,7 @@ Result<std::monostate> SignalingClient::open_socket() {
       // lasted is evidence that the trouble is over.
       attempts_ = 0;
     }
-    set_state(State::Connected, options_.url);
+    set_state(State::Connected, url);
   });
 
   socket->onClosed([this] { handle_drop("the connection was closed by the peer"); });
@@ -154,7 +216,7 @@ Result<std::monostate> SignalingClient::open_socket() {
     handle_payload(std::get<std::string>(data));
   });
 
-  socket->open(normalize_url(options_.url));
+  socket->open(normalize_url(url));
   return std::monostate{};
 }
 
@@ -164,6 +226,11 @@ void SignalingClient::handle_drop(const std::string& detail) {
   if (state_.load() == State::Disconnected) {
     return;
   }
+
+  // Before the retry is even scheduled. Whoever asks between the drop and the
+  // next socket has to be told there is no measurement, not handed the one
+  // from the connection that has just gone.
+  forget_round_trip();
 
   bool retry = false;
   std::chrono::milliseconds wait{0};
@@ -236,6 +303,8 @@ void SignalingClient::disconnect() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     socket.swap(socket_);
+    probe_nonce_.clear();
+    round_trip_.reset();
   }
   if (!socket) {
     set_state(State::Disconnected, "closed by the client");
@@ -300,6 +369,20 @@ void SignalingClient::handle_payload(const std::string& payload) {
     }
     pings_answered_.fetch_add(1);
     return;
+  }
+
+  // A pong answering a probe of ours is a measurement, not a message: nothing
+  // above this layer asked for it and nothing above it knows what to do with
+  // it. One that does not match is somebody else's, or ours from a connection
+  // that has since dropped, and is dropped rather than timed.
+  if (const auto* pong = std::get_if<protocol::Pong>(&message)) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!probe_nonce_.empty() && pong->nonce == probe_nonce_) {
+      round_trip_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - probe_sent_at_);
+      probe_nonce_.clear();
+      return;
+    }
   }
 
   MessageHandler handler;

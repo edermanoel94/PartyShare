@@ -14,6 +14,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -71,6 +72,15 @@ void fill_devices(QComboBox* box, const Result<std::vector<client::media::AudioD
   box->setCurrentIndex(index < 0 ? 0 : index);
 }
 
+/// Makes a widget pick up a change to a property the stylesheet selects on.
+///
+/// A property is not a repaint: the widget goes on being drawn the way it was
+/// until it is asked to work its style out again.
+void restyle_for_property(QWidget* widget) {
+  widget->style()->unpolish(widget);
+  widget->style()->polish(widget);
+}
+
 }  // namespace
 
 SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* parent)
@@ -79,6 +89,20 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   setMinimumWidth(520);
 
   auto* layout = new QVBoxLayout(this);
+
+  // First, above the devices, because it is the only row here that has to be
+  // right before anything else works. A microphone chosen against the wrong
+  // server is a microphone in a call that never happens.
+  auto* connection = new QGroupBox(QStringLiteral("Connection"), this);
+  auto* connection_form = new QFormLayout(connection);
+  signaling_url_ = new QLineEdit(connection);
+  signaling_url_->setPlaceholderText(QStringLiteral("ws://127.0.0.1:8080"));
+  signaling_url_->setText(QString::fromStdString(session_.signaling_url()));
+  signaling_hint_ = new QLabel(QString{}, connection);
+  signaling_hint_->setWordWrap(true);
+  signaling_hint_->setProperty("hint", true);
+  connection_form->addRow(QStringLiteral("Server"), signaling_url_);
+  connection_form->addRow(signaling_hint_);
 
   auto* audio = new QGroupBox(QStringLiteral("Audio"), this);
   auto* audio_form = new QFormLayout(audio);
@@ -162,8 +186,10 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // sentence and the value column is as wide as a spin box.
   video_form->addRow(quality_hint_);
 
-  auto* note =
-      new QLabel(QStringLiteral("Changes take effect immediately, including during a call."), this);
+  auto* note = new QLabel(
+      QStringLiteral("Changes take effect immediately, including during a call. The server "
+                     "above is the exception, for the reason written beside it."),
+      this);
   note->setProperty("hint", true);
 
   // At the bottom rather than under the audio rows, because the bitrate is kept
@@ -193,12 +219,14 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // and the window's own close box all arrive at done() by the same route.
   connect(close, &QPushButton::clicked, this, &QDialog::reject);
 
+  layout->addWidget(connection);
   layout->addWidget(audio);
   layout->addWidget(video);
   layout->addWidget(note);
   layout->addWidget(storage_);
   layout->addWidget(buttons);
 
+  show_signaling_hint();
   load_devices();
   load_monitors();
   load_quality();
@@ -224,6 +252,15 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
 
   // Connected after the initial values are in, so that filling the widgets
   // does not look like the user changing something.
+  //
+  // editingFinished and not textChanged, for the reason the spin boxes have
+  // keyboard tracking off: typing ws://192.168.1.10:8080 one character at a
+  // time would announce forty addresses, thirty-nine of them refused, and the
+  // row would spend the whole time red at somebody who is typing correctly.
+  // It fires on Enter and on losing the focus, and clicking Save takes the
+  // focus, so a typed address is never left behind by the button.
+  connect(signaling_url_, &QLineEdit::editingFinished, this,
+          &SettingsDialog::on_signaling_url_changed);
   connect(input_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_input_changed);
   connect(output_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_output_changed);
   // valueChanged and not editingFinished, which only fires when the box gives
@@ -239,6 +276,60 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
   connect(screen_audio_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_screen_audio_changed);
+}
+
+void SettingsDialog::show_signaling_hint(const QString& refusal) {
+  signaling_hint_->setProperty("error", !refusal.isEmpty());
+  signaling_hint_->setText(
+      refusal.isEmpty()
+          ? QStringLiteral(
+                "Where the next sign-in connects. A call already running stays on the server it "
+                "was placed on, so this never interrupts one - and it does not need PartyShare "
+                "restarted either: leave the room and sign in again.")
+          : refusal);
+  restyle_for_property(signaling_hint_);
+}
+
+void SettingsDialog::on_signaling_url_changed() {
+  const QString typed = signaling_url_->text().trimmed();
+
+  // Refused here, in front of whoever typed it, and not left for the sign-in
+  // or for the file. dv::config::validate refuses the same two things when
+  // config.ini is written, and a refusal that arrives after this dialog has
+  // been closed is a refusal nobody reads.
+  if (typed.isEmpty()) {
+    show_signaling_hint(
+        QStringLiteral("A server address is needed, so this one was not applied. The last one is "
+                       "still in use."));
+    return;
+  }
+  if (!typed.startsWith(QStringLiteral("ws://")) && !typed.startsWith(QStringLiteral("wss://"))) {
+    show_signaling_hint(
+        QStringLiteral("A server address starts with ws:// or wss://, so this one was not "
+                       "applied. The last one is still in use."));
+    return;
+  }
+
+  // Put back trimmed, so that what is on screen is what was applied. A space
+  // on the end is invisible and would otherwise travel into config.ini and
+  // come back as a server nobody can reach.
+  if (typed != signaling_url_->text()) {
+    const QSignalBlocker quiet(signaling_url_);
+    signaling_url_->setText(typed);
+  }
+
+  // editingFinished also fires on merely tabbing through the field. Staging a
+  // value identical to the one in use would light the Save button up over
+  // nothing to write, and the button is this dialog's only word for whether
+  // anything is outstanding.
+  if (typed.toStdString() == session_.signaling_url()) {
+    show_signaling_hint();
+    return;
+  }
+
+  session_.set_signaling_url(typed.toStdString());
+  stage({{.section = "network", .key = "signaling_url", .value = typed.toStdString()}});
+  show_signaling_hint();
 }
 
 void SettingsDialog::load_audio_sources() {
@@ -304,9 +395,9 @@ void SettingsDialog::show_storage() {
   if (file.empty()) {
     save_->setEnabled(false);
     storage_->setText(
-        QStringLiteral("This system does not say where settings belong, so the devices, the "
-                       "bitrate and the screen quality chosen here last only until the program "
-                       "closes."));
+        QStringLiteral("This system does not say where settings belong, so the server, the "
+                       "devices, the bitrate and the screen quality chosen here last only until "
+                       "the program closes."));
     restyle();
     return;
   }
@@ -319,7 +410,8 @@ void SettingsDialog::show_storage() {
   const QString where = QString::fromStdString(file.string());
   if (pending_.empty()) {
     storage_->setText(
-        QStringLiteral("The devices, the bitrate and the screen quality are kept in %1")
+        QStringLiteral("The server, the devices, the bitrate and the screen quality are kept "
+                       "in %1")
             .arg(where));
   } else if (pending_.size() == 1) {
     storage_->setText(
@@ -335,10 +427,7 @@ void SettingsDialog::show_storage() {
 }
 
 void SettingsDialog::restyle() {
-  // A property a stylesheet selects on only changes what is drawn once the
-  // widget is asked to work out its style again.
-  storage_->style()->unpolish(storage_);
-  storage_->style()->polish(storage_);
+  restyle_for_property(storage_);
 }
 
 void SettingsDialog::load_monitors() {

@@ -12,6 +12,7 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QSpinBox;
 
@@ -26,6 +27,14 @@ namespace dv::ui {
 /// Changes apply as they are made rather than on closing: a microphone that
 /// only takes effect after a dialog is dismissed cannot be tested by speaking
 /// into it.
+///
+/// The server address is the one exception, and it is not one of degree. Every
+/// other setting here describes how this machine behaves, and can be changed
+/// under a running call without the call noticing. The address says which
+/// server the room and everybody in it live on, so applying it at once would
+/// not be a setting taking effect, it would be hanging up. It is adopted at the
+/// next sign-in instead, and the row says so rather than leaving somebody to
+/// wonder whether it took.
 ///
 /// Keeping them is a separate act, and that is what the Save button is for.
 /// The two used to be one - every change went straight into this user's
@@ -55,6 +64,7 @@ class SettingsDialog : public QDialog {
   void done(int result) override;
 
  private slots:
+  void on_signaling_url_changed();
   void on_input_changed(int index);
   void on_output_changed(int index);
   void on_bitrate_changed();
@@ -139,7 +149,18 @@ class SettingsDialog : public QDialog {
   /// Makes the storage line pick up a change to its `error` property.
   void restyle();
 
+  /// Says what the address on the row will and will not do, and why one was
+  /// refused. Never empty: a row with nothing under it reads as a setting that
+  /// behaves like the others on this page, and this one does not.
+  void show_signaling_hint(const QString& refusal = {});
+
   client::app::CallSession& session_;
+
+  /// Where the next sign-in connects. A line edit and not a box of choices,
+  /// because the address of a server nobody has connected to yet cannot be
+  /// offered as one.
+  QLineEdit* signaling_url_ = nullptr;
+  QLabel* signaling_hint_ = nullptr;
 
   QComboBox* input_ = nullptr;
   QComboBox* output_ = nullptr;

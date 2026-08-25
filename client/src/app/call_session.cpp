@@ -84,7 +84,10 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
     pending_password_ = password;
   }
 
-  set_state(State::Connecting, options_.signaling_url);
+  // signaling_.url() and not options_.signaling_url: the address can have been
+  // changed in the settings dialog since this session was built, and this line
+  // is what the status bar shows while the connection is being made.
+  set_state(State::Connecting, signaling_.url());
 
   // A second attempt on a socket that is already up is a retry after a refused
   // password, not a second connection. The server does not close the socket
@@ -560,6 +563,18 @@ std::string CallSession::output_device() const {
   return options_.media.output_device;
 }
 
+// Both of these go straight through to the signaling client, which owns the
+// answer. `options_.signaling_url` is the address this session was built with
+// and stays that way: a second copy kept in step by hand is how a getter comes
+// to disagree with the socket it describes.
+std::string CallSession::signaling_url() const {
+  return signaling_.url();
+}
+
+void CallSession::set_signaling_url(std::string url) {
+  signaling_.set_url(std::move(url));
+}
+
 void CallSession::disconnect() {
   if (running_.exchange(false) && metrics_thread_.joinable()) {
     metrics_thread_.join();
@@ -571,6 +586,12 @@ void CallSession::disconnect() {
     session.swap(audio_);
     participants_.clear();
     room_id_.clear();
+    // The identity goes with the connection, because that is where it came
+    // from: the server established it, and there is no server here any more.
+    // Leaving it behind is what would let the interface show a signed-in home
+    // screen over nothing at all - it decides which page to show by asking
+    // whether anybody is signed in.
+    local_user_ = {};
   }
   if (session) {
     session->close();
@@ -1351,6 +1372,24 @@ void CallSession::metrics_loop() {
       session = audio_;
       callbacks = callbacks_;
     }
+
+    // The link first, and before the media session is checked, because this
+    // half is the half that has to keep going when there is no call. This
+    // thread runs from the moment somebody signs in, not from the moment a
+    // call starts, which is what makes it the right clock for it.
+    //
+    // Reported before the new probe is sent, so what goes out is a round trip
+    // that has actually come back. The first report of a connection therefore
+    // carries nothing, and the one after it carries a number: waiting here for
+    // a reply would be blocking a timer thread on the network it is measuring.
+    if (callbacks.on_link) {
+      callbacks.on_link(LinkStats{.round_trip = signaling_.round_trip()});
+    }
+    // A failure here is not worth a line in the log every five seconds. It
+    // means the socket is down, which the state callback has already said in
+    // the words the interface actually shows.
+    (void)signaling_.probe();
+
     if (!session) {
       continue;
     }

@@ -58,6 +58,30 @@ constexpr const char* kAudioLevelExtensionUri = "urn:ietf:params:rtp-hdrext:ssrc
 /// H.264 RTP runs on a 90 kHz clock, which is what every video profile uses.
 constexpr int kVideoClockRate = 90000;
 
+/// The name of a peer connection state, for the log.
+///
+/// libdatachannel has an ostream operator for these, but reaching it from a
+/// format string means pulling in fmt's ostream support to spell six words.
+/// The raw enum value is worse than useless in a log: it reads as a number
+/// nobody can resolve without the header open next to them.
+[[nodiscard]] const char* state_name(rtc::PeerConnection::State state) {
+  switch (state) {
+    case rtc::PeerConnection::State::New:
+      return "new";
+    case rtc::PeerConnection::State::Connecting:
+      return "connecting";
+    case rtc::PeerConnection::State::Connected:
+      return "connected";
+    case rtc::PeerConnection::State::Disconnected:
+      return "disconnected";
+    case rtc::PeerConnection::State::Failed:
+      return "failed";
+    case rtc::PeerConnection::State::Closed:
+      return "closed";
+  }
+  return "unknown";
+}
+
 [[nodiscard]] rtc::Configuration make_configuration(const MediaRouter::Options& options) {
   rtc::Configuration configuration;
   for (const std::string& server : options.ice_servers) {
@@ -168,10 +192,34 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
                                             .sdp_mline_index = 0});
   });
 
-  // maybe_unused because the only use of `state` is the debug log below, and
-  // SPDLOG_DEBUG compiles to nothing in a release build.
-  session.connection->onStateChange([user_id]([[maybe_unused]] rtc::PeerConnection::State state) {
-    DV_LOG_DEBUG("SFU: connection of {} is now {}", user_id, static_cast<int>(state));
+  // Only the states that say something, and each at the level that says it.
+  //
+  // All of this was at debug, and a release build compiles debug out
+  // (SPDLOG_ACTIVE_LEVEL in shared/CMakeLists.txt), so a connection that died
+  // left no trace whatsoever in the only builds anybody runs. What was left
+  // over was the symptom further down: a rejected remote candidate, which
+  // reads like a signaling bug and is not one.
+  //
+  // Connected stays at info because joining a room and having media are two
+  // different moments, and only the first one was logged. The rest stay at
+  // debug: a room of five is five sessions, and every transition of each of
+  // them is noise in a log an operator has to read.
+  session.connection->onStateChange([user_id](rtc::PeerConnection::State state) {
+    switch (state) {
+      case rtc::PeerConnection::State::Connected:
+        DV_LOG_INFO("SFU: the connection of {} is {}", user_id, state_name(state));
+        break;
+      case rtc::PeerConnection::State::Disconnected:
+        DV_LOG_WARN("SFU: the connection of {} is {}", user_id, state_name(state));
+        break;
+      case rtc::PeerConnection::State::Failed:
+        DV_LOG_ERROR("SFU: the connection of {} is {}, no media will reach them again", user_id,
+                     state_name(state));
+        break;
+      default:
+        DV_LOG_DEBUG("SFU: the connection of {} is {}", user_id, state_name(state));
+        break;
+    }
   });
 
   session.connection->onSignalingStateChange(

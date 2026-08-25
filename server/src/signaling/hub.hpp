@@ -232,6 +232,11 @@ class Hub {
   /// decision being undone by a message that said nothing about it.
   void enforce(std::vector<Outgoing>& out, const models::User& actor, const models::User& target,
                const models::Restrictions& before, const std::string& reason);
+
+  /// Sends the current room list to every authenticated connection, so that
+  /// a room appearing or being closed reaches clients that did not cause it.
+  void broadcast_room_list(std::vector<Outgoing>& out) const;
+
   void handle_list_users(std::vector<Outgoing>& out, Connection& connection);
   void handle_create_user(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::CreateUser& message);

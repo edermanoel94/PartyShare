@@ -50,17 +50,16 @@ void RoomManager::forget(const std::string& room_id) const {
   }
 }
 
-Result<std::string> RoomManager::create_room(std::string name, std::string owner_id,
-                                             bool persistent) {
+Result<std::string> RoomManager::create_room(std::string name, std::string owner_id) {
   for (int attempt = 0; attempt < kMaxIdAttempts; ++attempt) {
     std::string id = generate_room_id();
     if (rooms_.contains(id)) {
       continue;
     }
-    // The store is consulted too, not only the live map. A persistent room
-    // that nobody is in right now still owns its identifier, and handing the
-    // same one out twice would put two sets of people in what they both
-    // believe is their own room.
+    // The store is consulted too, not only the live map. A room that nobody is
+    // in right now still owns its identifier, and handing the same one out
+    // twice would put two sets of people in what they both believe is their
+    // own room.
     if (options_.store != nullptr && options_.store->find(id).has_value()) {
       continue;
     }
@@ -69,12 +68,17 @@ Result<std::string> RoomManager::create_room(std::string name, std::string owner
     room.id = id;
     room.name = std::move(name);
     room.owner_id = std::move(owner_id);
-    room.persistent = persistent;
+    room.persistent = true;
 
-    if (persistent && options_.store != nullptr) {
-      // Written before the room is live. A room that exists in memory but not
-      // in the database is one that disappears at the next restart, which is
-      // the one promise a persistent room makes.
+    if (options_.store != nullptr) {
+      // Written before the room is live, and written for every room now. A
+      // room that exists in memory but not in the database is one that
+      // disappears at the next restart, and there is no longer a kind of room
+      // that is allowed to.
+      //
+      // A failure here fails the creation instead of carrying on. The caller
+      // asked for a room that survives, and one that exists only in this
+      // process is not it: better to say so now than at the next restart.
       if (auto failure = options_.store->upsert(store::RoomRecord{
               .id = room.id, .name = room.name, .owner_id = room.owner_id, .persistent = true})) {
         return Result<std::string>::failure(*failure);
@@ -87,14 +91,17 @@ Result<std::string> RoomManager::create_room(std::string name, std::string owner
   return Result<std::string>::failure("room_id_exhausted", "could not find a free room identifier");
 }
 
-std::size_t RoomManager::load_persistent() {
+std::size_t RoomManager::load_rooms() {
   if (options_.store == nullptr) {
     return 0;
   }
 
   std::size_t loaded = 0;
   for (const store::RoomRecord& record : options_.store->list()) {
-    if (!record.persistent || rooms_.contains(record.id)) {
+    // Everything in the store is loaded. The filter that used to be here
+    // skipped records that were not persistent, and no such record was ever
+    // written: only a persistent room reached the store at all.
+    if (rooms_.contains(record.id)) {
       continue;
     }
     models::Room room;
@@ -133,8 +140,10 @@ Result<std::vector<std::string>> RoomManager::remove_room(const std::string& roo
   rooms_.erase(it);
 
   if (options_.store != nullptr) {
-    // Ignored on purpose when the room was never persistent: removing what was
-    // not written is not a failure worth reporting to whoever closed the room.
+    // Ignored on purpose. Every room is written now, so this should find one,
+    // but a store that cannot forget a room the live map has already dropped
+    // is not a failure worth reporting to whoever closed it: the room is gone
+    // either way, and what is left is a record the next startup will reload.
     (void)options_.store->remove(room_id);
   }
   forget(room_id);
@@ -184,13 +193,12 @@ std::optional<Error> RoomManager::leave(const std::string& room_id, const std::s
   room.participants.erase(participant);
   user_to_room_.erase(user_id);
 
-  // A persistent room stays, empty, and keeps what was said in it. That is the
-  // whole difference between the two kinds, and the reason an identifier is
-  // worth writing down.
-  if (room.participants.empty() && !room.persistent) {
-    rooms_.erase(it);
-    forget(room_id);
-  }
+  // The room stays, empty, and keeps what was said in it. It used to be erased
+  // here the moment the last participant walked out, which meant stepping out
+  // of your own room destroyed it: the identifier stopped working, and anybody
+  // still holding a list watched a room they could see refuse to let them in.
+  //
+  // Ending a room is now something somebody does on purpose. See remove_room.
   return std::nullopt;
 }
 

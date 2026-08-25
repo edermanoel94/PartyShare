@@ -43,8 +43,8 @@ Hub::Hub(Options options)
           .chat = chat_}),
       authenticator_(Authenticator::Options{}, *users_) {
   // Rooms somebody wrote down have to still exist after a restart.
-  if (const std::size_t loaded = rooms_.load_persistent(); loaded > 0) {
-    DV_LOG_INFO("Loaded {} persistent room(s)", loaded);
+  if (const std::size_t loaded = rooms_.load_rooms(); loaded > 0) {
+    DV_LOG_INFO("Loaded {} room(s) from the store", loaded);
   }
 }
 
@@ -361,33 +361,27 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  // Creating a room is open to everybody; creating one that outlives its last
-  // participant is not, because a room nobody can be bothered to close is a
-  // room that accumulates. Refused rather than downgraded to an ordinary room:
-  // a caller that asked for permanence and silently got the opposite would
-  // find out only when the identifier stopped working.
-  if (message.persistent && current_role(user->id) != models::Role::Admin) {
-    reply_error(out, connection.id,
-                Error{.code = "forbidden",
-                      .message = "only an administrator can create a persistent room"});
-    return;
-  }
-
-  auto created = rooms_.create_room(message.room_name, user->id, message.persistent);
+  // `message.persistent` is read no more. Every room outlives its last
+  // participant now, so asking for one is asking for what you were going to
+  // get, and the administrator gate that used to guard the request guarded
+  // nothing worth guarding. The field stays on the wire so that a client built
+  // before this still connects.
+  auto created = rooms_.create_room(message.room_name, user->id);
   if (!created) {
     reply_error(out, connection.id, created.error());
     return;
   }
   const std::string room_id = std::move(created).take();
 
-  if (message.persistent) {
-    record(*user, "create_room", room_id, room_id, "persistent");
-  }
-  DV_LOG_INFO("Room {} created by {}{}", room_id, user->id,
-              message.persistent ? " (persistent)" : "");
+  // Not recorded in the audit log. It used to be, for the one room an
+  // administrator had to ask for; creating a room is now something every
+  // participant does, and the log is for administrative actions only. See
+  // NothingAParticipantDoesReachesTheLog.
+  DV_LOG_INFO("Room {} created by {}", room_id, user->id);
   out.push_back(Outgoing{
       .connection = connection.id,
       .message = protocol::RoomCreated{.room_id = room_id, .room_name = message.room_name}});
+  broadcast_room_list(out);
 }
 
 void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
@@ -1160,6 +1154,20 @@ protocol::RoomList Hub::room_list() const {
   return list;
 }
 
+void Hub::broadcast_room_list(std::vector<Outgoing>& out) const {
+  // Every authenticated connection, not just whoever caused the change. A room
+  // list is only ever asked for once, when a client opens the panel, and it
+  // used to stay frozen from then on: a room created or closed by somebody
+  // else left every other client showing a list that no longer matched the
+  // server. Joining one of those rows failed with room_not_found, which reads
+  // like the server losing rooms and is really the client holding an old
+  // answer.
+  const protocol::RoomList list = room_list();
+  for (const auto& entry : user_to_connection_) {
+    out.push_back(Outgoing{.connection = entry.second, .message = list});
+  }
+}
+
 void Hub::handle_list_users(std::vector<Outgoing>& out, Connection& connection) {
   out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
 }
@@ -1342,7 +1350,7 @@ void Hub::handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
   DV_LOG_INFO("{} closed room {}", actor->id, message.room_id);
   record(*actor, "delete_room", message.room_id, message.room_id,
          "participants=" + std::to_string(occupants.size()));
-  out.push_back(Outgoing{.connection = connection.id, .message = room_list()});
+  broadcast_room_list(out);
 }
 
 void Hub::handle_list_audit(std::vector<Outgoing>& out, Connection& connection,

@@ -1,5 +1,6 @@
-// Package ui is the terminal interface: two screens over the users and audit
-// collections, and the messages that carry a database answer back into them.
+// Package ui is the terminal interface: three screens over the users, rooms
+// and audit collections, and the messages that carry a database answer back
+// into them.
 //
 // Every call to the database happens inside a tea.Cmd and never inside Update.
 // That is what keeps the screen answering while a query is in flight, and it
@@ -23,7 +24,9 @@ type tab int
 
 const (
 	tabUsers tab = iota
+	tabRooms
 	tabAudit
+	tabCount
 )
 
 // How many lines everything but the body takes: the header, the tab bar, the
@@ -42,6 +45,8 @@ const (
 type (
 	// accountsMsg is a fresh user list.
 	accountsMsg []store.Account
+	// roomsMsg is a fresh room list.
+	roomsMsg []store.Room
 	// auditEntriesMsg is a fresh page of the audit log.
 	auditEntriesMsg []store.AuditEntry
 	// summaryMsg is the counts in the header.
@@ -81,6 +86,7 @@ type status struct {
 type Model struct {
 	store   Database
 	users   *usersModel
+	rooms   *roomsModel
 	audit   *auditModel
 	tab     tab
 	summary store.Summary
@@ -97,6 +103,7 @@ func New(database Database) Model {
 	return Model{
 		store: database,
 		users: newUsersModel(database),
+		rooms: newRoomsModel(database),
 		audit: newAuditModel(database),
 		// A first size, so that the first frame is laid out rather than
 		// squeezed into the eighty columns of a default.
@@ -105,13 +112,14 @@ func New(database Database) Model {
 	}
 }
 
-// Init reads everything the two screens show. All three at once: they are
+// Init reads everything the three screens show. All of it at once: they are
 // independent queries and the screen is more useful for having whichever
 // arrives first.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadAccounts(m.store),
 		loadSummary(m.store),
+		loadRooms(m.store),
 		loadAudit(m.store, m.audit.query()),
 	)
 }
@@ -133,6 +141,16 @@ func loadSummary(database Database) tea.Cmd {
 			return failureMsg{err: err}
 		}
 		return summaryMsg(summary)
+	}
+}
+
+func loadRooms(database Database) tea.Cmd {
+	return func() tea.Msg {
+		rooms, err := database.Rooms(context.Background())
+		if err != nil {
+			return failureMsg{err}
+		}
+		return roomsMsg(rooms)
 	}
 }
 
@@ -173,10 +191,17 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountsMsg:
 		m.users.setAccounts(typed)
+		// The rooms screen shows who owns each room, and an owner is a user id
+		// in the document. This is where it learns the names.
+		m.rooms.setAccounts(typed)
 		if m.focus != "" {
 			m.users.focusOn(m.focus)
 			m.focus = ""
 		}
+		return m, nil
+
+	case roomsMsg:
+		m.rooms.setRooms(typed)
 		return m, nil
 
 	case auditEntriesMsg:
@@ -226,8 +251,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		m.quitting = true
 		return m, tea.Quit
-	case "tab", "shift+tab":
-		m.tab = 1 - m.tab
+	case "tab":
+		m.tab = (m.tab + 1) % tabCount
+		m.status = status{}
+		m.layout()
+		return m, nil
+	case "shift+tab":
+		m.tab = (m.tab + tabCount - 1) % tabCount
 		m.status = status{}
 		m.layout()
 		return m, nil
@@ -236,6 +266,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 	case "2":
+		m.tab = tabRooms
+		m.layout()
+		return m, nil
+	case "3":
 		m.tab = tabAudit
 		m.layout()
 		return m, nil
@@ -247,33 +281,44 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.delegate(key)
 }
 
-// refresh reads whatever the current screen shows, plus the counts. Both
-// screens and not one, because a change on the users screen writes an audit
-// entry that the audit screen would otherwise not know about.
+// refresh reads whatever the current screen shows, plus the counts. Every
+// screen and not one, because a change on any of them writes an audit entry
+// that the audit screen would otherwise not know about, and deleting a room
+// changes a count the tab bar shows.
 func (m Model) refresh() tea.Cmd {
 	return tea.Batch(
 		loadAccounts(m.store),
 		loadSummary(m.store),
+		loadRooms(m.store),
 		loadAudit(m.store, m.audit.query()),
 	)
 }
 
 func (m Model) capturesKeys() bool {
-	if m.tab == tabUsers {
-		return m.users.capturesKeys()
+	switch m.tab {
+	case tabRooms:
+		return m.rooms.capturesKeys()
+	case tabAudit:
+		return m.audit.capturesKeys()
+	case tabUsers, tabCount:
 	}
-	return m.audit.capturesKeys()
+	return m.users.capturesKeys()
 }
 
 func (m Model) delegate(message tea.Msg) tea.Cmd {
-	if m.tab == tabUsers {
-		return m.users.Update(message)
+	switch m.tab {
+	case tabRooms:
+		return m.rooms.Update(message)
+	case tabAudit:
+		return m.audit.Update(message)
+	case tabUsers, tabCount:
 	}
-	return m.audit.Update(message)
+	return m.users.Update(message)
 }
 
 func (m Model) layout() {
 	m.users.setSize(m.innerWidth(), m.bodyHeight())
+	m.rooms.setSize(m.innerWidth(), m.bodyHeight())
 	m.audit.setSize(m.innerWidth(), m.bodyHeight())
 }
 
@@ -305,9 +350,12 @@ func (m Model) View() string {
 
 	body := m.users.View()
 	help := m.users.help()
-	if m.tab == tabAudit {
-		body = m.audit.View()
-		help = m.audit.help()
+	switch m.tab {
+	case tabRooms:
+		body, help = m.rooms.View(), m.rooms.help()
+	case tabAudit:
+		body, help = m.audit.View(), m.audit.help()
+	case tabUsers, tabCount:
 	}
 
 	// The body is padded and cut to exactly the height the frame reserved for
@@ -352,18 +400,23 @@ func (m Model) header(width int) string {
 }
 
 func (m Model) tabs(width int) string {
-	users := "Users " + countLabel(m.summary.Users)
-	audit := "Audit " + countLabel(m.summary.AuditEntries)
-
-	usersTab, auditTab := tabInactiveStyle, tabActiveStyle
-	if m.tab == tabUsers {
-		usersTab, auditTab = tabActiveStyle, tabInactiveStyle
+	labels := map[tab]string{
+		tabUsers: "Users " + countLabel(m.summary.Users),
+		tabRooms: "Rooms " + countLabel(m.summary.Rooms),
+		tabAudit: "Audit " + countLabel(m.summary.AuditEntries),
 	}
 
-	rendered := lipgloss.JoinHorizontal(lipgloss.Bottom,
-		usersTab.Render(users), auditTab.Render(audit))
+	pieces := make([]string, 0, int(tabCount))
+	for which := tabUsers; which < tabCount; which++ {
+		style := tabInactiveStyle
+		if which == m.tab {
+			style = tabActiveStyle
+		}
+		pieces = append(pieces, style.Render(labels[which]))
+	}
+	rendered := lipgloss.JoinHorizontal(lipgloss.Bottom, pieces...)
 
-	// The bar is one line drawn all the way across, so the two tabs sit on a
+	// The bar is one line drawn all the way across, so the tabs sit on a
 	// rule rather than floating above nothing.
 	gap := width - lipgloss.Width(rendered)
 	if gap > 0 {
@@ -391,6 +444,13 @@ func (m Model) summaryLine() string {
 			line += " by " + m.audit.actorLabel
 		}
 		return line
+	}
+
+	if m.tab == tabRooms {
+		if m.summary.Rooms == 0 {
+			return " "
+		}
+		return plural(m.summary.Rooms, "room", "rooms")
 	}
 
 	if m.summary.Users == 0 {

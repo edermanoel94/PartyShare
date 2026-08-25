@@ -171,7 +171,7 @@ type Actor struct {
 	Username string
 }
 
-// The four actions this program is allowed to record. They are the server's
+// The five actions this program is allowed to record. They are the server's
 // own names on purpose: a reader of the audit log should not have to learn a
 // second vocabulary to understand an entry written from a terminal.
 const (
@@ -179,11 +179,13 @@ const (
 	ActionUpdateUser   = "update_user"
 	ActionDeleteUser   = "delete_user"
 	ActionRestrictUser = "restrict_user"
+	ActionDeleteRoom   = "delete_room"
 )
 
 // Summary is the count line at the top of the screen.
 type Summary struct {
 	Users        int64
 	Admins       int64
+	Rooms        int64
 	AuditEntries int64
 }

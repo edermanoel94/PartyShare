@@ -749,6 +749,24 @@ TEST_F(HubTest, TheCountOfWhoIsInsideReachesEverybodyElsesList) {
   EXPECT_EQ(after_leave->rooms.front().participant_count, 0);
 }
 
+TEST_F(HubTest, AnOrdinaryUserCanAskWhichRoomsExist) {
+  // The list went onto the first screen after signing in while ListRooms was
+  // still administration, so an ordinary user asking for it was answered
+  // "forbidden" and shown nothing. Which is the one person the list is for:
+  // an administrator already knew how to find a room.
+  const auto [ana, ana_user] = login("ana");
+  ASSERT_EQ(ana_user.role, dv::models::Role::User) << "this fixture signs in ordinary accounts";
+  const std::string room = create_room(ana, ana_user.id);
+
+  const auto out = send(ana, proto::ListRooms{});
+
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, ana).has_value());
+  const auto list = find<proto::RoomList>(out, ana);
+  ASSERT_TRUE(list.has_value());
+  ASSERT_EQ(list->rooms.size(), 1U);
+  EXPECT_EQ(list->rooms.front().id, room);
+}
+
 TEST_F(HubTest, AnUnauthenticatedConnectionIsNotSentTheRoomList) {
   // The list names who owns what. A socket that has not said who it is has no
   // business receiving it unasked.

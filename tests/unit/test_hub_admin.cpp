@@ -125,7 +125,6 @@ TEST_F(HubAdminTest, AnOrdinaryUserIsRefusedEveryAdministrativeMessage) {
            proto::CreateUser{"carla", "password", "Carla", Role::Admin},
            proto::UpdateUser{admin_.id, Role::User, std::nullopt, std::nullopt},
            proto::DeleteUser{admin_.id},
-           proto::ListRooms{},
            proto::DeleteRoom{room_},
            proto::ListAudit{},
        }) {
@@ -534,6 +533,64 @@ TEST_F(HubAdminTest, APersistentRoomOutlivesItsLastParticipant) {
 
   const auto rejoined = send(connection, proto::JoinRoom{room, admin.id, "Ana"});
   EXPECT_FALSE(find<proto::ErrorMessage>(rejoined, connection).has_value());
+}
+
+TEST_F(HubAdminTest, AnOrdinaryUserGetsOneRoomAndAnAdministratorGetsSeveral) {
+  const auto [admin, admin_user] = login("ana", Role::Admin);
+  const auto [plain, bruno] = login("bruno", Role::User);
+
+  const auto first =
+      find<proto::RoomCreated>(send(plain, proto::CreateRoom{bruno.id, "one"}), plain);
+  ASSERT_TRUE(first.has_value());
+
+  // The second is refused, and it names the room that is in the way.
+  const auto refused = send(plain, proto::CreateRoom{bruno.id, "two"});
+  const auto error = find<proto::ErrorMessage>(refused, plain);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "room_limit_reached");
+  EXPECT_NE(error->message.find(first->room_id), std::string::npos)
+      << "the refusal should say which room is in the way: " << error->message;
+  EXPECT_FALSE(find<proto::RoomCreated>(refused, plain).has_value());
+
+  // An administrator is not held to it.
+  ASSERT_TRUE(find<proto::RoomCreated>(send(admin, proto::CreateRoom{admin_user.id, "a"}), admin)
+                  .has_value());
+  ASSERT_TRUE(find<proto::RoomCreated>(send(admin, proto::CreateRoom{admin_user.id, "b"}), admin)
+                  .has_value());
+}
+
+TEST_F(HubAdminTest, ClosingSomebodysRoomLetsThemMakeAnotherOne) {
+  // The way out of the limit. Only an administrator can close a room, so this
+  // is the only way out, and it has to work.
+  const auto [admin, admin_user] = login("ana", Role::Admin);
+  const auto [plain, bruno] = login("bruno", Role::User);
+
+  const auto first =
+      find<proto::RoomCreated>(send(plain, proto::CreateRoom{bruno.id, "one"}), plain);
+  ASSERT_TRUE(first.has_value());
+  (void)send(admin, proto::DeleteRoom{.room_id = first->room_id});
+
+  const auto second = send(plain, proto::CreateRoom{bruno.id, "two"});
+  EXPECT_FALSE(find<proto::ErrorMessage>(second, plain).has_value());
+  EXPECT_TRUE(find<proto::RoomCreated>(second, plain).has_value());
+}
+
+TEST_F(HubAdminTest, LeavingYourOwnRoomDoesNotFreeTheLimit) {
+  // Walking out is not closing. The room is still theirs and still on
+  // everybody's list, so it still counts against them: a limit that a leave
+  // reset would be no limit at all.
+  const auto [plain, bruno] = login("bruno", Role::User);
+  const auto first =
+      find<proto::RoomCreated>(send(plain, proto::CreateRoom{bruno.id, "one"}), plain);
+  ASSERT_TRUE(first.has_value());
+
+  (void)send(plain, proto::JoinRoom{first->room_id, bruno.id, "Bruno"});
+  (void)send(plain, proto::LeaveRoom{first->room_id, bruno.id});
+
+  const auto error =
+      find<proto::ErrorMessage>(send(plain, proto::CreateRoom{bruno.id, "two"}), plain);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "room_limit_reached");
 }
 
 TEST_F(HubAdminTest, ARoomStaysWhenItEmptiesAndCanBeWalkedBackInto) {

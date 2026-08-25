@@ -117,6 +117,15 @@ class RoomManager {
 
   [[nodiscard]] std::optional<std::string> room_of(const std::string& user_id) const;
 
+  /// A room this user created, if they have one. Which one, when they have
+  /// several, is unspecified: the caller that matters asks whether there is
+  /// any, and names it so the answer can say which.
+  ///
+  /// Ownership outlives being inside: rooms no longer end when they empty, so
+  /// "the room you made" is a thing somebody keeps having until it is closed.
+  /// That is what makes a limit on it mean anything.
+  [[nodiscard]] std::optional<std::string> room_owned_by(const std::string& user_id) const;
+
   [[nodiscard]] std::size_t room_count() const noexcept { return rooms_.size(); }
 
   [[nodiscard]] int max_participants_per_room() const noexcept {

@@ -58,7 +58,11 @@ class MainWindow : public QMainWindow {
   /// Rows of tab separated fields, identifier first, as ui::fill expects.
   /// Invoked from the signalling thread through a queued connection, which is
   /// why it is a slot and not a plain member.
-  void apply_room_list(const QStringList& rows);
+  ///
+  /// `may_create` is worked out from the same answer: an ordinary user gets
+  /// one room, and the button that would be refused is disabled rather than
+  /// left to fail on the click.
+  void apply_room_list(const QStringList& rows, bool may_create);
 
  private slots:
   void on_connect();

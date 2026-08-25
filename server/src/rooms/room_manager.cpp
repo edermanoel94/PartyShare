@@ -288,6 +288,18 @@ std::vector<models::Room> RoomManager::list() const {
   return result;
 }
 
+std::optional<std::string> RoomManager::room_owned_by(const std::string& user_id) const {
+  if (user_id.empty()) {
+    return std::nullopt;
+  }
+  for (const auto& [id, room] : rooms_) {
+    if (room.owner_id == user_id) {
+      return id;
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> RoomManager::room_of(const std::string& user_id) const {
   const auto it = user_to_room_.find(user_id);
   if (it == user_to_room_.end()) {

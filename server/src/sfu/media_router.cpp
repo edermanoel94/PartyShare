@@ -536,6 +536,7 @@ void MediaRouter::add_video_outbound_track(Session& session) {
   outbound.ssrc = ssrc;
   outbound.payload_type = options_.h264_payload_type;
   outbound.track = session.connection->addTrack(media);
+  outbound.stitcher = std::make_shared<VideoStitcher>();
 
   auto rtp_config = std::make_shared<rtc::RtpPacketizationConfig>(
       ssrc, label, static_cast<std::uint8_t>(options_.h264_payload_type), kVideoClockRate);
@@ -590,6 +591,10 @@ void MediaRouter::forward_video(const std::string& from_user_id, const std::stri
     return;
   }
 
+  const auto* incoming = reinterpret_cast<const rtc::RtpHeader*>(packet.data());
+  const std::uint16_t sequence = incoming->seqNumber();
+  const std::uint32_t timestamp = incoming->timestamp();
+
   for (const Outbound& destination : route->second.video) {
     if (!destination.track->isOpen()) {
       continue;
@@ -600,6 +605,28 @@ void MediaRouter::forward_video(const std::string& from_user_id, const std::stri
     header->setSsrc(destination.ssrc);
     header->setPayloadType(static_cast<std::uint8_t>(destination.payload_type));
 
+    // The SSRC says this packet is part of the one screen this viewer has been
+    // watching all call. The sequence number and the clock have to agree with
+    // it, and they do not on their own: each sharer's encoder started them
+    // wherever it liked. See sfu/video_stitcher.hpp.
+    //
+    // Done per destination because each viewer's track is its own series: they
+    // joined at different moments and have been sent different amounts.
+    if (destination.stitcher != nullptr) {
+      const VideoStitcher::Rewritten rewritten =
+          destination.stitcher->rewrite(from_user_id, sequence, timestamp);
+      header->setSeqNumber(rewritten.sequence);
+      header->setTimestamp(rewritten.timestamp);
+      if (rewritten.rebased) {
+        DV_LOG_INFO("SFU: the screen in room {} now comes from {}, stitched onto ssrc {}", room_id,
+                    from_user_id, destination.ssrc);
+      }
+    }
+
+    // After the rewrite, never before: everything on the handler chain reads
+    // what is about to go on the wire. rtc::RtcpNackResponder caches it by the
+    // sequence number the viewer will ask for, and rtc::RtcpSrReporter times
+    // its sender reports by the clock the viewer will read.
     destination.track->send(std::move(copy));
     video_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);
   }

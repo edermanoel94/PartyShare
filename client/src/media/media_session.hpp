@@ -299,6 +299,35 @@ class MediaSession {
 
   [[nodiscard]] virtual bool screen_audio_active() const = 0;
 
+  /// How loud the shared screen's sound goes out, as a percentage of what the
+  /// application is playing. 100 leaves it alone.
+  ///
+  /// Sender side, and it cannot be anything else. The screen audio rides inside
+  /// this participant's own audio track, so by the time it reaches anybody it
+  /// has been encoded together with the voice and no receiver can tell the two
+  /// apart again. One person turning this down turns it down for the whole
+  /// room, which is the honest consequence of the design in
+  /// docs/audio-da-tela-compartilhada.md and not a limitation of this call.
+  /// `set_participant_volume` is the receiving side and a different question.
+  ///
+  /// Remembered whether or not a share is running: it is the level the next one
+  /// starts at, the same way the mode is.
+  virtual void set_screen_audio_volume(int percent) = 0;
+
+  [[nodiscard]] virtual int screen_audio_volume() const = 0;
+
+  /// Turns the three blocks of the audio processing module on and off while the
+  /// call runs.
+  ///
+  /// Applied to the module itself rather than through AudioOptions, which
+  /// sounds like a detail and is not. The capture source is created once per
+  /// process and cached - a second session gets the first one's options back -
+  /// so options carried by a session only ever describe the state at the moment
+  /// the first one was built. The module is the thing that is actually
+  /// processing, and it takes a new configuration at any time.
+  virtual void set_audio_processing(bool echo_cancellation, bool noise_suppression,
+                                    bool automatic_gain_control) = 0;
+
   /// The range the screen encoder may use, in kbps. Section 6 of SPEC.md puts
   /// it between 1.5 and 3 Mbps by default, and makes it configurable.
   ///
@@ -348,6 +377,10 @@ struct MediaSessionOptions {
   bool echo_cancellation = true;
   bool noise_suppression = true;
   bool automatic_gain_control = true;
+
+  /// How loud a screen share's sound starts, as a percentage. See
+  /// MediaSession::set_screen_audio_volume.
+  int screen_audio_volume_percent = 100;
 
   /// Section 5.2 of SPEC.md: 1280x720 at 30 FPS.
   video::ScreenCaptureOptions capture;

@@ -602,6 +602,81 @@ medidos. Resumo: no pior caso, um teto de 96 kbps a mais na entrada por quem
 compartilha e 96 kbps na saída por espectador — ao lado dos 3,3 Mbps da imagem,
 não muda como a máquina é dimensionada.
 
+### Fase 5 — volume da tela e supressão de ruído no diálogo ✅ feito
+
+Duas coisas que o desenho deixou implícitas e ninguém conseguia alcançar.
+
+**O volume do que a tela toca.** A mistura somava as amostras com ganho
+unitário fixo: o que o aplicativo tocasse era o que ia junto com a voz, e a
+única saída era mexer no volume do Windows. Agora há um ganho em
+`ScreenAudioMixer::mix`, em ponto fixo Q8, aplicado só ao lado da tela.
+
+O microfone fica de fora de propósito. Ele já tem um controle de ganho — o do
+libwebrtc, rodando antes de qualquer coisa aqui — e dois controles automáticos
+disputando um sinal não são um controle de volume.
+
+Ponto fixo e não `double` porque isto roda uma vez por amostra, cem blocos por
+segundo, por toda a chamada, e a aritmética ao lado já era inteira. Oito bits e
+não dezesseis porque o produto tem que caber num `int32`: uma amostra de fundo
+de escala no teto é `32767 * 512`, o que cabe; em Q16 não caberia.
+
+O teto é 200%. Um reforço grampeia em `saturate`, então o pior que faz é soar
+mal, e a alternativa é pior: um aplicativo tocando a um décimo da escala não tem
+outra volta, e mandar alguém subir o volume do Windows não é um controle de
+volume.
+
+**A curva é linear, e isso é uma escolha.** Meio no slider é metade da
+amplitude. A resposta perceptual seria outra — sonoridade segue mais ou menos a
+raiz cúbica da amplitude, então metade da amplitude se ouve como uns quatro
+quintos —, e um slider assim calibrado faz quase todo o trabalho audível no
+quarto de baixo do curso. Ficou linear porque este controle não é um volume de
+escuta: ele equilibra a tela contra um microfone, e o número que as pessoas vão
+procurar é uma razão entre duas fontes, "metade do meu volume", não uma posição
+que *pareça* metade. `audio::screen_volume_ratio` é a função, isolada e testada,
+para o dia em que essa decisão for revista.
+
+**Isto muda o que a sala inteira ouve, e não há versão disto que não mude.** O
+som viaja dentro da trilha de áudio de quem compartilha, então quando chega já
+foi codificado junto com a voz e nenhum receptor separa os dois de novo. É a
+consequência honesta da Opção A, não uma limitação desta fase.
+
+**A supressão de ruído.** As três chaves do módulo de processamento já existiam
+em `config.ini`, chegavam ao APM na construção — e não havia como mexer nelas
+sem um editor de texto e um reinício. A supressão é afinada para uma voz numa
+sala e trata todo o resto como sendo a sala: um instrumento, um disco tocando
+atrás de alguém. Desligar é a resposta certa vezes o bastante para merecer uma
+caixa no diálogo.
+
+O caminho óbvio para mudá-la durante a chamada não funciona, e vale registrar
+por quê:
+
+> `Engine::microphone()` cria a fonte de captura **uma vez por processo** e a
+> guarda. As `AudioOptions` que uma sessão posterior passa nunca são olhadas —
+> ela recebe de volta a fonte da primeira. Uma configuração mudada no diálogo
+> iria para o arquivo e não mudaria nada que alguém pudesse ouvir.
+
+O que funciona é `AudioProcessing::ApplyConfig` no próprio módulo. Para isso a
+`Engine` passou a **construir** o APM e guardar a referência, entregando à
+fábrica um `CustomAudioProcessing(apm_)` em vez de um builder. O `GetConfig` é
+lido de volta antes de mexer, para que o filtro passa-alta, a largura do
+pipeline e a taxa interna — tudo que o construtor afinou e `AudioOptions` não
+tem campo para — sobrevivam a uma visita ao diálogo.
+
+E as três chaves passaram a morar na `Engine`, não em cada sessão. Uma sessão
+construída a partir de uma cópia velha da configuração reinstalaria essa cópia
+por cima do que o usuário escolheu depois, e o único sinal disso seria a
+supressão voltando sozinha ao entrar na sala seguinte.
+
+#### Verificação
+
+588 testes passam na árvore com camada de mídia, 11 deles novos sobre o volume:
+a razão e seu recorte, meia altura, silêncio total, reforço grampeando em vez de
+dar a volta, e o caso que a aritmética esconde — uma amostra negativa
+*abaixada*, não invertida, que é o que o deslocamento à direita com sinal
+garante desde o C++20. Um deslocamento que preenchesse com zeros faria a metade
+negativa de cada onda voltar como um pico positivo, e o som de abaixar o volume
+seria o filme virando ruído.
+
 ## 9. Riscos
 
 | Risco | Peso | O que fazer |
@@ -628,4 +703,8 @@ não muda como a máquina é dimensionada.
   argumento padrão resolvem, e a razão está comentada no `BlockPacer`.
 - **Captura por janela.** Compartilhar só a janela do Chrome, em vez do monitor,
   é uma mudança do lado do vídeo e não depende deste trabalho.
-- **Volume separado por fonte no receptor.** Só existe na Opção B.
+- **Volume separado por fonte no receptor.** Só existe na Opção B. O volume que
+  a fase 5 acrescentou é do lado de quem envia, aplicado antes da codificação, e
+  por isso vale para a sala inteira. Para quem *recebe* poder abaixar a tela sem
+  abaixar a voz, os dois teriam que chegar em trilhas separadas — que é
+  exatamente o que a Opção A não faz.

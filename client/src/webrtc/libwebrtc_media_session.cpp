@@ -116,6 +116,46 @@ class Engine {
   /// nothing to mix.
   [[nodiscard]] audio::ScreenAudioMixer& screen_audio() { return screen_audio_; }
 
+  /// Moves the three audio processing switches, now, for every session in the
+  /// process.
+  ///
+  /// Both halves matter. The remembered flags are what the next session's
+  /// AudioOptions are built from, so a call started after this agrees with it;
+  /// ApplyConfig is what makes the call already running agree with it too.
+  /// Doing only the first is a setting that takes effect when you next join a
+  /// room, and this dialog promises otherwise.
+  void set_audio_processing(bool echo_cancellation, bool noise_suppression,
+                            bool automatic_gain_control) {
+    echo_cancellation_.store(echo_cancellation);
+    noise_suppression_.store(noise_suppression);
+    automatic_gain_control_.store(automatic_gain_control);
+
+    if (audio_processing_ == nullptr) {
+      return;
+    }
+
+    // Read back rather than rebuilt from scratch, so that everything the
+    // constructor tuned and AudioOptions has no field for - the high pass
+    // filter, the pipeline width, the internal rate - survives a visit to the
+    // settings dialog.
+    webrtc::AudioProcessing::Config config = audio_processing_->GetConfig();
+    config.echo_canceller.enabled = echo_cancellation;
+    config.noise_suppression.enabled = noise_suppression;
+    config.gain_controller1.enabled = automatic_gain_control;
+    config.gain_controller1.analog_gain_controller.enabled = automatic_gain_control;
+    audio_processing_->ApplyConfig(config);
+  }
+
+  /// The switches as they stand, in the shape a session hands to the media
+  /// engine.
+  [[nodiscard]] webrtc::AudioOptions audio_options() const {
+    webrtc::AudioOptions options;
+    options.echo_cancellation = echo_cancellation_.load();
+    options.noise_suppression = noise_suppression_.load();
+    options.auto_gain_control = automatic_gain_control_.load();
+    return options;
+  }
+
   /// One microphone source for the whole process, created on first use.
   ///
   /// Shared because the capture device is shared: two sessions in one process
@@ -367,8 +407,26 @@ class Engine {
     dependencies.adm = audio_device_;
     dependencies.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
     dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
-    dependencies.audio_processing_builder =
-        std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
+    // Built here and kept, rather than handed over as a builder for libwebrtc
+    // to build and keep to itself.
+    //
+    // This is what makes the three switches changeable during a call. The
+    // obvious route - a session applying its own AudioOptions - only works
+    // once: `microphone()` below caches the capture source for the whole
+    // process, so the options a later session passes are never looked at, and a
+    // setting changed in the dialog would go into the file and change nothing
+    // anybody could hear. ApplyConfig on the module itself is the documented
+    // way to move these while audio is flowing, and it needs a handle.
+    audio_processing_ = webrtc::BuiltinAudioProcessingBuilder(processing).Build(environment);
+    if (audio_processing_ != nullptr) {
+      dependencies.audio_processing_builder = webrtc::CustomAudioProcessing(audio_processing_);
+    } else {
+      // Nothing to hold on to, so fall back to the arrangement that was here
+      // before: the module is built inside the factory and the switches are
+      // whatever the file said at startup.
+      dependencies.audio_processing_builder =
+          std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
+    }
     // Where the screen audio joins the microphone, after everything above has
     // run. Installed for the life of the process whether or not anybody ever
     // shares: with nothing to mix it copies the frame through, and adding it
@@ -404,6 +462,18 @@ class Engine {
   /// Declared before the factory, because the factory is handed a pointer to
   /// it in the constructor body and outlives nothing.
   audio::ScreenAudioMixer screen_audio_;
+  /// The processing module, kept so that the three switches can be moved during
+  /// a call. Null in the fallback path, where nothing can be moved.
+  webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing_;
+  /// What the three switches are set to right now, for the whole process.
+  ///
+  /// Authoritative, and read by every session when it builds its AudioOptions.
+  /// The alternative - each session using the options it was constructed with -
+  /// is how a setting changed in the dialog gets quietly undone by the next
+  /// call to start, applying a copy of what the file said an hour ago.
+  std::atomic<bool> echo_cancellation_{true};
+  std::atomic<bool> noise_suppression_{true};
+  std::atomic<bool> automatic_gain_control_{true};
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
   std::string failure_;
@@ -617,12 +687,25 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // The microphone track is added before any negotiation. In unified plan
     // that gives us a transceiver ready to be paired with the recvonly audio
     // line the server offers, which is what makes this end the sender.
-    webrtc::AudioOptions audio_options;
-    audio_options.echo_cancellation = options.echo_cancellation;
-    audio_options.noise_suppression = options.noise_suppression;
-    audio_options.auto_gain_control = options.automatic_gain_control;
+    // What this session was configured with becomes what the process is set
+    // to, and then the process is what the options are read back from. The
+    // round trip is the point: a session built from a stale copy of the
+    // configuration would otherwise reinstate it over whatever the user has
+    // since chosen in the dialog, and the only sign of it would be noise
+    // suppression coming back on when they joined their next room.
+    //
+    // Seeding rather than merging, because a session is only constructed from
+    // CallSession, which keeps its options in step with the dialog. The last
+    // one built therefore carries the newest answer, not an older one.
+    engine.set_audio_processing(options.echo_cancellation, options.noise_suppression,
+                                options.automatic_gain_control);
+    // The same round trip, for the same reason. The mixer is process wide and
+    // survives every session, so the level a share goes out at has to be seeded
+    // from the options the newest session was built with rather than left at
+    // whatever the last one happened to leave behind.
+    engine.screen_audio().set_screen_volume(options.screen_audio_volume_percent);
 
-    auto source = engine.microphone(audio_options);
+    auto source = engine.microphone(engine.audio_options());
     if (source == nullptr) {
       return Result<std::monostate>::failure("media_unavailable", "could not open an audio source");
     }
@@ -827,6 +910,24 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   [[nodiscard]] bool screen_audio_active() const override {
     return Engine::instance().screen_audio().active();
+  }
+
+  // Straight to the mixer, and not held here as well. There is one mixer for
+  // the whole process, the same way there is one microphone source, so a copy
+  // kept beside it would only be a second answer waiting to disagree with the
+  // first.
+  void set_screen_audio_volume(int percent) override {
+    Engine::instance().screen_audio().set_screen_volume(percent);
+  }
+
+  [[nodiscard]] int screen_audio_volume() const override {
+    return Engine::instance().screen_audio().screen_volume();
+  }
+
+  void set_audio_processing(bool echo_cancellation, bool noise_suppression,
+                            bool automatic_gain_control) override {
+    Engine::instance().set_audio_processing(echo_cancellation, noise_suppression,
+                                            automatic_gain_control);
   }
 
   Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {

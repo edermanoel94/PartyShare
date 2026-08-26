@@ -14,6 +14,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QSlider;
 class QSpinBox;
 
 namespace dv::ui {
@@ -71,6 +72,8 @@ class SettingsDialog : public QDialog {
   void on_auto_bitrate_changed(bool automatic);
   void on_quality_changed();
   void on_screen_audio_changed();
+  void on_noise_suppression_changed(bool on);
+  void on_screen_volume_changed(int percent);
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -79,6 +82,15 @@ class SettingsDialog : public QDialog {
  private:
   void load_devices();
   void load_monitors();
+
+  /// Puts the percentage into the volume slider's label, and greys the pair out
+  /// while the share is set to carry no sound.
+  ///
+  /// Greyed out rather than hidden. A control that appears and disappears as
+  /// the box above it changes is harder to find a second time than one that is
+  /// plainly there and plainly not in use, and the label goes on saying what
+  /// the level will be when sound is turned back on.
+  void show_screen_volume();
 
   /// Fills the application box with what the machine can currently be heard
   /// playing, and enables it only when one application is what was asked for.
@@ -164,6 +176,14 @@ class SettingsDialog : public QDialog {
 
   QComboBox* input_ = nullptr;
   QComboBox* output_ = nullptr;
+  /// Whether libwebrtc's noise suppressor runs over the microphone.
+  ///
+  /// Worth a switch because it is tuned for one thing - a voice in a room - and
+  /// treats everything else as the room: an instrument, a record playing
+  /// behind somebody, a hiss that is actually part of what they meant to send.
+  /// Off is the right answer often enough that reaching it should not need a
+  /// text editor and a restart.
+  QCheckBox* noise_suppression_ = nullptr;
   QComboBox* monitor_ = nullptr;
   /// None, everything but this client, or one application.
   QComboBox* screen_audio_ = nullptr;
@@ -172,6 +192,18 @@ class SettingsDialog : public QDialog {
   /// Says why the box is empty or disabled, which is otherwise a dead control
   /// with no explanation: an old Windows, or a build without the capture.
   QLabel* screen_audio_hint_ = nullptr;
+  /// How loud the shared sound goes out beside this microphone, in percent.
+  ///
+  /// Not the same control as the volume slider in the room, and deliberately
+  /// not next to it: that one is playback and affects only the person moving
+  /// it, this one is applied before the sound is encoded and is therefore
+  /// heard by everybody. Putting them side by side would invite the reading
+  /// that one of them is "my copy" of the other.
+  QSlider* screen_volume_ = nullptr;
+  /// The percentage in words, above the slider. A slider carrying no number can
+  /// be put back where it was by eye and never by hand, and a level somebody
+  /// tuned once against a particular game is one they will want back exactly.
+  QLabel* screen_volume_label_ = nullptr;
   QComboBox* resolution_ = nullptr;
   QComboBox* frame_rate_ = nullptr;
   QCheckBox* auto_bitrate_ = nullptr;

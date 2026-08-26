@@ -5,6 +5,7 @@
 
 #include <dv/logging/logger.hpp>
 
+#include "audio/screen_audio_mixer.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::client::app {
@@ -551,6 +552,70 @@ Result<std::monostate> CallSession::set_output_device(const std::string& device_
     return std::monostate{};
   }
   return session->set_output_device(device_id);
+}
+
+Result<std::monostate> CallSession::set_screen_audio_volume(int percent) {
+  // Clamped rather than refused, and clamped *here* so that the getter reports
+  // what is actually in force. The mixer clamps too, and that is not a
+  // duplicate: this one keeps the remembered value honest, and that one keeps
+  // the arithmetic safe no matter who reaches it.
+  const int asked = std::clamp(percent, 0, audio::kMaxScreenVolumePercent);
+
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.media.screen_audio_volume_percent = asked;
+    session = audio_;
+  }
+  if (session) {
+    session->set_screen_audio_volume(asked);
+  }
+  // Nothing here can fail: with no call running there is only the remembered
+  // level, and with one running the mixer takes any percentage there is. The
+  // Result is for the caller's sake rather than this function's - every other
+  // setter on this class returns one, and a single setter that does not is a
+  // trap for whoever writes the next line of the settings dialog.
+  return std::monostate{};
+}
+
+int CallSession::screen_audio_volume() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.screen_audio_volume_percent;
+}
+
+Result<std::monostate> CallSession::set_audio_processing(bool echo_cancellation,
+                                                         bool noise_suppression,
+                                                         bool automatic_gain_control) {
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.media.echo_cancellation = echo_cancellation;
+    options_.media.noise_suppression = noise_suppression;
+    options_.media.automatic_gain_control = automatic_gain_control;
+    session = audio_;
+  }
+  if (session) {
+    session->set_audio_processing(echo_cancellation, noise_suppression, automatic_gain_control);
+  }
+  // Remembered even with no call running, which is the half that matters
+  // outside one: the next session is built from these options, and building it
+  // is what seeds the process.
+  return std::monostate{};
+}
+
+bool CallSession::echo_cancellation() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.echo_cancellation;
+}
+
+bool CallSession::noise_suppression() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.noise_suppression;
+}
+
+bool CallSession::automatic_gain_control() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.automatic_gain_control;
 }
 
 std::string CallSession::input_device() const {

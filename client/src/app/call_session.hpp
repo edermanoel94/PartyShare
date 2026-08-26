@@ -300,6 +300,38 @@ class CallSession {
 
   /// What the next share will carry unless the dialog is told otherwise.
   [[nodiscard]] ScreenAudio::Mode screen_audio_mode() const;
+
+  /// How loud a share's sound goes out against the microphone beside it, as a
+  /// percentage of what the application plays. 100 leaves it alone.
+  ///
+  /// Remembered here whether or not a call is running, the way the bitrate and
+  /// the mode are, so a level chosen before joining a room is the level the
+  /// first share goes out at.
+  ///
+  /// This changes what everybody in the room hears, and there is no version of
+  /// it that does not: the sound is encoded inside this participant's own audio
+  /// track, so no receiver can separate it from the voice again. Turning down
+  /// somebody *else's* share is `set_participant_volume`, and it is a different
+  /// control on a different side of the call.
+  [[nodiscard]] Result<std::monostate> set_screen_audio_volume(int percent);
+  [[nodiscard]] int screen_audio_volume() const;
+
+  /// The three blocks libwebrtc runs over the microphone before it is encoded:
+  /// the echo canceller, the noise suppressor and the automatic gain control.
+  ///
+  /// Applied at once, during a call if there is one, and remembered for the
+  /// sessions that come after it.
+  ///
+  /// Worth having a switch for rather than leaving on: noise suppression is
+  /// tuned for a voice in a room, and it is what makes a guitar sound like it
+  /// is being played through a telephone. Somebody who wants their microphone
+  /// carried faithfully needs a way to say so.
+  [[nodiscard]] Result<std::monostate> set_audio_processing(bool echo_cancellation,
+                                                            bool noise_suppression,
+                                                            bool automatic_gain_control);
+  [[nodiscard]] bool echo_cancellation() const;
+  [[nodiscard]] bool noise_suppression() const;
+  [[nodiscard]] bool automatic_gain_control() const;
   /// Who is sharing right now, empty when nobody is.
   [[nodiscard]] std::string screen_sharer() const;
 

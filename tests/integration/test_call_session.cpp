@@ -62,6 +62,12 @@ struct FakeMediaState {
   std::atomic<bool> sharing{false};
   std::atomic<bool> screen_audio{false};
   std::atomic<std::uint32_t> screen_audio_source{0};
+  /// What the last set_screen_audio_volume asked for. Starts where a share
+  /// used to go out, which is untouched.
+  std::atomic<int> screen_audio_volume{100};
+  std::atomic<bool> echo_cancellation{true};
+  std::atomic<bool> noise_suppression{true};
+  std::atomic<bool> automatic_gain_control{true};
   /// Set to make start_screen_audio fail, the way a Windows too old to capture
   /// per process does.
   std::string screen_audio_failure;
@@ -204,6 +210,19 @@ class FakeMediaSession : public media::MediaSession {
   void stop_screen_audio() override { state_->screen_audio = false; }
 
   [[nodiscard]] bool screen_audio_active() const override { return state_->screen_audio.load(); }
+
+  void set_screen_audio_volume(int percent) override { state_->screen_audio_volume = percent; }
+
+  [[nodiscard]] int screen_audio_volume() const override {
+    return state_->screen_audio_volume.load();
+  }
+
+  void set_audio_processing(bool echo_cancellation, bool noise_suppression,
+                            bool automatic_gain_control) override {
+    state_->echo_cancellation = echo_cancellation;
+    state_->noise_suppression = noise_suppression;
+    state_->automatic_gain_control = automatic_gain_control;
+  }
 
   dv::Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
     if (min_kbps <= 0 || max_kbps < min_kbps) {

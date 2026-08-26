@@ -19,10 +19,12 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include "audio/screen_audio_mixer.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::ui {
@@ -108,8 +110,15 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   auto* audio_form = new QFormLayout(audio);
   input_ = new QComboBox(audio);
   output_ = new QComboBox(audio);
+  // Named for what turning it off does rather than for the module, because
+  // "Noise suppression" as a bare label leaves somebody guessing which
+  // direction the tick means.
+  noise_suppression_ =
+      new QCheckBox(QStringLiteral("Remove background noise from the microphone"), audio);
+  noise_suppression_->setChecked(session_.noise_suppression());
   audio_form->addRow(QStringLiteral("Microphone"), input_);
   audio_form->addRow(QStringLiteral("Output"), output_);
+  audio_form->addRow(QStringLiteral("Noise"), noise_suppression_);
 
   auto* video = new QGroupBox(QStringLiteral("Screen"), this);
   auto* video_form = new QFormLayout(video);
@@ -164,6 +173,20 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
 
   audio_source_ = new QComboBox(video);
 
+  screen_volume_label_ = new QLabel(QString{}, video);
+  screen_volume_label_->setProperty("hint", true);
+  screen_volume_ = new QSlider(Qt::Horizontal, video);
+  // The same range as the participant volume in the room, and for a different
+  // reason: there the ceiling is what WebRTC accepts for playback, here it is
+  // audio::kMaxScreenVolumePercent, which is what the mixer will clamp to. The
+  // two agreeing at 200 is a coincidence worth not building on.
+  screen_volume_->setRange(0, client::audio::kMaxScreenVolumePercent);
+  screen_volume_->setValue(session_.screen_audio_volume());
+  // A page's worth is a tenth of the range, so clicking the groove or pressing
+  // Page Up moves in tens rather than in ones. Dragging and the arrow keys stay
+  // on single percentage points, which is the resolution the mixer has anyway.
+  screen_volume_->setPageStep(20);
+
   screen_audio_hint_ = new QLabel(QString{}, video);
   screen_audio_hint_->setWordWrap(true);
   screen_audio_hint_->setProperty("hint", true);
@@ -181,6 +204,12 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // rather than a property of this machine's sound.
   video_form->addRow(QStringLiteral("Share sound"), screen_audio_);
   video_form->addRow(QStringLiteral("Application"), audio_source_);
+  // The label spans the form and the slider takes the value column under it,
+  // for the reason the room's volume slider is stacked the same way: a label
+  // that reads as a sentence and a slider wide enough to aim at do not fit on
+  // one row of a form.
+  video_form->addRow(screen_volume_label_);
+  video_form->addRow(QStringLiteral("Shared volume"), screen_volume_);
   video_form->addRow(screen_audio_hint_);
   // Spanning the form rather than in the value column, because it is a
   // sentence and the value column is as wide as a spin box.
@@ -241,6 +270,9 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
     screen_audio_->setCurrentIndex(mode);
   }
   load_audio_sources();
+  // After load_audio_sources, because whether the slider is usable is decided
+  // by the same mode that decides whether the application box is.
+  show_screen_volume();
   show_storage();
 
   // One call for all three, because in automatic mode the values and whether
@@ -276,6 +308,14 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
   connect(screen_audio_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_screen_audio_changed);
+  connect(noise_suppression_, &QCheckBox::toggled, this,
+          &SettingsDialog::on_noise_suppression_changed);
+  // valueChanged and not sliderReleased, so that dragging is audible while it
+  // happens. That is the whole way this control can be got right: nobody knows
+  // what "sixty percent" sounds like against their own voice, they find it by
+  // moving the slider and listening. Every step applies within one 10 ms block,
+  // and each one replaces the last rather than queueing behind it.
+  connect(screen_volume_, &QSlider::valueChanged, this, &SettingsDialog::on_screen_volume_changed);
 }
 
 void SettingsDialog::show_signaling_hint(const QString& refusal) {
@@ -374,9 +414,72 @@ void SettingsDialog::load_audio_sources() {
 
 void SettingsDialog::on_screen_audio_changed() {
   load_audio_sources();
+  show_screen_volume();
   stage({config::IniSetting{.section = "screen_audio",
                             .key = "mode",
                             .value = screen_audio_->currentData().toString().toStdString()}});
+}
+
+void SettingsDialog::show_screen_volume() {
+  // The slider is only meaningful while the share carries sound at all. It
+  // follows the application box rather than repeating its reasoning: that box
+  // is already disabled for a build or a Windows that cannot capture, and a
+  // volume for a capture that cannot happen is a control with nothing behind
+  // it.
+  const bool carries_sound = screen_audio_->isEnabled() &&
+                             screen_audio_->currentData().toString() != QStringLiteral("none");
+  screen_volume_->setEnabled(carries_sound);
+
+  const int percent = screen_volume_->value();
+  if (!carries_sound) {
+    screen_volume_label_->setText(
+        QStringLiteral("Shared sound would go out at %1%. The share is set to carry none.")
+            .arg(percent));
+    return;
+  }
+  if (percent == 0) {
+    screen_volume_label_->setText(
+        QStringLiteral("Shared sound is silent. The picture still goes out."));
+    return;
+  }
+  if (percent > 100) {
+    // Said plainly rather than left to be discovered. Above 100 the mixer
+    // clamps peaks instead of wrapping them, so the failure mode is a share
+    // that sounds harsh, and somebody who was not told will look for the cause
+    // anywhere but the setting they just moved.
+    screen_volume_label_->setText(
+        QStringLiteral("Shared sound goes out at %1% - louder than the application plays it, "
+                       "which can distort. Everyone in the room hears this level.")
+            .arg(percent));
+    return;
+  }
+  screen_volume_label_->setText(
+      QStringLiteral("Shared sound goes out at %1% next to your microphone. Everyone in the room "
+                     "hears this level.")
+          .arg(percent));
+}
+
+void SettingsDialog::on_screen_volume_changed(int percent) {
+  if (const auto applied = session_.set_screen_audio_volume(percent); !applied) {
+    DV_LOG_WARN("Could not set the shared screen volume: {}", applied.error().message);
+  }
+  show_screen_volume();
+  stage({config::IniSetting{
+      .section = "screen_audio", .key = "volume_percent", .value = std::to_string(percent)}});
+}
+
+void SettingsDialog::on_noise_suppression_changed(bool on) {
+  // The other two blocks are passed through as they stand rather than as the
+  // values this dialog was opened with. They are not on this page, so anything
+  // that moved them moved them elsewhere, and sending a stale copy back would
+  // turn a change of one setting into a quiet revert of two.
+  if (const auto applied = session_.set_audio_processing(session_.echo_cancellation(), on,
+                                                         session_.automatic_gain_control());
+      !applied) {
+    DV_LOG_WARN("Could not set noise suppression: {}", applied.error().message);
+  }
+  stage({config::IniSetting{
+      .section = "audio", .key = "noise_suppression", .value = on ? "true" : "false"}});
 }
 
 void SettingsDialog::load_devices() {
@@ -396,7 +499,7 @@ void SettingsDialog::show_storage() {
     save_->setEnabled(false);
     storage_->setText(
         QStringLiteral("This system does not say where settings belong, so the server, the "
-                       "devices, the bitrate and the screen quality chosen here last only until "
+                       "devices, the sound and the screen settings chosen here last only until "
                        "the program closes."));
     restyle();
     return;
@@ -410,7 +513,7 @@ void SettingsDialog::show_storage() {
   const QString where = QString::fromStdString(file.string());
   if (pending_.empty()) {
     storage_->setText(
-        QStringLiteral("The server, the devices, the bitrate and the screen quality are kept "
+        QStringLiteral("The server, the devices, the sound and the screen settings are kept "
                        "in %1")
             .arg(where));
   } else if (pending_.size() == 1) {

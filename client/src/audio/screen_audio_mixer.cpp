@@ -26,7 +26,50 @@ constexpr BlockPacer::Options kPacing{
   return static_cast<std::int16_t>(std::clamp(sample, kMin, kMax));
 }
 
+/// Unity in the fixed point the screen gain is kept in. See
+/// ScreenAudioMixer::screen_gain_.
+constexpr std::int32_t kGainOne = 256;
+constexpr int kGainShift = 8;
+
+/// One sample at the screen gain, still wide enough to be added to a microphone
+/// before anything is clamped.
+///
+/// The shift is arithmetic on a signed left operand from C++20 on, which is
+/// what this needs: a negative half of a waveform quietened by a right shift
+/// that filled with zeros would come back as a positive spike.
+[[nodiscard]] std::int32_t at_gain(std::int16_t sample, std::int32_t gain) noexcept {
+  return (static_cast<std::int32_t>(sample) * gain) >> kGainShift;
+}
+
 }  // namespace
+
+double screen_volume_ratio(int percent) noexcept {
+  const int asked = std::clamp(percent, 0, kMaxScreenVolumePercent);
+
+  // Linear: the ratio is the percentage. Half on the slider is half the
+  // amplitude of the samples.
+  //
+  // This is the arithmetic answer rather than the perceptual one, and the two
+  // disagree: loudness follows roughly the cube root of amplitude, so half the
+  // amplitude is heard as about four fifths as loud, and a slider calibrated
+  // this way does most of its audible work in the bottom quarter of its travel.
+  // A perceptual curve - the ratio raised to a power, or decibels - spreads the
+  // change evenly along the slider instead.
+  //
+  // Left linear because this control is not a listening volume: it balances the
+  // screen against a microphone, and the number people will reach for is a
+  // ratio between two sources - "half as loud as me" - rather than a position
+  // that feels halfway. It is also the one mapping where the reading on screen
+  // and the arithmetic in the mix are the same claim, which matters when
+  // somebody is trying to work out why a share is quiet.
+  return static_cast<double>(asked) / 100.0;
+}
+
+void ScreenAudioMixer::set_screen_volume(int percent) noexcept {
+  const int asked = std::clamp(percent, 0, kMaxScreenVolumePercent);
+  screen_volume_percent_.store(asked);
+  screen_gain_.store(static_cast<std::int32_t>(std::lround(screen_volume_ratio(asked) * kGainOne)));
+}
 
 ScreenAudioMixer::ScreenAudioMixer() : pacer_(kPacing), screen_block_(kSamplesPerBlock, 0) {}
 
@@ -135,6 +178,11 @@ MixResult ScreenAudioMixer::mix(std::span<const std::int16_t> microphone, std::s
   result.screen_audio = pacer_.take(screen_block_);
   result.channels = 2;
 
+  // Read once for the whole block rather than per sample. A slider moved while
+  // this runs then lands between blocks instead of inside one, which is the
+  // difference between a volume change and a step in the middle of a waveform.
+  const std::int32_t screen_gain = screen_gain_.load();
+
   for (std::size_t frame = 0; frame < frames; ++frame) {
     // A mono microphone goes to both ears; a stereo one keeps its sides. The
     // second case does not happen today - the capture pipeline is mono, as
@@ -144,8 +192,11 @@ MixResult ScreenAudioMixer::mix(std::span<const std::int16_t> microphone, std::s
     const std::int32_t right =
         static_cast<std::int32_t>(microphone[(frame * channels) + (channels - 1)]) * gain;
 
-    out[frame * 2] = saturate(left + screen_block_[frame * 2]);
-    out[(frame * 2) + 1] = saturate(right + screen_block_[(frame * 2) + 1]);
+    // The gain lands on the screen audio alone. The microphone keeps whatever
+    // libwebrtc's own gain control left it at, which is the level the far end
+    // has already learned this person's voice at.
+    out[frame * 2] = saturate(left + at_gain(screen_block_[frame * 2], screen_gain));
+    out[(frame * 2) + 1] = saturate(right + at_gain(screen_block_[(frame * 2) + 1], screen_gain));
   }
 
   return result;

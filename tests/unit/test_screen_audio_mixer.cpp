@@ -269,4 +269,165 @@ TEST(ScreenAudioMixerTest, StoppingWhatNeverStartedIsHarmless) {
   EXPECT_EQ(result.channels, 1U);
 }
 
+// --- the volume of the shared screen --------------------------------------
+
+using dv::client::audio::kMaxScreenVolumePercent;
+using dv::client::audio::screen_volume_ratio;
+
+TEST(ScreenVolumeRatioTest, ThePercentageIsTheRatio) {
+  // Linear, which is the choice this control makes on purpose: it balances a
+  // screen against a microphone, so the number on screen and the arithmetic in
+  // the mix say the same thing. See screen_volume_ratio.
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(0), 0.0);
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(50), 0.5);
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(100), 1.0);
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(200), 2.0);
+}
+
+TEST(ScreenVolumeRatioTest, AnythingOutOfRangeIsClampedRatherThanRefused) {
+  // Reached from a saved configuration as well as from a slider, and a file
+  // holding 500 should be loud rather than fatal.
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(-40), 0.0);
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(10000), 2.0);
+  EXPECT_DOUBLE_EQ(screen_volume_ratio(kMaxScreenVolumePercent + 1), 2.0);
+}
+
+TEST(ScreenAudioMixerTest, TheVolumeStartsWhereAShareUsedToBe) {
+  // A guard on the setting existing at all rather than on its default: every
+  // share before this went out untouched, and a configuration written before
+  // the key existed has to keep meaning that.
+  ScreenAudioMixer mixer;
+  EXPECT_EQ(mixer.screen_volume(), 100);
+
+  mixer.push_screen_audio(screen(1000, -2000));
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(300), 1, out);
+
+  EXPECT_EQ(out[0], 300 + 1000);
+  EXPECT_EQ(out[1], 300 - 2000);
+}
+
+TEST(ScreenAudioMixerTest, HalfVolumeHalvesTheScreenAndLeavesTheVoiceAlone) {
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(50);
+  EXPECT_EQ(mixer.screen_volume(), 50);
+
+  mixer.push_screen_audio(screen(1000, -2000));
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  const MixResult result = mixer.mix(microphone(300), 1, out);
+
+  ASSERT_EQ(result.channels, 2U);
+  // The microphone keeps its 300 in both ears. Quietening the voice as well
+  // would make this a master volume, and the voice already has a gain control -
+  // libwebrtc's, running before any of this.
+  EXPECT_EQ(out[0], 300 + 500);
+  EXPECT_EQ(out[1], 300 - 1000);
+}
+
+TEST(ScreenAudioMixerTest, ANegativeSampleIsQuietenedAndNotInverted) {
+  // The fixed point shift is arithmetic, which is what a signed right shift
+  // means from C++20 on. Filled with zeros instead, the negative half of every
+  // waveform would come back as a large positive number: the sound of the
+  // volume being turned down would be the film turning into noise.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(25);
+  mixer.push_screen_audio(screen(-8000, -1));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(0), 1, out);
+
+  EXPECT_EQ(out[0], -2000);
+  // Still negative after rounding, and nowhere near +32767.
+  EXPECT_LE(out[1], 0);
+  EXPECT_GE(out[1], -1);
+}
+
+TEST(ScreenAudioMixerTest, ZeroVolumeIsSilenceFromTheScreenAndNotFromTheTrack) {
+  // The counterpart of muting the microphone: one source goes quiet and the
+  // other carries on, rather than the track going away.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(0);
+  mixer.push_screen_audio(screen(9000, 9000));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  const MixResult result = mixer.mix(microphone(400), 1, out);
+
+  // Still stereo, and still reporting that a block was taken: the capture is
+  // running and being consumed, it is simply being scaled to nothing.
+  ASSERT_EQ(result.channels, 2U);
+  EXPECT_TRUE(result.screen_audio);
+  EXPECT_EQ(out[0], 400);
+  EXPECT_EQ(out[1], 400);
+}
+
+TEST(ScreenAudioMixerTest, ABoostClipsRatherThanWrappingAround) {
+  // The reason above 100% is offered at all: saturate() is already the net
+  // under it, so the worst a boost can do is sound harsh. Wrapping would turn
+  // the loudest moment into a burst of noise instead.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(kMaxScreenVolumePercent);
+  mixer.push_screen_audio(screen(20000, -20000));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(0), 1, out);
+
+  EXPECT_EQ(out[0], 32767);
+  EXPECT_EQ(out[1], -32768);
+}
+
+TEST(ScreenAudioMixerTest, AQuietSourceIsWhatTheBoostIsFor) {
+  // The case the ceiling exists for: an application playing at a tenth of its
+  // scale, brought back up with headroom to spare and nothing clipped.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(200);
+  mixer.push_screen_audio(screen(3000, -3000));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(0), 1, out);
+
+  EXPECT_EQ(out[0], 6000);
+  EXPECT_EQ(out[1], -6000);
+}
+
+TEST(ScreenAudioMixerTest, TheVolumeIsRememberedAcrossAStop) {
+  // The mixer outlives every call in the process, so a level chosen during one
+  // share is the level the next one starts at. A stop that reset it would make
+  // this setting last exactly as long as one share.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(30);
+  mixer.stop();
+  EXPECT_EQ(mixer.screen_volume(), 30);
+
+  mixer.push_screen_audio(screen(1000, 1000));
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(0), 1, out);
+  EXPECT_EQ(out[0], 300);
+}
+
+TEST(ScreenAudioMixerTest, TheMixerClampsWhatTheInterfaceShouldHaveClamped) {
+  // Belt and braces, and not a duplicate of the clamp in CallSession: that one
+  // keeps the remembered value honest, this one keeps the arithmetic safe for
+  // whoever reaches the mixer without going through it.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(-10);
+  EXPECT_EQ(mixer.screen_volume(), 0);
+
+  mixer.set_screen_volume(9999);
+  EXPECT_EQ(mixer.screen_volume(), kMaxScreenVolumePercent);
+}
+
+TEST(ScreenAudioMixerTest, TheVolumeDoesNotTouchAShareThatCarriesNoSound) {
+  // With no capture and nothing buffered the microphone goes straight through,
+  // mono, whatever the volume says. The screen gain must not reach it.
+  ScreenAudioMixer mixer;
+  mixer.set_screen_volume(0);
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, -1);
+  const MixResult result = mixer.mix(microphone(1234), 1, out);
+
+  EXPECT_EQ(result.channels, 1U);
+  EXPECT_FALSE(result.screen_audio);
+  EXPECT_EQ(out[0], 1234);
+}
+
 }  // namespace

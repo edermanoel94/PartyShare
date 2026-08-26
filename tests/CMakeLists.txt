@@ -62,6 +62,7 @@ set(dv_unit_sources
   unit/test_hub.cpp
   unit/test_permissions.cpp
   unit/test_hub_admin.cpp
+  unit/test_hub_restrictions.cpp
   unit/test_user_store.cpp
   unit/test_chat_store.cpp
   unit/test_video_feedback.cpp

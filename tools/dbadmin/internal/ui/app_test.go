@@ -307,9 +307,11 @@ func TestDeleteAsksFirst(t *testing.T) {
 
 	screen.press("d")
 	screen.awaits(t, "Delete ana?")
-	// The consequence a database tool cannot undo for the operator: the
-	// server's own copy of the session.
-	screen.awaits(t, "goes on")
+	// The consequence, which is no longer "nothing happens to the session".
+	// A running server ends it, and an operator deciding whether to press y
+	// needs to know that the person may be mid-call rather than merely unable
+	// to sign in next time.
+	screen.awaits(t, "ends the session")
 
 	screen.press("n")
 	if len(database.deleted) != 0 {

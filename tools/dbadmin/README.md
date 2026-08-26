@@ -138,9 +138,13 @@ The last administrator cannot be banned, for the reason they cannot be deleted o
 The other three are allowed on any account, an administrator's included: an administrator who may not use a microphone can still administer.
 
 A running server re-reads the account on its next message from it, so a restriction written here takes effect there without a restart.
-What it does not do is what the server does in the same breath: end a session already open, take a microphone already on, stop a share already running.
-All three live in the memory of a process this program has no connection to.
-With the server up, use the panel in the client instead.
+It also acts on what is already happening, which it did not always do: a microphone already on, a share already running and a session already open are all reached within one heartbeat interval, five seconds by default.
+The server notices by comparing the accounts of the people currently connected against what each of their sessions logged in with, once per heartbeat, in `server/src/signaling/restriction_source.hpp`.
+Nothing here has to announce anything for that: this program still writes the document and only the document, which is what lets it work against a database with no server anywhere near it.
+
+The one difference from the panel is whose name is on it.
+A restriction sent from the client names the administrator who sent it, and every participant's client says so; one written here reaches them with no name, and their client says "an administrator", because that is all the server can tell from a document that changed.
+The audit entry this program writes is where the name is, attributed to `dbadmin:<name>`.
 
 The list shows what is taken away in a column short enough to fit, `ban mic chat screen`, and the detail card behind `enter` prints the field names in full.
 
@@ -161,14 +165,14 @@ Deleting the document means the room does not come back at the next start; it do
 The confirmation screen says so.
 With the server up, close it from the client's admin panel instead, where all of it takes effect at once.
 
-It does not kick anybody out of a room, and it does not mute a microphone that is on right now.
+It does not kick anybody out of a room, and it does not force-mute one participant of one room.
 Both are about a room, and a room is memory in a process this program has no connection to.
-Banning and muting an account is the lasting half of the same thing, and that is what the restrictions above are.
+Banning and muting an *account* is the lasting half of the same thing, and that is what the restrictions above are — those a running server does pick up and act on, microphone included, within a heartbeat.
 
-It does not reach a running server.
-Deleting an account removes the document; it does not evict that account from its room and does not revoke the tokens it already holds, because both live in the memory of a process this program has no connection to.
+It does not decide *when* a running server acts, only that it eventually does.
+Removing an account and banning one both reach a live server on its next pass rather than at the moment the form is submitted, so there is up to a heartbeat interval — five seconds by default — between the write and the room emptying.
 The confirmation screen says so.
-The same limit applies to banning: the account cannot log in again, and a session it already holds keeps working until it expires.
+There is no version of this that is instant: this program's whole contract is that it works with no server to talk to.
 With the server up, remove or restrict the account from the client panel instead, where all of it takes effect at once.
 
 ## Tests

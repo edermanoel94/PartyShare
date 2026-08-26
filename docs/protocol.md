@@ -330,6 +330,12 @@ The account's own connection is told before a ban closes it: a ban that ended th
 What `restrict_user` does not do is duplicate the announcements the room already has.
 Taking the microphone is confirmed to the room as an ordinary `mute` carrying `by_user_id`, and stopping a share as an ordinary `screen_share_stopped`, so a client that knows nothing about restrictions still draws both correctly.
 
+A `user_restricted` can also arrive with no `by_user_id` at all, and that is not a client that forgot to fill it in.
+`restrict_user` is not the only way an account's restrictions change: `tools/dbadmin` edits the accounts collection directly, because it exists to be usable when there is no server running to send a message to.
+A server that *is* running notices within one heartbeat interval and enforces exactly what a `restrict_user` would have, announcements included, but nobody sent it anything, so there is no account to name as the actor.
+Clients render the missing name as "an administrator", which is as much as the server knows; the audit log is where the name is.
+Nothing else about the message differs, so a client needs no special case beyond the one it already has for an absent optional field.
+
 `kick_user` and `restrict_user` are different tools and neither replaces the other.
 A kick ends one visit to one room and the account can come straight back; a restriction stays with the account until an administrator lifts it.
 

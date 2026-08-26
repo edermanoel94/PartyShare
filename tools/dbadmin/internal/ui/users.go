@@ -459,11 +459,11 @@ func (m *usersModel) openPassword(account store.Account) {
 func (m *usersModel) openRestrict(account store.Account) {
 	m.form = newForm("Restrictions for "+account.Username,
 		"These stay with the account until they are lifted, across rooms and "+
-			"across sign ins. A running server reads them back on this account's "+
-			"next message, so they take effect there without a restart. What it "+
-			"cannot do from here is end a session already open, take a microphone "+
-			"already on, or stop a share already running: those live in the memory "+
-			"of a process this program has no connection to.", "save",
+			"across sign ins. A running server picks them up within a heartbeat, "+
+			"five seconds by default, and acts on what is already happening: a "+
+			"microphone already on, a share already running, a session already "+
+			"open. Everyone in the room is told, without a name attached, because "+
+			"a document that changed does not carry one. The audit entry does.", "save",
 		choiceField("Cannot sign in", yesNo(), yesNoIndex(account.Restrictions.Banned),
 			"The lasting form of a kick. The last administrator cannot be banned."),
 		choiceField("Cannot use the microphone", yesNo(),
@@ -668,10 +668,10 @@ func (m *usersModel) deleteView() string {
 		cardLabelStyle.Render("Role       ") + roleLabel(m.target.Role),
 		"",
 		lipgloss.NewStyle().Width(content).Render(
-			"The account is removed from the database. A running server keeps " +
-				"whatever it already has in memory: a session opened before now goes on " +
-				"working until it expires, and the account is not evicted from its room. " +
-				"Do that from the admin panel if the server is up."),
+			"The account is removed from the database. A running server notices " +
+				"within a heartbeat, five seconds by default, and ends the session it " +
+				"was holding: out of its room, tokens revoked, and everybody in the " +
+				"room told. Anything that account said stays where it was said."),
 		"",
 		helpLine(content, keyHint("y", "delete"), keyHint("n", "keep")),
 	}

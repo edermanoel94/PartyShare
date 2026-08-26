@@ -42,4 +42,36 @@ inline constexpr std::size_t kRoomIdLength = 6;
 
 [[nodiscard]] bool is_valid_room_id(const std::string& id) noexcept;
 
+/// The longest a room name may be, in bytes.
+///
+/// Bounded for the same reason a chat line is: this is text a participant
+/// types, and the server writes it to the database and shows it in a column on
+/// everybody else's home page. Anything longer is refused rather than
+/// truncated, so that the name somebody chose and the name the room carries are
+/// never two different strings.
+inline constexpr std::size_t kMaxRoomNameBytes = 48;
+
+/// `name` without the whitespace around it. What the server stores, so that a
+/// name of nothing but spaces cannot masquerade as one somebody chose.
+[[nodiscard]] std::string trim_room_name(const std::string& name);
+
+/// Whether the server will accept `name`. An empty name is valid: it is how a
+/// client asks for the room to be called by its own identifier, and the
+/// RoomManager is what fills that in.
+[[nodiscard]] bool is_valid_room_name(const std::string& name);
+
+/// The form two room names are compared in when deciding whether one is
+/// already taken: trimmed, with the ASCII letters folded to lower case.
+///
+/// Only the ASCII letters. Full case folding needs a Unicode table, which is a
+/// dependency this project does not carry for one comparison, and the partial
+/// job is worth more than nothing here: names differ in case mostly at the
+/// first letter, so "Reunião" and "reunião" do collide. "REUNIÃO" does not,
+/// because Ã and ã are different bytes and nothing here knows they are a pair.
+///
+/// Folding only 'A' to 'Z' is safe on text that is not ASCII: every byte of a
+/// multibyte UTF-8 character is at least 0x80, so none of them can be mistaken
+/// for a letter this touches.
+[[nodiscard]] std::string room_name_key(const std::string& name);
+
 }  // namespace dv::models

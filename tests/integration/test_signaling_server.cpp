@@ -83,7 +83,7 @@ class SignalingServerTest : public ::testing::Test {
   }
 
   std::string create_room(WebSocketTestClient& client, const std::string& user_id) {
-    client.send(proto::CreateRoom{user_id, "dev-room"});
+    client.send(proto::CreateRoom{user_id, ""});
     const auto created = client.wait_for<proto::RoomCreated>(kTimeout);
     EXPECT_TRUE(created.has_value());
     return created ? created->room_id : std::string{};

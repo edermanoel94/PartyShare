@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <optional>
@@ -8,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <dv/models/chat.hpp>
+#include <dv/models/room.hpp>
 #include <dv/protocol/message.hpp>
 
 #include "signaling/hub.hpp"
@@ -54,7 +56,7 @@ class HubTest : public ::testing::Test {
   }
 
   std::string create_room(ConnectionId connection, const std::string& user_id) {
-    const auto out = send(connection, proto::CreateRoom{user_id, "dev-room"});
+    const auto out = send(connection, proto::CreateRoom{user_id, ""});
     const auto created = find<proto::RoomCreated>(out, connection);
     EXPECT_TRUE(created.has_value());
     return created ? created->room_id : std::string{};
@@ -154,6 +156,80 @@ TEST_F(HubTest, CreateRoomReturnsAValidIdentifier) {
   const auto [connection, user] = login("ana");
   const std::string room = create_room(connection, user.id);
   EXPECT_TRUE(dv::models::is_valid_room_id(room)) << room;
+}
+
+TEST_F(HubTest, CreateRoomEchoesTheNameItWasGiven) {
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{user.id, "  Retro de sexta  "});
+  const auto created = find<proto::RoomCreated>(out, connection);
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->room_name, "Retro de sexta");
+}
+
+TEST_F(HubTest, CreateRoomWithNoNameAnswersWithTheIdentifier) {
+  // Not an echo of the empty request. Whoever created the room is told what it
+  // is actually called, which is what everybody else's list shows.
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{user.id, ""});
+  const auto created = find<proto::RoomCreated>(out, connection);
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->room_name, created->room_id);
+}
+
+TEST_F(HubTest, CreateRoomRejectsANameThatIsTooLong) {
+  const auto [connection, user] = login("ana");
+  const std::string too_long(dv::models::kMaxRoomNameBytes + 1, 'a');
+  const auto out = send(connection, proto::CreateRoom{user.id, too_long});
+  const auto error = find<proto::ErrorMessage>(out, connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+  EXPECT_FALSE(find<proto::RoomCreated>(out, connection).has_value());
+}
+
+TEST_F(HubTest, CreateRoomRejectsANameCarryingATab) {
+  // A tab would arrive at the client's table as an extra column.
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{user.id, "Retro\tde sexta"});
+  const auto error = find<proto::ErrorMessage>(out, connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+}
+
+TEST_F(HubTest, ARoomNameReachesTheListEverybodySees) {
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{user.id, "Retro de sexta"});
+  const auto created = find<proto::RoomCreated>(out, connection);
+  ASSERT_TRUE(created.has_value());
+
+  // The list is broadcast to every signed in connection as part of the same
+  // exchange, so the answer to the create already carries it.
+  const auto rooms = find<proto::RoomList>(out, connection);
+  ASSERT_TRUE(rooms.has_value());
+  const auto it = std::ranges::find(rooms->rooms, created->room_id, &proto::RoomSummary::id);
+  ASSERT_NE(it, rooms->rooms.end());
+  EXPECT_EQ(it->name, "Retro de sexta");
+}
+
+TEST_F(HubTest, CreateRoomRefusesANameSomebodyElseIsUsing) {
+  // Two accounts, because one account cannot have two rooms anyway: the
+  // ownership limit would answer first and this would be testing that instead.
+  const auto [ana, ana_user] = login("ana");
+  ASSERT_TRUE(find<proto::RoomCreated>(send(ana, proto::CreateRoom{ana_user.id, "Daily"}), ana)
+                  .has_value());
+
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto out = send(bruno, proto::CreateRoom{bruno_user.id, "  daily  "});
+
+  const auto error = find<proto::ErrorMessage>(out, bruno);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "room_name_taken");
+  EXPECT_FALSE(find<proto::RoomCreated>(out, bruno).has_value());
+
+  // And the refusal cost nothing: the one room is still the only one.
+  const auto listed = send(bruno, proto::ListRooms{});
+  const auto rooms = find<proto::RoomList>(listed, bruno);
+  ASSERT_TRUE(rooms.has_value());
+  EXPECT_EQ(rooms->rooms.size(), 1U);
 }
 
 TEST_F(HubTest, CreateRoomRejectsSomeoneElsesUserId) {
@@ -773,7 +849,7 @@ TEST_F(HubTest, AnUnauthenticatedConnectionIsNotSentTheRoomList) {
   const auto [ana, ana_user] = login("ana");
   const ConnectionId stranger = connect();
 
-  const auto out = send(ana, proto::CreateRoom{ana_user.id, "dev-room"});
+  const auto out = send(ana, proto::CreateRoom{ana_user.id, ""});
 
   EXPECT_FALSE(find<proto::RoomList>(out, stranger).has_value());
 }

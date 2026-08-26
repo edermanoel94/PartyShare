@@ -397,7 +397,7 @@ class Client {
   }
 
   [[nodiscard]] std::string create_room() {
-    if (!session_->create_room("dev-room").ok()) {
+    if (!session_->create_room("").ok()) {
       return {};
     }
     if (!wait_until([this] { return !room_created().empty(); })) {

@@ -59,7 +59,17 @@ class RoomManager {
   /// emptied: somebody who stepped out of their own room came back to an
   /// identifier that no longer existed, and a list that still showed it. A
   /// room now ends only when somebody closes it, which is `remove_room`.
-  [[nodiscard]] Result<std::string> create_room(std::string name, std::string owner_id = {});
+  ///
+  /// `name` is trimmed, and an empty one becomes the identifier the room was
+  /// just given. Naming a room is optional and always was; what changed is
+  /// that the fallback is decided here, once, instead of by whichever screen
+  /// happens to be showing the room. Callers may pass whatever a person typed.
+  ///
+  /// Fails with `room_name_taken` when another room already answers to that
+  /// name, compared by `models::room_name_key`. A name is what somebody reads
+  /// in a list and then clicks, so two rooms wearing one name is a list that
+  /// cannot be acted on.
+  [[nodiscard]] Result<std::string> create_room(const std::string& name, std::string owner_id = {});
 
   /// Reads the rooms back from the store, so that an identifier somebody wrote
   /// down still works after a restart. Rooms come back empty: who was inside
@@ -134,6 +144,15 @@ class RoomManager {
 
  private:
   [[nodiscard]] std::string generate_room_id();
+
+  /// Whether a room already answers to this name. `key` is what
+  /// `models::room_name_key` returns, not the name as typed.
+  ///
+  /// A scan, and not an index kept beside the map. The map is the one place a
+  /// room exists, so a scan cannot disagree with it, and an index would have
+  /// to be corrected in create, remove and load without ever being the thing
+  /// anybody reads. `room_owned_by` scans for the same reason.
+  [[nodiscard]] bool name_taken(const std::string& key) const;
 
   /// Called from the two places a room stops existing, and from nowhere else.
   ///

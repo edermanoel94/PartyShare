@@ -416,7 +416,7 @@ TEST_F(SignalingClientTest, CreatesAndJoinsARoom) {
   Recorder& recorder = new_recorder();
   const auto [client, user] = login("ana", recorder);
 
-  ASSERT_TRUE(client->send(proto::CreateRoom{user.id, "dev-room"}).ok());
+  ASSERT_TRUE(client->send(proto::CreateRoom{user.id, ""}).ok());
   const auto created = recorder.wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   EXPECT_EQ(created->room_id.size(), 6U);
@@ -450,7 +450,7 @@ TEST_F(SignalingClientTest, RelaysAnOfferBetweenTwoClients) {
   const auto [ana, ana_user] = login("ana", ana_recorder);
   const auto [bruno, bruno_user] = login("bruno", bruno_recorder);
 
-  ASSERT_TRUE(ana->send(proto::CreateRoom{ana_user.id, "dev-room"}).ok());
+  ASSERT_TRUE(ana->send(proto::CreateRoom{ana_user.id, ""}).ok());
   const auto created = ana_recorder.wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;

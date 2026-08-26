@@ -361,6 +361,19 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
+  // Checked before the ownership limit below, so that a name nobody could have
+  // meant is answered as such rather than as "you already have a room". An
+  // empty name is not a failure here: it is the request to be called by the
+  // identifier, and the RoomManager is what fills that in.
+  if (!models::is_valid_room_name(message.room_name)) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "invalid_value",
+              .message = "a room name is at most " + std::to_string(models::kMaxRoomNameBytes) +
+                         " bytes once trimmed, and carries no control characters"});
+    return;
+  }
+
   // One room each, for anybody who is not an administrator.
   //
   // The limit is what a room outliving its last participant costs. Before
@@ -396,14 +409,21 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   }
   const std::string room_id = std::move(created).take();
 
+  // The name the room ended up with, which is not always the one that was
+  // asked for: an empty request becomes the identifier. Echoing the request
+  // back would tell whoever created the room that it has no name, while every
+  // other client's list shows it carrying a code.
+  const models::Room* created_room = rooms_.find(room_id);
+  const std::string room_name = created_room != nullptr ? created_room->name : room_id;
+
   // Not recorded in the audit log. It used to be, for the one room an
   // administrator had to ask for; creating a room is now something every
   // participant does, and the log is for administrative actions only. See
   // NothingAParticipantDoesReachesTheLog.
-  DV_LOG_INFO("Room {} created by {}", room_id, user->id);
-  out.push_back(Outgoing{
-      .connection = connection.id,
-      .message = protocol::RoomCreated{.room_id = room_id, .room_name = message.room_name}});
+  DV_LOG_INFO("Room {} (\"{}\") created by {}", room_id, room_name, user->id);
+  out.push_back(
+      Outgoing{.connection = connection.id,
+               .message = protocol::RoomCreated{.room_id = room_id, .room_name = room_name}});
   broadcast_room_list(out);
 }
 

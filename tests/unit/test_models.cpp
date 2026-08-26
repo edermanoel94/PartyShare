@@ -150,4 +150,66 @@ TEST(ChatText, TheLimitIsBytesSoEmojiCostFourOfThem) {
   EXPECT_FALSE(dv::models::is_valid_chat_text(exactly_full + one));
 }
 
+TEST(RoomName, TrimsTheWhitespaceAround) {
+  EXPECT_EQ(dv::models::trim_room_name("  Retro de sexta  "), "Retro de sexta");
+  EXPECT_EQ(dv::models::trim_room_name("\r\n Daily \t"), "Daily");
+}
+
+TEST(RoomName, AcceptsAnEmptyName) {
+  // Not an omission to be refused. An empty name is how a client asks for the
+  // room to be called by its own identifier, and the RoomManager fills it in.
+  EXPECT_TRUE(dv::models::is_valid_room_name(""));
+  EXPECT_TRUE(dv::models::is_valid_room_name("     "));
+  EXPECT_EQ(dv::models::trim_room_name("     "), "");
+}
+
+TEST(RoomName, MeasuresTheLimitAfterTrimming) {
+  const std::string full(dv::models::kMaxRoomNameBytes, 'a');
+  EXPECT_TRUE(dv::models::is_valid_room_name(full));
+  EXPECT_TRUE(dv::models::is_valid_room_name("   " + full + "   "));
+  EXPECT_FALSE(dv::models::is_valid_room_name(full + "a"));
+}
+
+TEST(RoomName, LeavesMultibyteCharactersAlone) {
+  // The limit is bytes and a room name is text people type in their own
+  // language, so an accent costs two of them. Pinned rather than discovered.
+  EXPECT_EQ(dv::models::trim_room_name(" Reunião de sexta "), "Reunião de sexta");
+  EXPECT_TRUE(dv::models::is_valid_room_name("Reunião de sexta"));
+}
+
+TEST(RoomNameKey, FoldsAsciiCaseAndTrims) {
+  EXPECT_EQ(dv::models::room_name_key("  Retro De Sexta  "), "retro de sexta");
+  EXPECT_EQ(dv::models::room_name_key("DAILY"), dv::models::room_name_key("daily"));
+}
+
+TEST(RoomNameKey, FoldsTheAsciiLettersOfAWordThatIsNotAscii) {
+  // The half of the job that is worth having: names differ in case at the
+  // first letter far more often than anywhere else, and the first letter is
+  // usually ASCII even when the word is not.
+  EXPECT_EQ(dv::models::room_name_key("Reunião"), dv::models::room_name_key("reunião"));
+}
+
+TEST(RoomNameKey, LeavesAccentedLettersAsTheyAre) {
+  // Pinned rather than discovered. Folding Ã to ã needs a Unicode table this
+  // project does not carry, so these two are different names, and somebody
+  // surprised by that should find this test rather than guess.
+  EXPECT_NE(dv::models::room_name_key("REUNIÃO"), dv::models::room_name_key("reunião"));
+}
+
+TEST(RoomNameKey, DoesNotCorruptMultibyteCharacters) {
+  // The safety property behind folding bytes instead of characters: every byte
+  // of a multibyte UTF-8 character is at least 0x80, so nothing in 'A' to 'Z'
+  // can land inside one.
+  EXPECT_EQ(dv::models::room_name_key("ção 🚀"), "ção 🚀");
+}
+
+TEST(RoomName, RejectsControlCharacters) {
+  // The client flattens every room into one tab separated row on its way to
+  // the table. A name carrying a tab would arrive there as extra columns in
+  // everybody else's list, so it is refused at the door.
+  EXPECT_FALSE(dv::models::is_valid_room_name("Retro\tde sexta"));
+  EXPECT_FALSE(dv::models::is_valid_room_name("Retro\nde sexta"));
+  EXPECT_FALSE(dv::models::is_valid_room_name(std::string("Retro\0de sexta", 14)));
+}
+
 }  // namespace

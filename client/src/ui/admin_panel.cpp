@@ -89,6 +89,11 @@ QWidget* AdminPanel::build_rooms_tab() {
   // is width spent on nothing.
   rooms_ =
       make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, page);
+  // The slack goes to Name, for the reason it does on the home page: a name is
+  // as long as somebody made it, and People is one digit.
+  rooms_->horizontalHeader()->setStretchLastSection(false);
+  rooms_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  rooms_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   column->addWidget(rooms_, 1);
 
   auto* controls = new QHBoxLayout();

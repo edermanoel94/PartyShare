@@ -231,7 +231,7 @@ class Participant {
   }
 
   [[nodiscard]] bool create_room() {
-    if (!signaling_.send(proto::CreateRoom{user_.id, "dev-room"}).ok()) {
+    if (!signaling_.send(proto::CreateRoom{user_.id, ""}).ok()) {
       return false;
     }
     return wait_until([this] { return !created_room_id_.empty(); });

@@ -207,6 +207,11 @@ class MainWindow : public QMainWindow {
   /// Puts the microphone meter back to nothing and stops animating it.
   void quiet_level();
 
+  /// Writes the current room's name into the title above the call. Called both
+  /// when the room is entered and whenever a room list arrives, because the
+  /// name may only be known on the second of those.
+  void refresh_room_title();
+
   client::app::CallSession& session_;
 
   QStackedWidget* pages_ = nullptr;
@@ -220,12 +225,23 @@ class MainWindow : public QMainWindow {
   // Home.
   QLabel* welcome_ = nullptr;
   QLineEdit* room_id_ = nullptr;
+  /// What the room about to be created is called. Empty is the ordinary case
+  /// and not an omission: the server names such a room after its identifier.
+  QLineEdit* room_name_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
   /// Every room that exists, so that arriving here does not require already
   /// knowing a six character code. See build_home_page.
   QTableWidget* room_list_ = nullptr;
   QLabel* rooms_empty_ = nullptr;
+  /// Identifier to name, kept from the last room list.
+  ///
+  /// The title above a call wants the name, and nothing in the join exchange
+  /// carries it: the server answers a join with who is in the room, not with
+  /// what it is called. The list is broadcast to every signed in client on
+  /// every arrival and departure, so this is never long out of date, and a
+  /// room missing from it falls back to its identifier.
+  QHash<QString, QString> room_names_;
   /// Shown only to an administrator. See on_open_administration.
   QPushButton* admin_button_ = nullptr;
 

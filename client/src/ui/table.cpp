@@ -29,8 +29,18 @@ void fill(QTableWidget* table, const QStringList& rows) {
     const QStringList fields = rows.at(row).split(QLatin1Char('\t'));
     for (int column = 0; column < table->columnCount(); ++column) {
       // The identifier is field 0, so the columns start at 1.
-      auto* item = new QTableWidgetItem(fields.value(column + 1));
+      const QString text = fields.value(column + 1);
+      auto* item = new QTableWidgetItem(text);
       item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+      // The full text, for the cells that are too narrow to show it. A room
+      // name is as long as somebody made it and an audit detail is a sentence,
+      // and both land in a column sized by the panel around them: without this
+      // the only way to read "Reunião de sexta às..." is to widen the window.
+      // Harmless on a cell that fits, where the tooltip says what is already
+      // on screen.
+      if (!text.isEmpty()) {
+        item->setToolTip(text);
+      }
       if (column == 0) {
         item->setData(kIdRole, fields.value(0));
       }

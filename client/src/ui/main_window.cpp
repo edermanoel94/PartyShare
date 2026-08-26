@@ -6,6 +6,7 @@
 
 #include <dv/logging/logger.hpp>
 #include <dv/models/chat.hpp>
+#include <dv/models/room.hpp>
 
 #include <QAbstractAnimation>
 #include <QAbstractItemView>
@@ -21,6 +22,7 @@
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -208,6 +210,12 @@ constexpr int kLevelFrameMs = 16;
   static const QHash<QString, QString> kKnown = {
       {QStringLiteral("room_not_found"), QStringLiteral("That room does not exist.")},
       {QStringLiteral("room_full"), QStringLiteral("The room is full.")},
+      // The name is left in the field rather than cleared, so that picking a
+      // different one is an edit and not a retype. Only a room that was
+      // actually created clears it. See apply_room_created.
+      {QStringLiteral("room_name_taken"),
+       QStringLiteral("Another room already has that name. Pick a different one, or leave the "
+                      "field empty to be given the room code.")},
       {QStringLiteral("unauthorized"), QStringLiteral("Wrong username or password.")},
       // Its own code rather than `unauthorized`, because the session asking is
       // perfectly valid and one field of a form is wrong. See
@@ -382,12 +390,32 @@ void MainWindow::build_home_page() {
   room_list_ =
       make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, box);
   room_list_->setMinimumHeight(160);
+  // The slack goes to Name rather than to the last column, which is what
+  // make_table does by default. A room name runs to 48 bytes now where it used
+  // to be a six character code, and the default widths cut "Reunião de sexta
+  // às 18h" down to "Reunião de sext..." while People kept room for a number
+  // that is never wider than one digit.
+  room_list_->horizontalHeader()->setStretchLastSection(false);
+  room_list_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  room_list_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
 
   // A table with no rows is indistinguishable from a table that failed to
   // load, so the empty case says which one it is.
   rooms_empty_ = new QLabel(QStringLiteral("No rooms yet. Create the first one."), box);
   rooms_empty_->setAlignment(Qt::AlignCenter);
   rooms_empty_->setProperty("hint", true);
+
+  // Above the button rather than behind it in a dialog. Naming a room is
+  // optional, and a modal that opens on every click would make it feel
+  // required; a field somebody can walk straight past says the opposite.
+  room_name_ = new QLineEdit(box);
+  room_name_->setPlaceholderText(QStringLiteral("Room name, or leave empty for the code"));
+  room_name_->setAlignment(Qt::AlignCenter);
+  room_name_->setMinimumHeight(44);
+  // No setMaxLength. Qt counts UTF-16 code units and the server counts UTF-8
+  // bytes, so a cap of 48 here would still let "Reunião de sexta" through at
+  // one length and refuse it at another. The length is checked on the way out
+  // instead, with the same predicate the server uses. See on_create_room.
 
   create_button_ = new QPushButton(QStringLiteral("Create room"), box);
   create_button_->setMinimumHeight(44);
@@ -432,6 +460,7 @@ void MainWindow::build_home_page() {
   column->addWidget(room_list_, 1);
   column->addWidget(rooms_empty_);
   column->addSpacing(12);
+  column->addWidget(room_name_);
   column->addWidget(create_button_);
   column->addSpacing(16);
   // The field stays. A list is how you find a room nobody told you about; a
@@ -476,6 +505,10 @@ void MainWindow::build_home_page() {
   });
 
   connect(create_button_, &QPushButton::clicked, this, &MainWindow::on_create_room);
+  // Enter in the name field creates, the way Enter in the code field joins.
+  // Typing a name and then reaching for the mouse is the same interruption
+  // either way round.
+  connect(room_name_, &QLineEdit::returnPressed, this, &MainWindow::on_create_room);
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
   connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
@@ -998,7 +1031,23 @@ void MainWindow::apply_password_changed() {
 }
 
 void MainWindow::on_create_room() {
-  if (const auto created = session_.create_room("room"); !created) {
+  // Left as the person typed it, accents and all, and trimmed by the server.
+  // Trimming here too would only mean two places that have to agree on what
+  // whitespace is.
+  const std::string name = room_name_->text().toStdString();
+
+  // The same predicate the server applies, so that a name too long is answered
+  // here instead of after a round trip. It is still checked there: this window
+  // is not the only thing that can send a create_room.
+  if (!models::is_valid_room_name(name)) {
+    apply_error(QStringLiteral("invalid_value"),
+                QStringLiteral("A room name is at most %1 bytes and cannot contain tabs or line "
+                               "breaks. Leave it empty to be given the room code.")
+                    .arg(static_cast<int>(models::kMaxRoomNameBytes)));
+    return;
+  }
+
+  if (const auto created = session_.create_room(name); !created) {
     apply_error(QString::fromStdString(created.error().code),
                 QString::fromStdString(created.error().message));
   }
@@ -1319,6 +1368,21 @@ void MainWindow::apply_state(int state, const QString& detail) {
 }
 
 void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
+  // Read off the rows before they are handed to the table, which keeps only
+  // what it shows. The row is identifier, identifier, name, count; the first
+  // field is the hidden key every table here carries. See ui::fill.
+  room_names_.clear();
+  room_names_.reserve(static_cast<int>(rows.size()));
+  for (const QString& row : rows) {
+    const QStringList fields = row.split(QLatin1Char('\t'));
+    if (fields.size() >= 3) {
+      room_names_.insert(fields.at(0), fields.at(2));
+    }
+  }
+  // The list is what carries the name, and it arrives after the join as often
+  // as before it.
+  refresh_room_title();
+
   fill(room_list_, rows);
   const bool empty = rows.isEmpty();
   room_list_->setVisible(!empty);
@@ -1573,6 +1637,9 @@ void MainWindow::apply_error(const QString& code, const QString& message) {
 
 void MainWindow::apply_room_created(const QString& room_id) {
   room_id_->setText(room_id);
+  // The name belongs to the room that now exists. Left in the field, it would
+  // quietly become the name of the next room created from this window.
+  room_name_->clear();
 
   // Not from the administration panel. A persistent room is pre-created there
   // for other people to use later, and joining it would take the administrator
@@ -1830,6 +1897,20 @@ void MainWindow::apply_forced_mute(const QString& name, const QString& by_name, 
                          : QStringLiteral("%1 was unmuted by %2").arg(who, by));
 }
 
+void MainWindow::refresh_room_title() {
+  const QString id = QString::fromStdString(session_.room_id());
+  if (id.isEmpty()) {
+    return;
+  }
+  const QString name = room_names_.value(id);
+
+  // A room nobody named carries its own identifier as its name, so showing
+  // both would read "8F42A1 (8F42A1)". The same line covers a name we have not
+  // been told yet, which is what the first moments after a join look like.
+  room_title_->setText(name.isEmpty() || name == id ? QStringLiteral("Room: %1").arg(id)
+                                                    : QStringLiteral("%1 - %2").arg(name, id));
+}
+
 void MainWindow::show_page() {
   switch (state_) {
     // Until there is a call, the page depends only on whether anyone is signed
@@ -1842,8 +1923,7 @@ void MainWindow::show_page() {
       break;
     case client::app::CallSession::State::InCall:
       go_to_page(kRoomPage);
-      room_title_->setText(
-          QStringLiteral("Room: %1").arg(QString::fromStdString(session_.room_id())));
+      refresh_room_title();
       break;
   }
 }

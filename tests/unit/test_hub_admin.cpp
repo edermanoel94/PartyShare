@@ -74,7 +74,7 @@ class HubAdminTest : public ::testing::Test {
     std::tie(user_connection_, user_) = login("bruno", Role::User);
 
     const auto created = find<proto::RoomCreated>(
-        send(admin_connection_, proto::CreateRoom{admin_.id, "room"}), admin_connection_);
+        send(admin_connection_, proto::CreateRoom{admin_.id, ""}), admin_connection_);
     ASSERT_TRUE(created.has_value());
     room_ = created->room_id;
 

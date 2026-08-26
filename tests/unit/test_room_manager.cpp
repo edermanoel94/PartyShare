@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -15,7 +16,7 @@ RoomManager make_manager(int capacity = 5) {
   return RoomManager(RoomManager::Options{capacity, 1234u});
 }
 
-std::string create(RoomManager& manager, const std::string& name = "dev-room") {
+std::string create(RoomManager& manager, const std::string& name = "") {
   auto created = manager.create_room(name);
   EXPECT_TRUE(created.ok());
   return created.ok() ? created.value() : std::string{};
@@ -45,6 +46,157 @@ TEST(RoomManager, KeepsTheRoomName) {
   const std::string id = create(manager, "dev-room");
   ASSERT_NE(manager.find(id), nullptr);
   EXPECT_EQ(manager.find(id)->name, "dev-room");
+}
+
+TEST(RoomManager, AnUnnamedRoomIsCalledByItsIdentifier) {
+  // The whole point of the fallback living here: whatever screen or client
+  // asked for the room, the name it ends up with is never empty.
+  RoomManager manager = make_manager();
+  const std::string id = create(manager, "");
+  ASSERT_NE(manager.find(id), nullptr);
+  EXPECT_EQ(manager.find(id)->name, id);
+}
+
+TEST(RoomManager, ANameOfNothingButWhitespaceIsNoName) {
+  RoomManager manager = make_manager();
+  const std::string id = create(manager, "   \t  ");
+  ASSERT_NE(manager.find(id), nullptr);
+  EXPECT_EQ(manager.find(id)->name, id);
+}
+
+TEST(RoomManager, TrimsTheNameItIsGiven) {
+  RoomManager manager = make_manager();
+  const std::string id = create(manager, "  Retro de sexta  ");
+  ASSERT_NE(manager.find(id), nullptr);
+  EXPECT_EQ(manager.find(id)->name, "Retro de sexta");
+}
+
+TEST(RoomManager, RefusesANameAnotherRoomAlreadyHas) {
+  RoomManager manager = make_manager();
+  const std::string first = create(manager, "Daily");
+  ASSERT_FALSE(first.empty());
+
+  auto second = manager.create_room("Daily");
+  ASSERT_FALSE(second.ok());
+  EXPECT_EQ(second.error().code, "room_name_taken");
+  // Refused, and nothing left behind: an identifier was drawn and has to go
+  // back, or a failed creation costs a room.
+  EXPECT_EQ(manager.room_count(), 1u);
+}
+
+TEST(RoomManager, TheDuplicateCheckIgnoresCaseAndWhitespace) {
+  RoomManager manager = make_manager();
+  (void)create(manager, "Daily");
+
+  // A named vector rather than a braced list in the loop head. That list
+  // deduces to initializer_list<const char*>, so binding each element to a
+  // const std::string& builds a temporary per turn, which is what GCC's
+  // -Wrange-loop-construct is for and what MSVC never mentions.
+  const std::vector<std::string> variants = {"daily", "DAILY", "  Daily  ", "dAiLy"};
+  for (const std::string& variant : variants) {
+    auto refused = manager.create_room(variant);
+    EXPECT_FALSE(refused.ok()) << variant << " was accepted";
+    if (!refused.ok()) {
+      EXPECT_EQ(refused.error().code, "room_name_taken") << variant;
+    }
+  }
+  EXPECT_EQ(manager.room_count(), 1u);
+}
+
+TEST(RoomManager, ClosingARoomFreesItsName) {
+  // The rule is about rooms that exist. A name held forever by a room somebody
+  // closed would be a name nobody can use and nobody can find.
+  RoomManager manager = make_manager();
+  const std::string first = create(manager, "Daily");
+  ASSERT_TRUE(manager.remove_room(first).ok());
+
+  auto again = manager.create_room("Daily");
+  ASSERT_TRUE(again.ok()) << again.error().message;
+  EXPECT_NE(again.value(), first);
+}
+
+TEST(RoomManager, UnnamedRoomsDoNotCollideWithEachOther) {
+  // Each is named after its own identifier, and identifiers are already
+  // unique, so the rule costs an unnamed room nothing.
+  RoomManager manager = make_manager();
+  const std::string first = create(manager, "");
+  const std::string second = create(manager, "");
+  ASSERT_FALSE(first.empty());
+  ASSERT_FALSE(second.empty());
+  EXPECT_NE(first, second);
+  EXPECT_EQ(manager.room_count(), 2u);
+}
+
+TEST(RoomManager, AnUnnamedRoomSkipsAnIdentifierSomebodyTookAsAName) {
+  // Nothing stops a person from calling their room "A26DCB", and the generator
+  // is free to draw that identifier afterwards. The room that would have been
+  // named after it takes another identifier instead of failing: it asked for
+  // no name in particular, so there is nothing to refuse.
+  //
+  // A probe manager on the same seed says which identifiers are coming.
+  RoomManager probe = make_manager();
+  const std::string id1 = create(probe, "");
+  const std::string id2 = create(probe, "");
+  const std::string id3 = create(probe, "");
+  ASSERT_NE(id2, id3);
+
+  RoomManager manager = make_manager();
+  // Draws id1 for itself, and wears id2 as a name chosen by hand.
+  const std::string named = create(manager, id2);
+  EXPECT_EQ(named, id1);
+
+  // Now draws id2, whose fallback name is taken, and moves on to id3.
+  const std::string unnamed = create(manager, "");
+  EXPECT_NE(unnamed, id2);
+  EXPECT_EQ(unnamed, id3);
+  ASSERT_NE(manager.find(unnamed), nullptr);
+  EXPECT_EQ(manager.find(unnamed)->name, unnamed);
+}
+
+TEST(RoomManager, LoadingKeepsDuplicateNamesTheStoreAlreadyHas) {
+  // A database written before names had to be unique holds whatever it holds.
+  // Refusing those at startup would delete rooms people still use to enforce a
+  // rule that did not exist when they were made.
+  dv::server::store::MemoryRoomStore store;
+  ASSERT_FALSE(store
+                   .upsert(dv::server::store::RoomRecord{
+                       .id = "AAAAAA", .name = "room", .owner_id = "u1", .persistent = true})
+                   .has_value());
+  ASSERT_FALSE(store
+                   .upsert(dv::server::store::RoomRecord{
+                       .id = "BBBBBB", .name = "room", .owner_id = "u2", .persistent = true})
+                   .has_value());
+
+  RoomManager manager(RoomManager::Options{.id_seed = 1234u, .store = &store});
+  EXPECT_EQ(manager.load_rooms(), 2u);
+  ASSERT_NE(manager.find("AAAAAA"), nullptr);
+  ASSERT_NE(manager.find("BBBBBB"), nullptr);
+  EXPECT_EQ(manager.find("AAAAAA")->name, "room");
+  EXPECT_EQ(manager.find("BBBBBB")->name, "room");
+
+  // The rule still applies to anything created from now on.
+  auto refused = manager.create_room("room");
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "room_name_taken");
+}
+
+TEST(RoomManager, TheUnnamedFallbackReachesTheStore) {
+  // Not only the live map. A room created without a name and then reloaded
+  // after a restart has to come back carrying the same thing.
+  dv::server::store::MemoryRoomStore store;
+  RoomManager manager(RoomManager::Options{.id_seed = 1234u, .store = &store});
+  auto created = manager.create_room("");
+  ASSERT_TRUE(created.ok());
+  const std::string id = created.value();
+
+  const auto record = store.find(id);
+  ASSERT_TRUE(record.has_value());
+  EXPECT_EQ(record->name, id);
+
+  RoomManager reloaded(RoomManager::Options{.id_seed = 1234u, .store = &store});
+  EXPECT_EQ(reloaded.load_rooms(), 1u);
+  ASSERT_NE(reloaded.find(id), nullptr);
+  EXPECT_EQ(reloaded.find(id)->name, id);
 }
 
 TEST(RoomManager, JoiningAddsAParticipant) {

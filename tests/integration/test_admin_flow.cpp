@@ -88,7 +88,7 @@ TEST_F(AdminFlowTest, AnAdministratorRemovesAParticipantOverTheWire) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");
 
-  admin->send(proto::CreateRoom{ana.id, "room"});
+  admin->send(proto::CreateRoom{ana.id, ""});
   const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;
@@ -112,7 +112,7 @@ TEST_F(AdminFlowTest, AParticipantIsRefusedAndTheRoomIsUnchanged) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");
 
-  admin->send(proto::CreateRoom{ana.id, "room"});
+  admin->send(proto::CreateRoom{ana.id, ""});
   const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;
@@ -136,7 +136,7 @@ TEST_F(AdminFlowTest, AForcedMuteArrivesNamingWhoDidIt) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");
 
-  admin->send(proto::CreateRoom{ana.id, "room"});
+  admin->send(proto::CreateRoom{ana.id, ""});
   const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;
@@ -194,7 +194,7 @@ TEST_F(AdminFlowTest, ClosingARoomEmptiesItForEverybody) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");
 
-  admin->send(proto::CreateRoom{ana.id, "room"});
+  admin->send(proto::CreateRoom{ana.id, ""});
   const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;
@@ -223,7 +223,7 @@ TEST_F(AdminFlowTest, TheAuditLogCrossesTheWire) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");
 
-  admin->send(proto::CreateRoom{ana.id, "room"});
+  admin->send(proto::CreateRoom{ana.id, ""});
   const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
   ASSERT_TRUE(created.has_value());
   const std::string room = created->room_id;

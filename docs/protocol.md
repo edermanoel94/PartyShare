@@ -56,6 +56,20 @@ Since server assigned identifiers are 16 hexadecimal characters, there is no way
 A persistent room outlives its last participant, so its identifier keeps working; an ordinary room is deleted the moment it empties.
 Only an administrator may ask for one, and anyone else asking is answered with `forbidden` rather than quietly given an ordinary room.
 
+`room_name` is optional and is trimmed by the server.
+A room created without one is named after the identifier it has just been given, so a room name is never empty: whatever the client sent, `room_created` and every `room_list` entry carry the name the room actually has.
+A name longer than 48 bytes once trimmed is answered with `invalid_value` rather than cut down, because a name that arrives shortened is one the person who chose it did not choose.
+So is a name carrying a control character: a client flattens each room into one tab separated row on its way to a table, and a tab inside a name would arrive there as extra columns in everybody's list.
+
+A name no other room is using, too: a second room asking for one that is taken is answered with `room_name_taken`.
+A name is what somebody reads in a list and then clicks, so two rooms wearing one name is a list that cannot be acted on.
+The comparison is on the trimmed name with its ASCII letters folded to lower case, which makes `Daily`, `daily` and `  DAILY  ` one name, and `Reunião` and `reunião` one name as well.
+`REUNIÃO` is a different name from `reunião`, because folding `Ã` needs a Unicode table the server does not carry.
+A room created without a name never collides: it is named after its own identifier, and an identifier that would produce a name somebody already chose is passed over for another.
+Closing a room releases its name.
+
+Rooms already in the database when this rule arrived keep the names they have, duplicates included: the rule applies to creating a room, which is the moment somebody can be asked to pick something else.
+
 `authenticate` has to be the first message on the connection.
 Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.6.
 `ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.

@@ -50,7 +50,31 @@ void RoomManager::forget(const std::string& room_id) const {
   }
 }
 
-Result<std::string> RoomManager::create_room(std::string name, std::string owner_id) {
+bool RoomManager::name_taken(const std::string& key) const {
+  if (key.empty()) {
+    return false;
+  }
+  return std::ranges::any_of(
+      rooms_, [&](const auto& entry) { return models::room_name_key(entry.second.name) == key; });
+}
+
+Result<std::string> RoomManager::create_room(const std::string& name, std::string owner_id) {
+  // Trimmed once, before the loop, because it does not depend on which
+  // identifier the loop settles on.
+  const std::string wanted = models::trim_room_name(name);
+
+  // Refused rather than made unique by appending something. Somebody who asked
+  // for "Daily" and got "Daily (2)" has a room they did not name, and the list
+  // they were trying to be found in now has two rows that read almost alike.
+  //
+  // Only for a name that was asked for. An empty one has no collision to have
+  // yet: what it becomes is decided inside the loop, against an identifier
+  // that is not chosen until then.
+  if (name_taken(models::room_name_key(wanted))) {
+    return Result<std::string>::failure("room_name_taken",
+                                        "another room is already called " + wanted);
+  }
+
   for (int attempt = 0; attempt < kMaxIdAttempts; ++attempt) {
     std::string id = generate_room_id();
     if (rooms_.contains(id)) {
@@ -63,10 +87,23 @@ Result<std::string> RoomManager::create_room(std::string name, std::string owner
     if (options_.store != nullptr && options_.store->find(id).has_value()) {
       continue;
     }
+    // The identifier is free, and the name it would produce may still not be:
+    // nothing stops somebody from naming their room "A26DCB" by hand, and the
+    // generator is free to hand that identifier out afterwards. Another
+    // identifier costs one more turn of this loop, where refusing would fail a
+    // creation that asked for nothing in particular.
+    if (wanted.empty() && name_taken(models::room_name_key(id))) {
+      continue;
+    }
 
     models::Room room;
     room.id = id;
-    room.name = std::move(name);
+    // A room nobody named is called by its own identifier, and that is written
+    // down here rather than left for each screen to work out. The name reaches
+    // the database, the room list, the administrator's tab and the title above
+    // the call, and a fallback repeated in four places is four chances for one
+    // of them to show an empty column.
+    room.name = wanted.empty() ? id : wanted;
     room.owner_id = std::move(owner_id);
     room.persistent = true;
 
@@ -101,6 +138,14 @@ std::size_t RoomManager::load_rooms() {
     // Everything in the store is loaded. The filter that used to be here
     // skipped records that were not persistent, and no such record was ever
     // written: only a persistent room reached the store at all.
+    //
+    // Names are not checked for duplicates on the way in, and that is the
+    // point. A database written before names had to be unique holds whatever
+    // it holds - every room an older client made is called "room" - and a
+    // startup that refused those would delete rooms people are still using to
+    // enforce a rule that did not exist when they were made. The rule applies
+    // to creating a room, which is the moment somebody can be told to pick
+    // something else.
     if (rooms_.contains(record.id)) {
       continue;
     }

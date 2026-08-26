@@ -77,6 +77,24 @@ struct ScreenAudioConfig {
   /// A string rather than an enum so that a mode added later needs no schema
   /// change, which is the same reason video.codec is one.
   std::string mode = "system";
+
+  /// How loud what the screen plays goes out, against the microphone beside it.
+  ///
+  /// 100 is the application's own level untouched, which is what every share
+  /// carried before this setting existed, so a file written before it reads as
+  /// no change at all.
+  ///
+  /// A whole percent rather than a fraction, because the rest of this file is
+  /// integers and a decimal point is the one thing an ini parser reads
+  /// differently depending on the machine's locale. The mixer is the only place
+  /// that needs it as a ratio, and it is the one place that divides.
+  ///
+  /// Above 100 is allowed as far as 200. A boost clips, and the mixer saturates
+  /// rather than wrapping, so the worst it can do is sound bad - which is
+  /// recoverable, and better than the alternative: an application playing at a
+  /// tenth of its scale has no other way back, and telling somebody to go and
+  /// turn Windows up is not a volume control.
+  int volume_percent = 100;
 };
 
 struct NetworkConfig {

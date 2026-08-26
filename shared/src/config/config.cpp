@@ -270,6 +270,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
   } else if (section == "screen_audio") {
     if (key == "mode") {
       understood = as_text(config.screen_audio.mode);
+    } else if (key == "volume_percent") {
+      understood = as_int(config.screen_audio.volume_percent);
     } else {
       known = false;
     }
@@ -634,7 +636,9 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "output_device", base.audio.output_device);
     }
     if (root.contains("screen_audio")) {
-      read_field(root.at("screen_audio"), "mode", base.screen_audio.mode);
+      const json& screen_audio = root.at("screen_audio");
+      read_field(screen_audio, "mode", base.screen_audio.mode);
+      read_field(screen_audio, "volume_percent", base.screen_audio.volume_percent);
     }
     if (root.contains("network")) {
       const json& network = root.at("network");
@@ -991,6 +995,12 @@ std::optional<Error> validate(const Config& config) {
       config.screen_audio.mode != "process") {
     return invalid_value("screen_audio.mode", "must be none, system or process");
   }
+  // The ceiling is audio::kMaxScreenVolumePercent, repeated here as a number
+  // rather than included: this is the shared configuration library, and it is
+  // linked by the server, which has no client audio code in it at all.
+  if (config.screen_audio.volume_percent < 0 || config.screen_audio.volume_percent > 200) {
+    return invalid_value("screen_audio.volume_percent", "must be between 0 and 200");
+  }
 
   if (config.database.enabled) {
     if (config.database.uri.empty()) {
@@ -1058,7 +1068,9 @@ std::string to_json(const Config& config) {
                        {"automatic_gain_control", config.audio.automatic_gain_control},
                        {"input_device", config.audio.input_device},
                        {"output_device", config.audio.output_device}}},
-                     {"screen_audio", {{"mode", config.screen_audio.mode}}},
+                     {"screen_audio",
+                      {{"mode", config.screen_audio.mode},
+                       {"volume_percent", config.screen_audio.volume_percent}}},
                      {"network",
                       {{"signaling_url", config.network.signaling_url},
                        {"stun_servers", config.network.stun_servers},

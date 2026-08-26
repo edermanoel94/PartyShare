@@ -17,6 +17,29 @@
 
 namespace dv::client::audio {
 
+/// The loudest the screen audio may be asked to go, as a percentage of what the
+/// application itself is playing.
+///
+/// Above 100 clips, and `saturate` is what it clips against, so the worst a
+/// boost can do is sound bad rather than wrap around into noise. It is offered
+/// because the alternative is worse: an application playing into a tenth of its
+/// scale has no other way back, and "go and turn Windows up" is not a volume
+/// control.
+constexpr int kMaxScreenVolumePercent = 200;
+
+/// Turns the percentage the interface shows into the ratio `mix` multiplies the
+/// screen audio by, before the microphone is added to it.
+///
+/// Separated from the mixer, and from the slider, because it is the one piece
+/// of this feature with a judgement in it rather than a mechanism: it decides
+/// what "half volume" means to somebody dragging a control, and neither the
+/// widget nor the arithmetic has an opinion about that.
+///
+/// Anything outside 0 to `kMaxScreenVolumePercent` is clamped rather than
+/// refused: this is reached from a saved configuration as well as from a
+/// slider, and a file with 500 in it should be loud, not fatal.
+[[nodiscard]] double screen_volume_ratio(int percent) noexcept;
+
 /// What one call to `mix` produced.
 struct MixResult {
   /// One while only the microphone is going out, two once the screen audio is.
@@ -102,6 +125,21 @@ class ScreenAudioMixer {
 
   [[nodiscard]] bool microphone_muted() const noexcept { return microphone_muted_.load(); }
 
+  /// How loud the screen audio goes out, as the percentage the interface shows.
+  ///
+  /// Only the screen's share of the mix moves. The microphone is deliberately
+  /// left alone: it already has a gain control, and it is libwebrtc's, running
+  /// before this code ever sees the samples. Two automatic gain controls
+  /// fighting over one signal is not a volume setting.
+  ///
+  /// Takes effect on the next block, which is within 10 ms. There is no ramp,
+  /// and at the speed a slider moves there does not need to be one: a drag
+  /// arrives as many small steps rather than one jump, and it is the jump that
+  /// would click.
+  void set_screen_volume(int percent) noexcept;
+
+  [[nodiscard]] int screen_volume() const noexcept { return screen_volume_percent_.load(); }
+
   /// The microphone level the last mixed block saw, from 0 to 1.
   [[nodiscard]] double microphone_level() const noexcept { return microphone_level_.load(); }
 
@@ -138,6 +176,20 @@ class ScreenAudioMixer {
 
   std::atomic<bool> active_{false};
   std::atomic<bool> microphone_muted_{false};
+  /// What was asked for, kept so the getter can answer in the same units the
+  /// slider and config.ini use rather than in the mixer's own.
+  std::atomic<int> screen_volume_percent_{100};
+  /// The same thing as the multiplier the sample loop actually applies, in
+  /// 8-bit fixed point: 256 is unity, 512 is the ceiling.
+  ///
+  /// Fixed point and not a double because this is read once per sample, a
+  /// hundred blocks a second for the length of every call, and because the
+  /// arithmetic beside it is already integer. Eight bits rather than sixteen so
+  /// the product stays inside an int32: a full scale sample at the ceiling is
+  /// 32767 * 512, which fits, where the same in Q16 would not. A step of 1/256
+  /// is finer than the one percent the slider moves in, so nothing is lost
+  /// rounding into it.
+  std::atomic<std::int32_t> screen_gain_{256};
   std::atomic<double> microphone_level_{0};
   std::atomic<bool> warned_about_frame_size_{false};
 

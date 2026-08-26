@@ -7,11 +7,13 @@
 #include <QMainWindow>
 #include <QPoint>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 
 #include "app/call_session.hpp"
 #include "app/network_quality.hpp"
 #include "app/smoothing.hpp"
+#include "ui/notifier.hpp"
 
 class QLabel;
 class QLineEdit;
@@ -26,6 +28,7 @@ class QTimer;
 namespace dv::ui {
 
 class AdminPanel;
+class ChatView;
 class MetricsDialog;
 class ScreenView;
 
@@ -140,6 +143,19 @@ class MainWindow : public QMainWindow {
   /// Adds one line and keeps the view at the bottom, which is where a
   /// conversation is read from.
   void append_chat_line(const QString& line);
+
+  /// Says that `names` have just walked in, through the operating system, and
+  /// returns whether a balloon went up.
+  ///
+  /// Only when the window is not the one being looked at: see
+  /// Notifier::window_has_attention. The answer is what decides whether the
+  /// chime plays too, because a balloon brings its own sound - see
+  /// Notifier::notify.
+  [[nodiscard]] bool announce_arrivals(const QStringList& names);
+
+  /// Forgets who was in the room, so that the next room's first list seeds
+  /// rather than announces.
+  void forget_participants();
   /// Puts one emoji into the message field at the cursor and gives the field
   /// the focus back.
   void insert_emoji(const QString& emoji);
@@ -247,10 +263,10 @@ class MainWindow : public QMainWindow {
   /// the other's memory would skip a restyle that was needed.
   int shown_link_quality_ = -1;
 
-  // Chat. A list of plain text items rather than a rich text view: what goes
-  // in it is typed by other people, and a widget that renders no markup cannot
-  // be made to render theirs.
-  QListWidget* chat_view_ = nullptr;
+  // Chat. Still a list of lines rather than a document, and still one that
+  // renders none of the markup somebody types into it: ChatView escapes every
+  // byte it did not itself recognise as a URL. See ui/chat_view.hpp.
+  ChatView* chat_view_ = nullptr;
   QLineEdit* chat_input_ = nullptr;
   /// Opens a short curated grid. The system picker, which every platform has,
   /// covers everything this one leaves out and works in the same field.
@@ -279,6 +295,22 @@ class MainWindow : public QMainWindow {
   /// dialog last left it. Read from the configuration on the first share, so
   /// that somebody who never opens the dialog still gets what their file says.
   std::optional<client::app::ScreenAudio> screen_audio_;
+
+  /// Raises the notification when somebody joins a room this window is not
+  /// showing, and plays the chime whether it is showing or not.
+  Notifier notifier_{this};
+  /// Who was in the room the last time the list was rebuilt, by user id.
+  ///
+  /// The server sends the whole membership every time it changes rather than a
+  /// join event, so an arrival is a difference between two of those lists and
+  /// there is nowhere else to keep the first one.
+  QSet<QString> known_participants_;
+  /// Whether `known_participants_` has seen a list yet.
+  ///
+  /// The first list after joining is everybody who was already there, and
+  /// announcing it would greet somebody with five balloons and five chimes for
+  /// walking into a room of five people. It seeds the set and says nothing.
+  bool participants_seeded_ = false;
 };
 
 }  // namespace dv::ui

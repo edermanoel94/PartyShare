@@ -6,6 +6,7 @@ add_library(dv_server_core STATIC
   src/rooms/room_manager.cpp
   src/sfu/media_router.cpp
   src/sfu/video_feedback.cpp
+  src/sfu/video_stitcher.cpp
   src/signaling/authenticator.cpp
   src/signaling/hub.cpp
   src/signaling/server.cpp

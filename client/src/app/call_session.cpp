@@ -822,6 +822,7 @@ void CallSession::handle_signal(protocol::Message message) {
     std::string rejoin_room;
     std::string rejoin_name;
     std::string user_id;
+    std::shared_ptr<media::MediaSession> stale;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       local_user_ = authenticated->user;
@@ -836,6 +837,24 @@ void CallSession::handle_signal(protocol::Message message) {
       // Whoever was in the room is about to be announced again from scratch.
       participants_.clear();
       screen_sharer_.clear();
+      // And so is the media. The SFU answers the join below by throwing away
+      // whatever session it had for this user and building a new peer
+      // connection, numbering its m-lines from zero and offering only what the
+      // room needs now - see MediaRouter::on_participant_joined. Answering
+      // that with the connection from before the drop is answering a different
+      // conversation: libwebrtc refuses the offer outright, with "the order of
+      // m-lines in subsequent offer doesn't match order from previous
+      // offer/answer", no answer is ever sent, and the call comes back with
+      // everybody in the participant list and nobody audible.
+      //
+      // Dropping it here is what makes the next offer build a fresh one, in
+      // ensure_media_session. Leaving the room did this already, which is why
+      // leaving and coming back was the only way out of it.
+      stale.swap(audio_);
+    }
+    if (stale) {
+      // Outside the lock: closing waits for media callbacks, and those take it.
+      stale->close();
     }
     set_state(State::Authenticated, authenticated->user.id);
 

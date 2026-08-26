@@ -19,6 +19,7 @@
 
 #include "sfu/atomic_shared_ptr.hpp"
 #include "sfu/video_feedback.hpp"
+#include "sfu/video_stitcher.hpp"
 #include "signaling/hub.hpp"
 
 namespace dv::server::sfu {
@@ -161,6 +162,12 @@ class MediaRouter : public MediaSignals {
     std::shared_ptr<rtc::Track> track;
     std::uint32_t ssrc = 0;
     int payload_type = 0;
+    /// Only on the video track, and shared rather than copied: an Outbound is
+    /// copied into the routing table, and every copy has to be rewriting the
+    /// same series. Null on an audio track, which needs none of it - an audio
+    /// track carries one participant for its whole life, so its sequence space
+    /// never changes hands. See sfu/video_stitcher.hpp.
+    std::shared_ptr<VideoStitcher> stitcher;
   };
 
   /// Where one participant's media has to go, and what to rewrite it to.

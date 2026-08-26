@@ -104,6 +104,17 @@ template <typename Predicate>
   return std::nullopt;
 }
 
+/// The three header fields a video receiver orders and times a stream by.
+///
+/// The SFU rewrites the first one per destination and forwards the other two
+/// untouched, which is only invisible while a single source ever feeds a given
+/// outbound track.
+struct RtpHeaderFields {
+  std::uint32_t ssrc = 0;
+  std::uint16_t sequence = 0;
+  std::uint32_t timestamp = 0;
+};
+
 /// A participant: the project's signaling client plus a libdatachannel peer
 /// that answers whatever the SFU offers.
 class Participant {
@@ -164,10 +175,22 @@ class Participant {
 
       auto* counter = is_video ? &received_video_rtp_ : &received_rtp_;
       track->onMessage(
-          [counter](rtc::binary packet) {
-            if (!rtc::IsRtcp(packet)) {
-              counter->fetch_add(1);
+          [this, counter, is_video](rtc::binary packet) {
+            if (rtc::IsRtcp(packet)) {
+              return;
             }
+            counter->fetch_add(1);
+            if (!is_video || packet.size() < sizeof(rtc::RtpHeader)) {
+              return;
+            }
+            // What a decoder reads before it looks at a single byte of
+            // payload. Kept so a test can assert on the shape of the stream a
+            // viewer is handed, not merely on how much of it arrives.
+            const auto* header = reinterpret_cast<const rtc::RtpHeader*>(packet.data());
+            const std::lock_guard<std::mutex> lock(mutex_);
+            video_headers_.push_back(RtpHeaderFields{.ssrc = header->ssrc(),
+                                                     .sequence = header->seqNumber(),
+                                                     .timestamp = header->timestamp()});
           },
           [](const rtc::string&) {});
       if (is_video) {
@@ -251,7 +274,17 @@ class Participant {
 
   /// Sends `count` video packets on the screen share track, spaced like frames
   /// at 30 FPS on the 90 kHz clock H.264 uses.
-  [[nodiscard]] bool send_video(int count) {
+  [[nodiscard]] bool send_video(int count) { return send_video_from(0, 0, count); }
+
+  /// The same, starting from a given sequence number and timestamp.
+  ///
+  /// Two participants never agree on either: RFC 3550 section 5.1 has both
+  /// chosen at random when a source starts, and each encoder keeps its own
+  /// clock afterwards. A test that wants to know what a viewer sees when the
+  /// screen share changes hands has to say so rather than let both sides start
+  /// at zero by accident.
+  [[nodiscard]] bool send_video_from(std::uint16_t base_sequence, std::uint32_t base_timestamp,
+                                     int count) {
     std::shared_ptr<rtc::Track> track;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -263,8 +296,8 @@ class Participant {
 
     constexpr std::uint32_t kTicksPerFrame = 3000;  // 90 kHz / 30 FPS
     for (int i = 0; i < count; ++i) {
-      track->send(make_rtp_packet(kOutgoingVideoSsrc, static_cast<std::uint16_t>(i),
-                                  static_cast<std::uint32_t>(i) * kTicksPerFrame,
+      track->send(make_rtp_packet(kOutgoingVideoSsrc, static_cast<std::uint16_t>(base_sequence + i),
+                                  base_timestamp + static_cast<std::uint32_t>(i) * kTicksPerFrame,
                                   kH264PayloadType));
       std::this_thread::sleep_for(5ms);
     }
@@ -353,6 +386,17 @@ class Participant {
     return ports;
   }
   [[nodiscard]] std::uint64_t received_video_rtp() const { return received_video_rtp_.load(); }
+  /// Forgets what has arrived so far, so that a test can let one participant
+  /// talk at a time and still tell whose packets it is looking at.
+  void forget_received() {
+    received_rtp_.store(0);
+    received_video_rtp_.store(0);
+  }
+  /// Every video packet header this participant has been handed, in order.
+  [[nodiscard]] std::vector<RtpHeaderFields> video_headers() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return video_headers_;
+  }
   [[nodiscard]] std::size_t incoming_track_count() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return incoming_.size();
@@ -434,6 +478,7 @@ class Participant {
   std::shared_ptr<rtc::Track> outgoing_video_;
   std::vector<std::shared_ptr<rtc::Track>> incoming_;
   std::vector<std::shared_ptr<rtc::Track>> incoming_video_;
+  std::vector<RtpHeaderFields> video_headers_;
   std::string last_offer_sdp_;
   std::string last_answer_sdp_;
   std::vector<std::string> remote_candidates_;
@@ -544,6 +589,57 @@ TEST_F(SfuTest, AudioReachesTheOtherParticipant) {
   EXPECT_EQ(ana.received_rtp(), 0U);
 }
 
+TEST_F(SfuTest, EveryoneIsHeardWhenTheRoomFillsUpWithoutPausing) {
+  // The other tests wait for each participant's media to be connected before
+  // the next one joins, which is not how a room fills up. People click at the
+  // same time, and every join renegotiates with everybody already inside: the
+  // SFU has to defer an offer to a peer that is mid exchange and pick it up
+  // again afterwards, and a microphone that is never negotiated is a
+  // microphone that stays silent until its owner leaves and comes back.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  std::vector<Participant*> everyone{&ana};
+  for (const char* name : {"bruno", "carla", "diego", "elena"}) {
+    Participant& participant = add(name);
+    ASSERT_TRUE(participant.login()) << name;
+    // No wait_until_media_connected here, on purpose: that is the pause this
+    // test exists to remove.
+    ASSERT_TRUE(participant.join(room)) << name;
+    everyone.push_back(&participant);
+  }
+
+  for (Participant* participant : everyone) {
+    ASSERT_TRUE(participant->wait_until_media_connected());
+    ASSERT_TRUE(wait_until([&] { return participant->has_open_outgoing_track(); }));
+    ASSERT_TRUE(wait_until([&] {
+      return participant->incoming_track_count() == everyone.size() - 1;
+    })) << "a participant was never given a track for everybody else";
+  }
+
+  // One at a time, so that a packet that arrives says who it came from.
+  for (Participant* talker : everyone) {
+    for (Participant* listener : everyone) {
+      listener->forget_received();
+    }
+
+    ASSERT_TRUE(talker->send_audio(30));
+
+    for (Participant* listener : everyone) {
+      if (listener == talker) {
+        continue;
+      }
+      EXPECT_TRUE(wait_until([&] { return listener->received_rtp() > 0; }))
+          << "a microphone reached nobody: the SFU received "
+          << server_->media_router()->audio_packets_received() << " packets and forwarded "
+          << server_->media_router()->audio_packets_forwarded();
+    }
+  }
+}
+
 TEST_F(SfuTest, FiveParticipantsEachGetFourTracks) {
   // The room limit of the MVP, section 3 of SPEC.md. Five participants is
   // twenty forwarding paths, and each of them has to exist.
@@ -646,6 +742,74 @@ TEST_F(SfuTest, OneParticipantsScreenReachesTheOthers) {
 
   // And it does not come back to whoever sent it.
   EXPECT_EQ(ana.received_video_rtp(), 0U) << "a participant is watching their own screen";
+}
+
+TEST_F(SfuTest, TheSecondSharerReachesTheViewerAsOneContinuousStream) {
+  // Ana shares, stops, and Bruno shares instead. Carla watches throughout.
+  //
+  // Both of them arrive on the one outbound video track Carla was given when
+  // she joined, under the one SSRC the SFU stamps on it. A receiver reorders,
+  // dejitters and times a stream by the sequence number and the timestamp it
+  // finds under a given SSRC, so those have to keep moving forwards across the
+  // handover or the second sharer looks to the decoder like a burst of very
+  // old packets from the first one.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  Participant& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(carla.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return carla.incoming_video_track_count() == 1; }));
+
+  // Ana's screen, from wherever her encoder happened to start.
+  constexpr std::uint16_t kAnaFirstSequence = 40000;
+  constexpr std::uint32_t kAnaFirstTimestamp = 900000;
+  ASSERT_TRUE(ana.send_video_from(kAnaFirstSequence, kAnaFirstTimestamp, 30));
+  ASSERT_TRUE(wait_until([&] { return carla.received_video_rtp() >= 30; }))
+      << "the first sharer never reached the viewer";
+  const std::size_t after_ana = carla.video_headers().size();
+
+  // She stops, and Bruno starts. His encoder chose its own starting point, as
+  // every encoder does, and it has no relation to hers.
+  constexpr std::uint16_t kBrunoFirstSequence = 100;
+  constexpr std::uint32_t kBrunoFirstTimestamp = 5000;
+  ASSERT_TRUE(bruno.send_video_from(kBrunoFirstSequence, kBrunoFirstTimestamp, 30));
+  ASSERT_TRUE(wait_until([&] { return carla.video_headers().size() > after_ana; }))
+      << "the second sharer never reached the viewer at all";
+
+  const std::vector<RtpHeaderFields> headers = carla.video_headers();
+  ASSERT_GE(headers.size(), 2U);
+
+  // One SSRC for the whole handover, which is the design: the outbound track
+  // belongs to the viewer, not to whoever is sharing.
+  for (const RtpHeaderFields& header : headers) {
+    EXPECT_EQ(header.ssrc, headers.front().ssrc) << "the outbound video SSRC changed mid call";
+  }
+
+  // And therefore one sequence space and one clock. Compared as signed 16 bit
+  // differences, which is how RFC 3550 says a receiver tells a later packet
+  // from an earlier one under wraparound.
+  for (std::size_t i = 1; i < headers.size(); ++i) {
+    const auto step = static_cast<std::int16_t>(headers[i].sequence - headers[i - 1].sequence);
+    EXPECT_GT(step, 0) << "packet " << i << " went backwards in the sequence space, from "
+                       << headers[i - 1].sequence << " to " << headers[i].sequence;
+    EXPECT_GE(headers[i].timestamp, headers[i - 1].timestamp)
+        << "packet " << i << " went backwards in time, from " << headers[i - 1].timestamp << " to "
+        << headers[i].timestamp;
+  }
 }
 
 TEST_F(SfuTest, TheSlowestViewerLimitsWhatTheSharerIsAskedFor) {

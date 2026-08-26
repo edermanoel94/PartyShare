@@ -18,7 +18,10 @@
 // assertion is that audio flows, so skipping it when audio does not flow would
 // leave a test that cannot fail.
 
+#include <iostream>
+
 #include "media_test_client.hpp"
+#include "store/memory_store.hpp"
 #include "tone_player.hpp"
 
 namespace {
@@ -478,6 +481,210 @@ TEST_F(MediaEndToEndTest, OnlyOneParticipantCanShareAtATime) {
   EXPECT_FALSE(refused.ok());
   EXPECT_EQ(refused.error().code, "screen_share_busy");
   EXPECT_FALSE(bruno.session().sharing_screen());
+}
+
+TEST_F(MediaEndToEndTest, AMicrophoneStillWorksAfterTheSignalingConnectionComesBack) {
+  // A blip on the network, a server restart, a laptop waking up. The signaling
+  // client reconnects on its own and walks back into the room it was in, which
+  // is what makes those look like a pause rather than the end of the call.
+  //
+  // The accounts and the rooms outlive the restart here, the way they do
+  // against a database: without that the clients come back to a server that
+  // has never heard of them, and what is under test never happens.
+  //
+  // The SFU treats the walk back in as a fresh join and builds a new peer
+  // connection for it. Whatever the client answers with has to carry a
+  // microphone afterwards, or the call comes back with everybody in the
+  // participant list and nobody audible.
+  dv::server::store::MemoryUserStore users;
+  dv::server::store::MemoryRoomStore rooms;
+
+  const std::uint16_t port = server_->port();
+  server_->stop();
+  server_.reset();
+
+  const auto make_server = [&] {
+    SignalingServer::Options options;
+    options.bind_address = "127.0.0.1";
+    options.port = port;
+    options.hub.max_participants_per_room = 5;
+    options.hub.heartbeat_interval = 2000ms;
+    options.hub.heartbeat_timeout = 60000ms;
+    options.hub.users = &users;
+    options.hub.rooms = &rooms;
+    options.enable_sfu = true;
+    options.sfu.ice_servers.clear();
+    return std::make_unique<SignalingServer>(options);
+  };
+
+  server_ = make_server();
+  ASSERT_TRUE(server_->add_user("ana", "password", "Ana").ok());
+  ASSERT_TRUE(server_->add_user("bruno", "password", "Bruno").ok());
+  server_->start();
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  ASSERT_TRUE(ana.wait_until_sending_audio())
+      << "no audio left this machine before the reconnection, so nothing here means anything";
+  ASSERT_TRUE(wait_until([&] { return server_->media_router()->audio_packets_forwarded() > 0; }))
+      << "the SFU forwarded nothing before the reconnection";
+
+  const std::uint64_t sent_before = ana.session().stats().bytes_sent;
+
+  // The server goes away and comes back on the same port, with the same
+  // accounts and the same room. Every client sees a socket that dropped.
+  server_->stop();
+  server_.reset();
+  server_ = make_server();
+  server_->start();
+  ASSERT_EQ(server_->port(), port);
+
+  // Both of them find their way back in by themselves.
+  ASSERT_TRUE(wait_until([&] { return server_->media_router()->session_count() == 2; }, 30000ms))
+      << "the SFU never saw both participants again";
+  EXPECT_TRUE(
+      wait_until([&] { return ana.session().state() == CallSession::State::InCall; }, 30000ms))
+      << "the client never got back into the call";
+
+  // And the microphone is carrying again. Measured from where it was before
+  // the restart, because bytes_sent only ever grows.
+  EXPECT_TRUE(wait_until([&] { return ana.session().stats().bytes_sent > sent_before; }, 30000ms))
+      << "the microphone sent nothing after the reconnection";
+
+  EXPECT_TRUE(
+      wait_until([&] { return server_->media_router()->audio_packets_forwarded() > 0; }, 30000ms))
+      << "the SFU forwarded nothing after the reconnection: the call came back with everybody "
+         "listed and nobody audible";
+}
+
+TEST_F(MediaEndToEndTest, AShareStartedAfterTheFirstSharerClosedTheirClientArrives) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  // The first sharer does not stop sharing: they close the program, which is
+  // what somebody who is finished actually does. Everyone else then gets a
+  // renegotiation, because the SFU drops the track that carried the person who
+  // left. Bruno shares next, and Carla has to see it.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(carla.wait_until_in_call());
+
+  const auto by_ana = ana.session().start_screen_share("");
+  ASSERT_TRUE(by_ana.ok()) << by_ana.error().message;
+  ASSERT_TRUE(wait_until([&] { return carla.remote_frames() > 0; }, 30000ms))
+      << "the first share never arrived at all";
+
+  const std::uint64_t before = carla.remote_frames();
+
+  // Closed, not stopped. The room learns about it from the socket dropping.
+  ana.session().disconnect();
+  ASSERT_TRUE(wait_until([&] { return carla.participants().size() == 2; }, 30000ms))
+      << "the room never noticed the first sharer had gone";
+  ASSERT_TRUE(wait_until([&] { return carla.sharer().empty(); }))
+      << "the room still believes the person who left is sharing";
+
+  const auto by_bruno = bruno.session().start_screen_share("");
+  ASSERT_TRUE(by_bruno.ok()) << by_bruno.error().message;
+  ASSERT_TRUE(wait_until([&] { return carla.sharer() == bruno.session().local_user().id; }))
+      << "the room was never told about the second share";
+
+  EXPECT_TRUE(wait_until([&] { return carla.remote_frames() > before + 5; }, 30000ms))
+      << "the second share decoded no frame at the viewer. The SFU received "
+      << server_->media_router()->video_packets_received() << " video packets and forwarded "
+      << server_->media_router()->video_packets_forwarded();
+}
+
+TEST_F(MediaEndToEndTest, AShareThatChangesHandsStillArrivesDecoded) {
+  if (!dv::client::video::screen_capture_is_available()) {
+    GTEST_SKIP() << "no display server attached, so there is no screen to share";
+  }
+
+  // Ana shares, stops, and Bruno shares instead. Carla watches the whole time,
+  // and has to end up looking at Bruno's screen rather than at the last frame
+  // of Ana's.
+  //
+  // Three clients because nobody receives their own screen back: with only two
+  // there is no one left watching once the floor changes hands.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(bruno.wait_until_in_call());
+
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(carla.wait_until_in_call());
+
+  const auto ana_started = std::chrono::steady_clock::now();
+  const auto by_ana = ana.session().start_screen_share("");
+  ASSERT_TRUE(by_ana.ok()) << by_ana.error().message;
+  ASSERT_TRUE(wait_until([&] { return carla.remote_frames() > 0; }, 30000ms))
+      << "the first share never arrived at all";
+  const auto first_picture = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - ana_started);
+
+  ASSERT_TRUE(ana.session().stop_screen_share().ok());
+  ASSERT_TRUE(wait_until([&] { return carla.sharer().empty(); }))
+      << "the room was never told the first share had ended";
+
+  // Whatever Carla decoded of Ana's screen is the baseline. Anything past it
+  // has to be Bruno's.
+  const std::uint64_t before_bruno = carla.remote_frames();
+
+  const auto by_bruno = bruno.session().start_screen_share("");
+  ASSERT_TRUE(by_bruno.ok()) << by_bruno.error().message;
+  ASSERT_TRUE(wait_until([&] { return carla.sharer() == bruno.session().local_user().id; }))
+      << "the room was never told about the second share";
+
+  const auto bruno_started = std::chrono::steady_clock::now();
+  EXPECT_TRUE(wait_until([&] { return carla.remote_frames() > before_bruno; }, 30000ms))
+      << "the second share decoded no frame at the viewer. The SFU received "
+      << server_->media_router()->video_packets_received() << " video packets and forwarded "
+      << server_->media_router()->video_packets_forwarded() << ", and the viewer had decoded "
+      << before_bruno << " frames of the first share";
+  const auto second_picture = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - bruno_started);
+
+  // The two shares travel the same path and are decoded by the same receiver,
+  // so the second one appearing has to cost about what the first one did. A
+  // handover that takes many times longer is a picture the room reads as
+  // never having arrived: whoever is watching has already said it is broken.
+  std::cerr << "first picture after " << first_picture.count() << " ms, second after "
+            << second_picture.count() << " ms\n";
+  EXPECT_LT(second_picture.count(), first_picture.count() + 3000)
+      << "the second sharer took " << second_picture.count()
+      << " ms to appear where the first took " << first_picture.count() << " ms";
 }
 
 #if defined(_WIN32)

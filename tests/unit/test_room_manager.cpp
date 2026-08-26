@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -87,7 +88,12 @@ TEST(RoomManager, TheDuplicateCheckIgnoresCaseAndWhitespace) {
   RoomManager manager = make_manager();
   (void)create(manager, "Daily");
 
-  for (const std::string& variant : {"daily", "DAILY", "  Daily  ", "dAiLy"}) {
+  // A named vector rather than a braced list in the loop head. That list
+  // deduces to initializer_list<const char*>, so binding each element to a
+  // const std::string& builds a temporary per turn, which is what GCC's
+  // -Wrange-loop-construct is for and what MSVC never mentions.
+  const std::vector<std::string> variants = {"daily", "DAILY", "  Daily  ", "dAiLy"};
+  for (const std::string& variant : variants) {
     auto refused = manager.create_room(variant);
     EXPECT_FALSE(refused.ok()) << variant << " was accepted";
     if (!refused.ok()) {

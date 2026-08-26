@@ -621,8 +621,6 @@ std::string serialize(const Message& message) {
         } else if constexpr (std::is_same_v<T, ChangePassword>) {
           root["current_password"] = value.current_password;
           root["new_password"] = value.new_password;
-        } else if constexpr (std::is_same_v<T, PasswordChanged>) {
-          // No payload at all. The type is the whole message.
         } else if constexpr (std::is_same_v<T, ChatMessage>) {
           root["message"] = chat_message_to_json(value.message);
         } else if constexpr (std::is_same_v<T, ListChat>) {
@@ -671,8 +669,13 @@ std::string serialize(const Message& message) {
           root["by_user_id"] = value.by_user_id;
           root["reason"] = value.reason;
           root["room_id"] = value.room_id;
-        } else if constexpr (std::is_same_v<T, ListUsers> || std::is_same_v<T, ListRooms>) {
+        } else if constexpr (std::is_same_v<T, ListUsers> || std::is_same_v<T, ListRooms> ||
+                             std::is_same_v<T, PasswordChanged>) {
           // No payload at all. The type is the whole message.
+          //
+          // One branch and not one each, because three empty bodies in the same
+          // chain are three chances for clang-tidy to be right about a copied
+          // branch nobody meant to copy.
         } else if constexpr (std::is_same_v<T, UserList>) {
           json users = json::array();
           for (const UserSummary& summary : value.users) {

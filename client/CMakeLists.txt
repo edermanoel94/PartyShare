@@ -38,6 +38,8 @@ add_library(dv_client_core STATIC
   src/audio/screen_audio_mixer.hpp
   src/app/call_session.cpp
   src/app/call_session.hpp
+  src/app/chat_links.cpp
+  src/app/chat_links.hpp
   src/app/metrics_history.cpp
   src/app/metrics_history.hpp
   src/app/network_quality.hpp
@@ -213,6 +215,8 @@ qt_add_executable(dv_client
   src/main.cpp
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
+  src/ui/chat_view.cpp
+  src/ui/chat_view.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
   src/ui/metrics_chart.cpp

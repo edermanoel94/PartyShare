@@ -48,6 +48,7 @@
 #include "app/smoothing.hpp"
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
+#include "ui/chat_view.hpp"
 #include "ui/metrics_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
@@ -529,16 +530,16 @@ void MainWindow::build_room_page() {
 
   auto* chat = new QGroupBox(QStringLiteral("Chat"), page);
   auto* chat_column = new QVBoxLayout(chat);
-  chat_view_ = new QListWidget(chat);
-  // Wrapped, and with no alternating rows: a message is a paragraph rather
-  // than a cell, and a long one has to be readable without a horizontal
-  // scrollbar under it.
-  chat_view_->setWordWrap(true);
+  chat_view_ = new ChatView(chat);
+  // A message is a paragraph rather than a cell, and a long one has to be
+  // readable without a horizontal scrollbar under it. The wrapping itself is
+  // ChatView's delegate, not setWordWrap: a view that draws its own rows does
+  // not consult either that or setTextElideMode. This is the guard against a
+  // row that asks for more width than there is.
   chat_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   // Selectable, because copying what somebody pasted into the room is half of
   // what a chat in a screen sharing call is for.
   chat_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  chat_view_->setTextElideMode(Qt::ElideNone);
 
   auto* chat_row = new QHBoxLayout();
   chat_input_ = new QLineEdit(chat);
@@ -1613,10 +1614,7 @@ void MainWindow::apply_chat_message(const QString& line) {
 void MainWindow::apply_chat_history(const QStringList& lines) {
   // Replaced and not appended: this arrives once per join, and a reconnection
   // that rejoins the same room would otherwise show every message twice.
-  chat_view_->clear();
-  for (const QString& line : lines) {
-    chat_view_->addItem(line);
-  }
+  chat_view_->set_lines(lines);
   chat_view_->scrollToBottom();
 }
 
@@ -1628,7 +1626,7 @@ void MainWindow::append_chat_line(const QString& line) {
   const QScrollBar* scroll = chat_view_->verticalScrollBar();
   const bool was_at_bottom = scroll->value() >= scroll->maximum();
 
-  chat_view_->addItem(line);
+  chat_view_->append_line(line);
   if (was_at_bottom) {
     chat_view_->scrollToBottom();
   }

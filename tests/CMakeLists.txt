@@ -86,6 +86,7 @@ if(TARGET dv::client_core)
     unit/test_network_impairment.cpp
     unit/test_metrics_history.cpp
     unit/test_smoothing.cpp
+    unit/test_chat_links.cpp
   )
   list(APPEND dv_integration_sources
     integration/test_signaling_client.cpp

@@ -26,6 +26,7 @@ class QTimer;
 namespace dv::ui {
 
 class AdminPanel;
+class ChatView;
 class MetricsDialog;
 class ScreenView;
 
@@ -247,10 +248,10 @@ class MainWindow : public QMainWindow {
   /// the other's memory would skip a restyle that was needed.
   int shown_link_quality_ = -1;
 
-  // Chat. A list of plain text items rather than a rich text view: what goes
-  // in it is typed by other people, and a widget that renders no markup cannot
-  // be made to render theirs.
-  QListWidget* chat_view_ = nullptr;
+  // Chat. Still a list of lines rather than a document, and still one that
+  // renders none of the markup somebody types into it: ChatView escapes every
+  // byte it did not itself recognise as a URL. See ui/chat_view.hpp.
+  ChatView* chat_view_ = nullptr;
   QLineEdit* chat_input_ = nullptr;
   /// Opens a short curated grid. The system picker, which every platform has,
   /// covers everything this one leaves out and works in the same field.

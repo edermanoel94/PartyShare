@@ -252,6 +252,16 @@ qt_add_executable(dv_client
   src/ui/theme.hpp
 )
 
+# The application icon, at the sizes a notification area and a window title bar
+# ask for. On Windows the executable already carries the .ico that Explorer
+# reads, but that one is not reachable as a QIcon - and QSystemTrayIcon needs a
+# QIcon, because the icon in the notification area is what the balloon hangs
+# off. See client/src/ui/notifier.hpp.
+set(dv_client_icons)
+foreach(dv_icon_size 16 32 48 256)
+  list(APPEND dv_client_icons ${CMAKE_SOURCE_DIR}/assets/partyshare-${dv_icon_size}.png)
+endforeach()
+
 # The chevrons the stylesheet draws into combo boxes and spin boxes, at the
 # three densities Qt looks for. See assets/ui/make_arrows.py.
 set(dv_client_ui_images)
@@ -276,6 +286,7 @@ qt_add_resources(dv_client "dv_client_assets"
     ${CMAKE_SOURCE_DIR}/assets/config.ini
     ${CMAKE_SOURCE_DIR}/assets/sounds/joined.wav
     ${CMAKE_SOURCE_DIR}/assets/sounds/left.wav
+    ${dv_client_icons}
     ${dv_client_ui_images}
 )
 

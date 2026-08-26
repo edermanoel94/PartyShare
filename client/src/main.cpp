@@ -14,6 +14,7 @@
 #include <QByteArray>
 #include <QFile>
 #include <QIODevice>
+#include <QIcon>
 
 #include "app/call_session.hpp"
 #include "media/media_session.hpp"
@@ -258,6 +259,18 @@ int run(int argc, char* argv[]) {
   QApplication application(argc, argv);
   QApplication::setApplicationName(QStringLiteral("PartyShare"));
   QApplication::setApplicationVersion(QStringLiteral(DV_VERSION));
+
+  // From the resources rather than from the executable's own icon. On Windows
+  // the .rc gives Explorer and the taskbar a picture without any of this, but
+  // that one is not reachable as a QIcon - and ui::Notifier needs one, because
+  // the icon it puts in the notification area is what its balloon hangs off.
+  // Four sizes, so that neither the tray nor a title bar has to scale a
+  // drawing meant for the other.
+  QIcon icon;
+  for (const int size : {16, 32, 48, 256}) {
+    icon.addFile(QStringLiteral(":/partyshare-%1.png").arg(size));
+  }
+  QApplication::setWindowIcon(icon);
 
   // Before the first widget exists. A palette installed afterwards reaches
   // every widget only because Qt re-polishes them, and the ones that read a

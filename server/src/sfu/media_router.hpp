@@ -145,7 +145,13 @@ class MediaRouter : public MediaSignals {
     /// The lowest a viewer has said it can take, in kbps, which is the cap on
     /// the number above. Zero while no viewer has said anything.
     int viewer_ceiling_kbps = 0;
-    /// How many REMB reports arrived from viewers.
+    /// How many REMB reports arrived from viewers **and were folded in**.
+    ///
+    /// The second half is what makes this usable as a signal to wait on: a
+    /// non-zero count means the ceiling beside it already accounts for that
+    /// report. It counted arrivals rather than completions once, and a test
+    /// that waited on it read a ceiling from before the report it had just
+    /// been told about.
     std::uint64_t viewer_reports_received = 0;
   };
   [[nodiscard]] VideoRepairStats video_repair_stats() const;

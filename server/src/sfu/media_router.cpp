@@ -407,8 +407,6 @@ void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std:
   if (kbps <= 0) {
     return;
   }
-  viewer_reports_received_.fetch_add(1, std::memory_order_relaxed);
-
   int smallest = kbps;
   {
     const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
@@ -423,6 +421,19 @@ void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std:
     }
   }
   viewer_ceiling_kbps_.store(smallest, std::memory_order_relaxed);
+
+  // Counted last, and with release, because this counter is what anybody
+  // waiting on a report waits on. Bumped first - which is where it used to be -
+  // it announces a report that has not been folded in yet, and a reader that
+  // wakes on it reads the ceiling from before this report, or from no report at
+  // all. That window is a few instructions wide, which is why it passed for
+  // months and then failed once on a loaded CI runner:
+  // SfuTest.TheSlowestViewerLimitsWhatTheSharerIsAskedFor saw the count go to
+  // one and the ceiling still at zero.
+  //
+  // Release rather than relaxed so the pairing is a guarantee and not a
+  // property of x86. `video_repair_stats` does the acquire.
+  viewer_reports_received_.fetch_add(1, std::memory_order_release);
 
   // Through the published table, never through `sessions_`: this runs on a
   // libdatachannel thread that already holds the peer connection's lock.
@@ -448,8 +459,12 @@ MediaRouter::VideoRepairStats MediaRouter::video_repair_stats() const {
     total.packets_repaired += session.video_feedback->packets_repaired();
     total.target_kbps = std::max(total.target_kbps, session.video_feedback->target_kbps());
   }
+  // The count first and with acquire, then the ceiling. This order is the other
+  // half of the handshake in `note_viewer_bandwidth`: read the other way round,
+  // the ceiling could be fetched before a report lands and the count after it,
+  // and the pair would disagree even though the writer did everything in order.
+  total.viewer_reports_received = viewer_reports_received_.load(std::memory_order_acquire);
   total.viewer_ceiling_kbps = viewer_ceiling_kbps_.load(std::memory_order_relaxed);
-  total.viewer_reports_received = viewer_reports_received_.load(std::memory_order_relaxed);
   return total;
 }
 

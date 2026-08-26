@@ -65,7 +65,10 @@ constexpr int kVerticalPadding = 3;
   const std::vector<client::app::LinkSpan> links = client::app::find_links(text);
 
   QString html;
-  html.reserve(line.size() + links.size() * 32);
+  // Both casts matter: QString counts in a signed qsizetype and the vector
+  // in an unsigned size_t, so without them the sum is worked out unsigned
+  // and narrowed again on the way in.
+  html.reserve(line.size() + (static_cast<qsizetype>(links.size()) * 32));
 
   std::size_t at = 0;
   for (const client::app::LinkSpan& link : links) {
@@ -214,7 +217,7 @@ QString ChatView::link_at(const QPoint& position) const {
   if (!index.isValid()) {
     return {};
   }
-  const auto* delegate = static_cast<const ChatLineDelegate*>(itemDelegateForIndex(index));
+  const auto* delegate = dynamic_cast<const ChatLineDelegate*>(itemDelegateForIndex(index));
   if (delegate == nullptr) {
     return {};
   }

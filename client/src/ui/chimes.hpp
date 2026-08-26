@@ -1,9 +1,15 @@
 #pragma once
 
+#include <cstdint>
+
 namespace dv::ui {
 
 /// The two things a room can tell you about its membership without words.
-enum class Chime {
+///
+/// The base type is named for the same reason config::UnknownOptions names
+/// one: two values do not need four bytes, and clang-tidy holds the project to
+/// it.
+enum class Chime : std::uint8_t {
   /// A rising fifth. Somebody arrived.
   Joined,
   /// The same fifth falling. Somebody left.
@@ -20,7 +26,7 @@ enum class Chime {
 /// main() sets it from `[ui] room_sounds` at startup, and the settings dialog
 /// moves it as the box is ticked - before anything is written to the file, so
 /// that turning it off is silent at once rather than at the next launch.
-void set_chimes_enabled(bool enabled);
+void set_chimes_enabled(bool on);
 
 /// Whether play_chime would make a sound. What the settings dialog shows.
 [[nodiscard]] bool chimes_enabled();

@@ -24,34 +24,41 @@ namespace {
 /// function local static is the shortest lifetime that is obviously long
 /// enough.
 [[nodiscard]] const QByteArray& bytes_of(Chime chime) {
-  static const QByteArray joined = [] {
+  static const QByteArray kJoined = [] {
     QFile file(QStringLiteral(":/sounds/joined.wav"));
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
   }();
-  static const QByteArray left = [] {
+  static const QByteArray kLeft = [] {
     QFile file(QStringLiteral(":/sounds/left.wav"));
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
   }();
-  return chime == Chime::Joined ? joined : left;
+  return chime == Chime::Joined ? kJoined : kLeft;
 }
 
-/// Not atomic, and it does not need to be: set from main() before there is a
-/// window, and afterwards only from the interface thread, which is also the
-/// only thread play_chime may be called from.
-bool enabled = true;
+/// Whether the chime is switched on.
+///
+/// Behind a function rather than a variable at namespace scope, which would be
+/// a mutable global however small it is. Not atomic, and it does not need to
+/// be: set from main() before there is a window, and afterwards only from the
+/// interface thread, which is also the only thread play_chime may be called
+/// from.
+[[nodiscard]] bool& enabled() {
+  static bool on = true;
+  return on;
+}
 
 }  // namespace
 
 void set_chimes_enabled(bool on) {
-  enabled = on;
+  enabled() = on;
 }
 
 bool chimes_enabled() {
-  return enabled;
+  return enabled();
 }
 
 void play_chime(Chime chime) {
-  if (!enabled) {
+  if (!enabled()) {
     return;
   }
 

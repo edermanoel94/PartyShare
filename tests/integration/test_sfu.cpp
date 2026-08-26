@@ -187,7 +187,9 @@ class Participant {
             // payload. Kept so a test can assert on the shape of the stream a
             // viewer is handed, not merely on how much of it arrives.
             const auto* header = reinterpret_cast<const rtc::RtpHeader*>(packet.data());
-            const std::lock_guard<std::mutex> lock(mutex_);
+            // Not named `lock`: this runs inside the onTrack lambda's scope,
+            // which has one of its own, and -Wshadow is an error on GCC.
+            const std::lock_guard<std::mutex> recording(mutex_);
             video_headers_.push_back(RtpHeaderFields{.ssrc = header->ssrc(),
                                                      .sequence = header->seqNumber(),
                                                      .timestamp = header->timestamp()});

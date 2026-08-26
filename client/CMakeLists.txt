@@ -29,6 +29,19 @@ else()
   set(dv_loopback_sources src/audio/loopback_stub.cpp)
 endif()
 
+# Playing a sound is a platform API, and the one Qt offers costs a module and
+# its codec plugins for two chimes of a fifth of a second. See
+# client/src/ui/sound.hpp.
+#
+# Notifying is not on this list any more: that goes through QSystemTrayIcon,
+# which is portable and needs nothing here. docs/avisos-de-entrada-e-saida.md
+# has what the native path did instead, and why it was dropped.
+if(WIN32)
+  set(dv_sound_sources src/ui/sound_windows.cpp)
+else()
+  set(dv_sound_sources src/ui/sound_stub.cpp)
+endif()
+
 add_library(dv_client_core STATIC
   ${dv_loopback_sources}
   src/audio/audio_sources.hpp
@@ -212,17 +225,23 @@ endif()
 
 qt_add_executable(dv_client
   ${dv_client_resources}
+  ${dv_sound_sources}
   src/main.cpp
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
   src/ui/chat_view.cpp
   src/ui/chat_view.hpp
+  src/ui/chimes.cpp
+  src/ui/chimes.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
   src/ui/metrics_chart.cpp
   src/ui/metrics_chart.hpp
   src/ui/metrics_dialog.cpp
   src/ui/metrics_dialog.hpp
+  src/ui/notifier.cpp
+  src/ui/notifier.hpp
+  src/ui/sound.hpp
   src/ui/screen_view.cpp
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp
@@ -255,6 +274,8 @@ qt_add_resources(dv_client "dv_client_assets"
   BASE ${CMAKE_SOURCE_DIR}/assets
   FILES
     ${CMAKE_SOURCE_DIR}/assets/config.ini
+    ${CMAKE_SOURCE_DIR}/assets/sounds/joined.wav
+    ${CMAKE_SOURCE_DIR}/assets/sounds/left.wav
     ${dv_client_ui_images}
 )
 
@@ -262,6 +283,13 @@ target_link_libraries(dv_client PRIVATE
   dv::client_core
   Qt6::Widgets
 )
+
+if(WIN32)
+  # winmm is PlaySound, which is the whole of the arrival and departure chime.
+  # It ships with Windows; nothing is downloaded for this. See
+  # client/src/ui/sound.hpp for why it is not QSoundEffect.
+  target_link_libraries(dv_client PRIVATE winmm)
+endif()
 
 set_target_properties(dv_client PROPERTIES
   OUTPUT_NAME "partyshare"

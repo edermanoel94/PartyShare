@@ -17,6 +17,7 @@
 
 #include "app/call_session.hpp"
 #include "media/media_session.hpp"
+#include "ui/chimes.hpp"
 #include "ui/main_window.hpp"
 #include "ui/theme.hpp"
 #include "video/screen_quality.hpp"
@@ -262,6 +263,11 @@ int run(int argc, char* argv[]) {
   // every widget only because Qt re-polishes them, and the ones that read a
   // colour in their constructor would already have read the wrong one.
   dv::ui::theme::apply(application);
+
+  // Before the first room can be joined, which is the only thing that would
+  // ring it. The settings dialog moves this again while the program runs; the
+  // file is only where it starts.
+  dv::ui::set_chimes_enabled(config.ui.room_sounds);
 
   dv::client::app::CallSession::Options session_options;
   session_options.signaling_url = config.network.signaling_url;

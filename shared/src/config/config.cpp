@@ -333,6 +333,12 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
     } else {
       known = false;
     }
+  } else if (section == "ui") {
+    if (key == "room_sounds") {
+      understood = as_bool(config.ui.room_sounds);
+    } else {
+      known = false;
+    }
   } else if (section == "server") {
     if (key == "bind_address") {
       understood = as_text(config.server.bind_address);
@@ -659,6 +665,10 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(logging, "log_to_console", base.logging.log_to_console);
       read_field(logging, "crash_directory", base.logging.crash_directory);
       read_field(logging, "crash_reports", base.logging.crash_reports);
+    }
+    if (root.contains("ui")) {
+      const json& ui = root.at("ui");
+      read_field(ui, "room_sounds", base.ui.room_sounds);
     }
     if (root.contains("database")) {
       const json& database = root.at("database");
@@ -1086,6 +1096,7 @@ std::string to_json(const Config& config) {
                       {{"level", config.logging.level},
                        {"file_path", config.logging.file_path},
                        {"log_to_console", config.logging.log_to_console}}},
+                     {"ui", {{"room_sounds", config.ui.room_sounds}}},
                      {"server",
                       {{"bind_address", config.server.bind_address},
                        {"port", config.server.port},

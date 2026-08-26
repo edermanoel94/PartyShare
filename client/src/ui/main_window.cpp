@@ -49,6 +49,7 @@
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
 #include "ui/chat_view.hpp"
+#include "ui/chimes.hpp"
 #include "ui/metrics_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
@@ -986,6 +987,7 @@ void MainWindow::on_leave_room() {
   chat_view_->clear();
   chat_input_->clear();
   clear_metrics();
+  forget_participants();
   // Nothing is being captured any more, so nothing will arrive to bring the
   // meter down. Left as it was, it would hold whatever the last syllable of
   // the call measured, on a page nobody is speaking into.
@@ -1259,6 +1261,7 @@ void MainWindow::apply_state(int state, const QString& detail) {
   // runs once the state itself says there is no call, which is after that.
   if (state_ != client::app::CallSession::State::InCall) {
     clear_metrics();
+    forget_participants();
   }
 
   refresh_controls();
@@ -1283,6 +1286,13 @@ void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
 
 void MainWindow::apply_participants(const QStringList& names) {
   const QString selected = selected_participant_;
+  // Ourselves, so that our own arrival is not announced back to us: the list
+  // the server sends includes the person reading it.
+  const QString us = QString::fromStdString(session_.local_user().id);
+
+  QSet<QString> present;
+  present.reserve(static_cast<int>(names.size()));
+  QStringList arrived;
 
   // Rebuilt wholesale, so the selection has to be restored by identity rather
   // than by row: the order changes as people join and leave.
@@ -1296,12 +1306,88 @@ void MainWindow::apply_participants(const QStringList& names) {
     if (!selected.isEmpty() && parts.value(1) == selected) {
       participants_->setCurrentItem(item);
     }
+
+    // An arrival is a difference between this list and the last one. The
+    // server broadcasts the whole membership whenever it changes rather than
+    // a join event, so there is nothing else to compare against.
+    const QString id = parts.value(1);
+    present.insert(id);
+    if (participants_seeded_ && id != us && !known_participants_.contains(id)) {
+      arrived.push_back(parts.value(2));
+    }
+  }
+
+  // Before the set is replaced, and only over what was already there: a
+  // departure is the half of the difference that this list cannot show,
+  // because whoever left is not in it.
+  bool departed = false;
+  for (const QString& id : known_participants_) {
+    if (id != us && !present.contains(id)) {
+      departed = true;
+      break;
+    }
+  }
+
+  known_participants_ = present;
+  participants_seeded_ = true;
+
+  // The notification goes first, because whether it went up is what decides
+  // whether the chime should follow.
+  //
+  // Only arrivals get one. Somebody leaving is news to the room and not to the
+  // operating system: the chime says it, and a balloon for every departure
+  // would be a queue of them at the end of each call.
+  const bool announced = !arrived.isEmpty() && announce_arrivals(arrived);
+
+  // The chime plays whether or not this window has the focus, which is the
+  // difference between it and the notification above - except when the
+  // notification is what just happened. A balloon carries the system's own
+  // sound and cannot be asked not to, so ringing as well would be one arrival
+  // and two sounds over the top of each other. See Notifier::notify.
+  //
+  // One sound per update rather than one per person, and an update carrying an
+  // arrival and a departure at once gets the arrival's: the platform has one
+  // voice, so a second call cuts the first off, and two cues talking over each
+  // other say less than one.
+  if (!announced) {
+    if (!arrived.isEmpty()) {
+      play_chime(Chime::Joined);
+    } else if (departed) {
+      play_chime(Chime::Left);
+    }
   }
 
   // The signals were blocked through the rebuild, so the volume controls have
   // not heard about any of it. This is also what clears them when whoever was
   // selected has left the room.
   on_participant_selected();
+}
+
+bool MainWindow::announce_arrivals(const QStringList& names) {
+  // Nothing to say to somebody who is looking at the list this happened in.
+  // They watched the row appear, and a balloon over the top of it is a
+  // notification about something already seen.
+  if (notifier_.window_has_attention()) {
+    return false;
+  }
+
+  // One name is the whole message and belongs in the title, which is the line
+  // a balloon shows largest. Several are a crowd, and the crowd is the news.
+  if (names.size() == 1) {
+    return notifier_.notify(names.front(), QStringLiteral("joined the room"));
+  }
+
+  const QString body =
+      names.size() == 2 ? QStringLiteral("%1 and %2 joined the room").arg(names.at(0), names.at(1))
+                        : QStringLiteral("%1, %2 and %3 others joined the room")
+                              .arg(names.at(0), names.at(1))
+                              .arg(names.size() - 2);
+  return notifier_.notify(QStringLiteral("New participants"), body);
+}
+
+void MainWindow::forget_participants() {
+  known_participants_.clear();
+  participants_seeded_ = false;
 }
 
 void MainWindow::apply_metrics(const QString& summary, int quality) {
@@ -1638,6 +1724,7 @@ void MainWindow::apply_kicked(const QString& reason) {
   // to go back.
   chat_view_->clear();
   chat_input_->clear();
+  forget_participants();
   refresh_controls();
   show_page();
 

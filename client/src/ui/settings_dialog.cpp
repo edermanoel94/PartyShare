@@ -25,6 +25,7 @@
 #include <QVBoxLayout>
 
 #include "audio/screen_audio_mixer.hpp"
+#include "ui/chimes.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::ui {
@@ -116,9 +117,18 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   noise_suppression_ =
       new QCheckBox(QStringLiteral("Remove background noise from the microphone"), audio);
   noise_suppression_->setChecked(session_.noise_suppression());
+
+  // Its state comes from ui::chimes_enabled and not from the configuration
+  // that was read at startup: main() has already put one into the other, and
+  // asking the thing that actually decides means the box cannot disagree with
+  // what the next arrival will do.
+  room_sounds_ = new QCheckBox(QStringLiteral("Play a sound when somebody joins or leaves"), audio);
+  room_sounds_->setChecked(chimes_enabled());
+
   audio_form->addRow(QStringLiteral("Microphone"), input_);
   audio_form->addRow(QStringLiteral("Output"), output_);
   audio_form->addRow(QStringLiteral("Noise"), noise_suppression_);
+  audio_form->addRow(QStringLiteral("Room sounds"), room_sounds_);
 
   auto* video = new QGroupBox(QStringLiteral("Screen"), this);
   auto* video_form = new QFormLayout(video);
@@ -316,6 +326,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // moving the slider and listening. Every step applies within one 10 ms block,
   // and each one replaces the last rather than queueing behind it.
   connect(screen_volume_, &QSlider::valueChanged, this, &SettingsDialog::on_screen_volume_changed);
+  connect(room_sounds_, &QCheckBox::toggled, this, &SettingsDialog::on_room_sounds_changed);
 }
 
 void SettingsDialog::show_signaling_hint(const QString& refusal) {
@@ -784,6 +795,16 @@ void SettingsDialog::on_bitrate_changed() {
   // a Save between them would leave a file whose maximum sits below its
   // minimum, which is a configuration that does not start.
   stage(bitrate_settings());
+}
+
+void SettingsDialog::on_room_sounds_changed(bool on) {
+  // Nothing to fail and nothing to ask the session: the chime is the
+  // interface's own, and it does not travel to the room or into the call.
+  // Applied before it is staged, so unticking the box is silent at once
+  // rather than at the next launch - which is the whole point of a switch
+  // somebody reaches for because a sound just went off.
+  set_chimes_enabled(on);
+  stage({{.section = "ui", .key = "room_sounds", .value = on ? "true" : "false"}});
 }
 
 void SettingsDialog::on_auto_bitrate_changed(bool automatic) {

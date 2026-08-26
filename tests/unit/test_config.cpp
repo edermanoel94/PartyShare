@@ -249,6 +249,19 @@ TEST(Config, CrashReportingIsOnByDefaultAndCanBeTurnedOff) {
       << "the default has to be empty so the platform's own state directory is used";
 }
 
+TEST(Config, TheRoomChimeIsOnByDefaultAndCanBeTurnedOff) {
+  // On by default: a cue nobody asked for is easier to turn off than a cue
+  // nobody knows exists is to find.
+  EXPECT_TRUE(Config{}.ui.room_sounds);
+
+  const auto parsed = dv::config::parse_json(R"({"ui": {"room_sounds": false}})", Config{});
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_FALSE(parsed.value().ui.room_sounds);
+  // The section is the client's own, so reading it must not disturb anything
+  // a call runs on.
+  EXPECT_EQ(parsed.value().audio.input_device, Config{}.audio.input_device);
+}
+
 TEST(Config, ValidationRejectsAFloorAboveWhereTheEncoderStarts) {
   // The floor is what congestion control may squeeze down to, so a floor above
   // the starting point is a range with nothing in it.
@@ -460,6 +473,7 @@ TEST(ConfigIni, ReachesEverySection) {
       "[audio]\nchannels = 2\n"
       "[network]\nice_port_range_begin = 50000\n"
       "[logging]\nlevel = debug\n"
+      "[ui]\nroom_sounds = false\n"
       "[server]\nport = 9000\n"
       "[database]\nenabled = true\n",
       Config{});
@@ -468,6 +482,7 @@ TEST(ConfigIni, ReachesEverySection) {
   EXPECT_EQ(parsed.value().audio.channels, 2);
   EXPECT_EQ(parsed.value().network.ice_port_range_begin, 50000);
   EXPECT_EQ(parsed.value().logging.level, "debug");
+  EXPECT_FALSE(parsed.value().ui.room_sounds);
   EXPECT_EQ(parsed.value().server.port, 9000);
   EXPECT_TRUE(parsed.value().database.enabled);
 }
@@ -482,6 +497,19 @@ TEST(ConfigIni, ReadsTheAutomaticBitrateMode) {
   const auto off = dv::config::parse_ini("[video]\nauto_bitrate = false\n", Config{});
   ASSERT_TRUE(off.ok()) << off.error().message;
   EXPECT_FALSE(off.value().video.auto_bitrate);
+}
+
+TEST(ConfigIni, ReadsWhetherTheRoomChimeIsOn) {
+  // The settings dialog writes this key, so a build that cannot read it back
+  // is a switch that forgets itself between runs - and one that forgets in the
+  // direction of making noise, since the default is on.
+  const auto off = dv::config::parse_ini("[ui]\nroom_sounds = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().ui.room_sounds);
+
+  const auto on = dv::config::parse_ini("[ui]\nroom_sounds = true\n", Config{});
+  ASSERT_TRUE(on.ok()) << on.error().message;
+  EXPECT_TRUE(on.value().ui.room_sounds);
 }
 
 TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {

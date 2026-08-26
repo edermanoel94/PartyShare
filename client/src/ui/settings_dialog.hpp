@@ -74,6 +74,7 @@ class SettingsDialog : public QDialog {
   void on_screen_audio_changed();
   void on_noise_suppression_changed(bool on);
   void on_screen_volume_changed(int percent);
+  void on_room_sounds_changed(bool on);
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -184,6 +185,11 @@ class SettingsDialog : public QDialog {
   /// Off is the right answer often enough that reaching it should not need a
   /// text editor and a restart.
   QCheckBox* noise_suppression_ = nullptr;
+  /// The chime when somebody joins or leaves a room.
+  ///
+  /// Beside the devices rather than under the screen settings, because it is
+  /// about what this machine plays and not about what a share carries.
+  QCheckBox* room_sounds_ = nullptr;
   QComboBox* monitor_ = nullptr;
   /// None, everything but this client, or one application.
   QComboBox* screen_audio_ = nullptr;

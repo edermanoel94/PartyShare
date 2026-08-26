@@ -163,12 +163,27 @@ struct DatabaseConfig {
   int timeout_ms = 2000;
 };
 
+/// What the client's own interface does, as opposed to what a call does.
+///
+/// Read by the client and ignored by the server, which is why it is one small
+/// section rather than keys scattered into [audio]: nothing in here reaches
+/// the wire, the encoder or the microphone.
+struct UiConfig {
+  /// The chime when somebody joins or leaves a room.
+  ///
+  /// On by default, because a cue nobody asked for is easier to turn off than
+  /// a cue nobody knows exists is to find. Somebody who takes calls in an open
+  /// office is who this switch is for.
+  bool room_sounds = true;
+};
+
 struct Config {
   VideoConfig video;
   AudioConfig audio;
   ScreenAudioConfig screen_audio;
   NetworkConfig network;
   LoggingConfig logging;
+  UiConfig ui;
   ServerConfig server;
   DatabaseConfig database;
 };

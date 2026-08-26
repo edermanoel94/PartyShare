@@ -36,6 +36,11 @@ Hub::Hub(Options options)
       users_(options.users != nullptr ? options.users : owned_users_.get()),
       chat_(options.chat != nullptr ? options.chat : owned_chat_.get()),
       audit_(options.audit != nullptr ? options.audit : owned_audit_.get()),
+      owned_restrictions_(options.restrictions == nullptr
+                              ? std::make_unique<StoreRestrictionSource>(*users_)
+                              : nullptr),
+      restrictions_(options.restrictions != nullptr ? options.restrictions
+                                                    : owned_restrictions_.get()),
       rooms_(RoomManager::Options{
           .max_participants_per_room = options.max_participants_per_room,
           .id_seed = options.room_id_seed,
@@ -845,7 +850,74 @@ std::vector<Outgoing> Hub::tick(Clock::time_point now, std::vector<ConnectionId>
   }
 
   authenticator_.expire_tokens(now);
+
+  // After the timed-out connections have been collected and before the caller
+  // closes them, which is the order that matters: a connection this pass is
+  // about to give up on is not one worth taking a microphone from, and the
+  // `timed_out` list above is only reported, so it is still in `connections_`
+  // and would be looked up for nothing. That is a lookup, not a bug, and it
+  // costs less than the alternative of walking the map twice.
+  apply_restrictions_written_elsewhere(out);
   return out;
+}
+
+void Hub::apply_restrictions_written_elsewhere(std::vector<Outgoing>& out) {
+  std::vector<WatchedAccount> watched;
+  watched.reserve(connections_.size());
+  for (const auto& [id, state] : connections_) {
+    if (!state.user.has_value()) {
+      continue;
+    }
+    watched.push_back(WatchedAccount{.user_id = state.user->id, .known = state.user->restrictions});
+  }
+  if (watched.empty()) {
+    return;
+  }
+
+  // Collected before anything is enforced. `enforce` rewrites the identity
+  // cached on the connection, and one of its branches drops that identity
+  // altogether, so a loop that asked the source while acting on its answers
+  // would be reading a list it was in the middle of invalidating.
+  const RestrictionPoll found = restrictions_->poll(watched);
+
+  for (const RestrictionChange& change : found.changed) {
+    const auto account = users_->find_by_id(change.user_id);
+    if (!account.has_value()) {
+      continue;
+    }
+
+    DV_LOG_INFO("Restrictions on {} were changed outside this server: {}", change.user_id,
+                models::describe(change.after));
+
+    // No actor, and no audit entry written here. Whoever edited the account
+    // wrote its audit entry themselves -- tools/dbadmin does, in the server's
+    // own vocabulary -- and a second entry from this side would record the
+    // moment the server noticed rather than the moment somebody decided, which
+    // is not a fact anybody is looking for. The empty actor travels to the
+    // clients as an empty `by_user_id`, which they already render as "an
+    // administrator": exactly as much as this server knows.
+    enforce(out, models::User{}, account->user, change.before, "");
+  }
+
+  // An account removed from the store while somebody was signed in as it.
+  //
+  // The document is already gone, so there is nothing left to read and nothing
+  // to restrict; what is left is the half the store cannot reach. The person is
+  // still in a room, still holding tokens, and still an identity on a
+  // connection that every handler will go on trusting, because every handler
+  // trusts `Connection::user` and that copy was loaded at login from a row
+  // which no longer exists.
+  //
+  // Which is also why this is the whole of the fix: the account is *already*
+  // in memory here, on the connection, and that is exactly what has to be
+  // taken away. `end_session_of` is the same call `delete_user` makes, so
+  // somebody removed from the client's panel and somebody removed from the
+  // database leave a room the same way and look identical to everybody's
+  // client and to the SFU.
+  for (const std::string& user_id : found.gone) {
+    DV_LOG_INFO("Account {} was removed outside this server, ending the session it held", user_id);
+    end_session_of(out, user_id, "the account was removed");
+  }
 }
 
 // --- administration ----------------------------------------------------------
@@ -1070,6 +1142,25 @@ void Hub::handle_restrict_user(std::vector<Outgoing>& out, Connection& connectio
   out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
 }
 
+void Hub::end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
+                         const std::string& reason) {
+  // Out of the room first. `evict` reads the participant before announcing, so
+  // it has to run while the room still holds them.
+  if (const auto room_id = rooms_.room_of(user_id)) {
+    evict(out, *room_id, user_id, reason);
+  }
+
+  authenticator_.revoke_tokens_of(user_id);
+
+  if (const auto target = connection_of_user(user_id)) {
+    if (Connection* state = find_connection(*target)) {
+      state->user.reset();
+      state->room_id.reset();
+    }
+    user_to_connection_.erase(user_id);
+  }
+}
+
 void Hub::enforce(std::vector<Outgoing>& out, const models::User& actor, const models::User& target,
                   const models::Restrictions& before, const std::string& reason) {
   const std::string& user_id = target.id;
@@ -1103,19 +1194,7 @@ void Hub::enforce(std::vector<Outgoing>& out, const models::User& actor, const m
   }
 
   if (after.banned && !before.banned) {
-    // Out of the room first, then the tokens, exactly as delete_user does it:
-    // nobody is left talking to somebody the server has stopped accepting.
-    if (room_id.has_value()) {
-      evict(out, *room_id, user_id, reason.empty() ? "the account was suspended" : reason);
-    }
-    authenticator_.revoke_tokens_of(user_id);
-    if (const auto target_connection = connection_of_user(user_id)) {
-      if (Connection* state = find_connection(*target_connection)) {
-        state->user.reset();
-        state->room_id.reset();
-      }
-      user_to_connection_.erase(user_id);
-    }
+    end_session_of(out, user_id, reason.empty() ? "the account was suspended" : reason);
     // Everything below is about a room this account is no longer in.
     return;
   }
@@ -1326,23 +1405,12 @@ void Hub::handle_delete_user(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  // Out of the room first, so nobody is left talking to an account that no
-  // longer exists.
-  if (const auto room_id = rooms_.room_of(message.user_id)) {
-    evict(out, *room_id, message.user_id, "the account was removed");
-  }
-
-  // Tokens go with the account. Without this, a session opened a minute ago
-  // keeps working until it expires on its own, which for an account somebody
-  // just decided to remove is exactly the wrong answer.
-  authenticator_.revoke_tokens_of(message.user_id);
-  if (const auto target = connection_of_user(message.user_id)) {
-    if (Connection* state = find_connection(*target)) {
-      state->user.reset();
-      state->room_id.reset();
-    }
-    user_to_connection_.erase(message.user_id);
-  }
+  // Before the document goes, so that nobody is left talking to an account
+  // that no longer exists, and so that the tokens go with it: a session opened
+  // a minute ago would otherwise keep working until it expired on its own,
+  // which for an account somebody has just decided to remove is exactly the
+  // wrong answer.
+  end_session_of(out, message.user_id, "the account was removed");
 
   if (auto failure = users_->remove(message.user_id)) {
     reply_error(out, connection.id, *failure);

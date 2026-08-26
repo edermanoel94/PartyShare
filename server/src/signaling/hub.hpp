@@ -14,6 +14,7 @@
 
 #include "rooms/room_manager.hpp"
 #include "signaling/authenticator.hpp"
+#include "signaling/restriction_source.hpp"
 #include "store/audit_log.hpp"
 #include "store/chat_store.hpp"
 #include "store/room_store.hpp"
@@ -82,6 +83,12 @@ class Hub {
     store::RoomStore* rooms = nullptr;
     store::ChatStore* chat = nullptr;
     store::AuditLog* audit = nullptr;
+
+    /// Where a restriction written by something other than this server is
+    /// noticed. Null means a StoreRestrictionSource over `users`, which is
+    /// what every deployment gets; a caller that provides one has to keep it
+    /// alive longer than the Hub.
+    RestrictionSource* restrictions = nullptr;
   };
 
   Hub();
@@ -233,6 +240,39 @@ class Hub {
   void enforce(std::vector<Outgoing>& out, const models::User& actor, const models::User& target,
                const models::Restrictions& before, const std::string& reason);
 
+  /// Takes an account's session away: out of its room, tokens revoked, and the
+  /// identity dropped from the connection holding it.
+  ///
+  /// One copy because there are three callers and they have to agree. Deleting
+  /// an account, banning one, and finding that somebody else deleted one all
+  /// end the same way, and three transcriptions of the same four steps is how
+  /// two of them quietly stop revoking tokens.
+  ///
+  /// The socket is left open on purpose. The connection stops being anybody --
+  /// its next message is refused for want of a login -- but a client that is
+  /// hung up on cannot be told why, and the announcements above this call are
+  /// worth more than the file descriptor.
+  ///
+  /// `reason` is what the room is told. Safe to call for an account with no
+  /// room and for one with no connection.
+  void end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
+                      const std::string& reason);
+
+  /// Enforces what somebody else wrote into the accounts store.
+  ///
+  /// The other half of `handle_restrict_user`, for the writer that cannot send
+  /// a message. `restrictions_of` already made a restriction written straight
+  /// into the database hold for the account's *next* message, which is what
+  /// tools/dbadmin's README promises; this is what makes it hold for the
+  /// microphone that is already on, the share that is already running and the
+  /// session that is already open, which is what that README says it does not
+  /// do.
+  ///
+  /// Run from `tick`, so the loop the server already turns is the only thing
+  /// driving it, and no second thread reaches a UserStore that is documented
+  /// not to be thread safe.
+  void apply_restrictions_written_elsewhere(std::vector<Outgoing>& out);
+
   /// Sends the current room list to every authenticated connection, so that
   /// a room appearing or being closed reaches clients that did not cause it.
   void broadcast_room_list(std::vector<Outgoing>& out) const;
@@ -270,6 +310,11 @@ class Hub {
   store::UserStore* users_;
   store::ChatStore* chat_;
   store::AuditLog* audit_;
+
+  // Same arrangement as the stores above, and declared after `users_` because
+  // the one built here reads it.
+  std::unique_ptr<RestrictionSource> owned_restrictions_;
+  RestrictionSource* restrictions_;
 
   RoomManager rooms_;
   Authenticator authenticator_;

@@ -9,6 +9,7 @@ add_library(dv_server_core STATIC
   src/sfu/video_stitcher.cpp
   src/signaling/authenticator.cpp
   src/signaling/hub.cpp
+  src/signaling/restriction_source.cpp
   src/signaling/server.cpp
   src/store/memory_store.cpp
 )

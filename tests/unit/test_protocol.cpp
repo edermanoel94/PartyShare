@@ -26,6 +26,8 @@ T round_trip(const T& original) {
 
 TEST(MessageType, NamesRoundTrip) {
   const MessageType types[] = {
+      MessageType::ChangePassword,
+      MessageType::PasswordChanged,
       MessageType::CreateRoom,
       MessageType::RoomCreated,
       MessageType::JoinRoom,
@@ -108,6 +110,35 @@ TEST(RoundTrip, Authenticated) {
 TEST(Parse, AuthenticateRequiresBothCredentials) {
   EXPECT_EQ(parse(R"({"type":"authenticate","username":"ana"})").error().code, "missing_field");
   EXPECT_EQ(parse(R"({"type":"authenticate","password":"x"})").error().code, "missing_field");
+}
+
+TEST(RoundTrip, ChangePassword) {
+  const ChangePassword original{"old-password", "new-password"};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, PasswordChanged) {
+  const PasswordChanged original{};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(Parse, ChangePasswordRequiresBothPasswords) {
+  EXPECT_EQ(parse(R"({"type":"change_password","current_password":"a"})").error().code,
+            "missing_field");
+  EXPECT_EQ(parse(R"({"type":"change_password","new_password":"b"})").error().code,
+            "missing_field");
+}
+
+TEST(Parse, ChangePasswordCarriesNoTarget) {
+  // A user_id in the JSON is ignored rather than honoured. The account acted
+  // on is whichever one the connection's token resolves to, and a message that
+  // could name one would be a message an attacker could aim.
+  const auto parsed = parse(R"({"type":"change_password","user_id":"other","current_password":"a",)"
+                            R"("new_password":"b"})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  const auto& value = std::get<ChangePassword>(parsed.value());
+  EXPECT_EQ(value.current_password, "a");
+  EXPECT_EQ(value.new_password, "b");
 }
 
 TEST(RoundTrip, CreateRoom) {

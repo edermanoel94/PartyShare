@@ -51,6 +51,7 @@
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
 #include "ui/metrics_dialog.hpp"
+#include "ui/password_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
 #include "ui/table.hpp"
@@ -208,6 +209,11 @@ constexpr int kLevelFrameMs = 16;
       {QStringLiteral("room_not_found"), QStringLiteral("That room does not exist.")},
       {QStringLiteral("room_full"), QStringLiteral("The room is full.")},
       {QStringLiteral("unauthorized"), QStringLiteral("Wrong username or password.")},
+      // Its own code rather than `unauthorized`, because the session asking is
+      // perfectly valid and one field of a form is wrong. See
+      // Authenticator::change_password.
+      {QStringLiteral("invalid_password"),
+       QStringLiteral("The current password is not correct. The password was not changed.")},
       {QStringLiteral("not_connected"),
        QStringLiteral("No connection to the server. Trying again.")},
       {QStringLiteral("capture_denied"),
@@ -411,6 +417,14 @@ void MainWindow::build_home_page() {
   // closing and reopening the program - which is the thing the setting was
   // added to avoid. It is also the only way to hand the machine to somebody
   // else without doing that.
+  // Next to sign out, and for the same reason it sits at the bottom: both are
+  // about the account rather than about a room, and neither is what somebody
+  // came to this screen to do. Offered to everybody, administrators included -
+  // an administrator changing their own password through the account panel
+  // would be using the tool for managing *other* people on themselves.
+  auto* change_password = new QPushButton(QStringLiteral("Change password"), box);
+  change_password->setMinimumHeight(36);
+
   auto* sign_out = new QPushButton(QStringLiteral("Sign out"), box);
   sign_out->setMinimumHeight(36);
 
@@ -427,6 +441,7 @@ void MainWindow::build_home_page() {
   column->addWidget(join_button_);
   column->addSpacing(16);
   column->addWidget(admin_button_);
+  column->addWidget(change_password);
   column->addWidget(sign_out);
 
   auto* centred = new QHBoxLayout();
@@ -464,6 +479,7 @@ void MainWindow::build_home_page() {
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
   connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
+  connect(change_password, &QPushButton::clicked, this, &MainWindow::on_change_password);
   connect(sign_out, &QPushButton::clicked, this, &MainWindow::on_sign_out);
 
   pages_->insertWidget(kHomePage, page);
@@ -786,6 +802,10 @@ void MainWindow::wire_session() {
             QMetaObject::invokeMethod(this, "apply_chat_history", Qt::QueuedConnection,
                                       Q_ARG(QStringList, lines));
           },
+      .on_password_changed =
+          [this] {
+            QMetaObject::invokeMethod(this, "apply_password_changed", Qt::QueuedConnection);
+          },
       .on_user_list =
           [this](const std::vector<protocol::UserSummary>& users) {
             QStringList rows;
@@ -945,6 +965,36 @@ void MainWindow::on_sign_out() {
   // and a server address that has just been changed is the other one.
   password_->clear();
   show_login_error(QString{});
+}
+
+void MainWindow::on_change_password() {
+  PasswordDialog dialog(this);
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+
+  // Nothing is kept from the dialog. If the server refuses - the current
+  // password was wrong - the answer arrives after this has returned, as an
+  // error on this screen, and the form is opened again from the button rather
+  // than reappearing half filled with a password that turned out to be wrong.
+  const auto sent = session_.change_password(dialog.current_password().toStdString(),
+                                             dialog.new_password().toStdString());
+  if (!sent) {
+    apply_error(QString::fromStdString(sent.error().code),
+                QString::fromStdString(sent.error().message));
+  }
+}
+
+void MainWindow::apply_password_changed() {
+  // The same route out as the sign out button, deliberately: two ways to reach
+  // the login screen are two ways that can disagree about what they left
+  // behind.
+  session_.disconnect();
+  password_->clear();
+
+  // On the login screen, where they are about to type it, rather than in a box
+  // they dismiss on the way there.
+  show_login_error(QStringLiteral("Password changed. Sign in with the new one."));
 }
 
 void MainWindow::on_create_room() {

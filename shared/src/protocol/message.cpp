@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/protocol.md must match.
-constexpr std::array<TypeMapping, 36> kTypeMappings{{
+constexpr std::array<TypeMapping, 38> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -32,6 +32,8 @@ constexpr std::array<TypeMapping, 36> kTypeMappings{{
     {.type = MessageType::ScreenShareStopped, .name = "screen_share_stopped"},
     {.type = MessageType::Mute, .name = "mute"},
     {.type = MessageType::Unmute, .name = "unmute"},
+    {.type = MessageType::ChangePassword, .name = "change_password"},
+    {.type = MessageType::PasswordChanged, .name = "password_changed"},
     {.type = MessageType::ChatMessage, .name = "chat_message"},
     {.type = MessageType::ListChat, .name = "list_chat"},
     {.type = MessageType::ChatHistory, .name = "chat_history"},
@@ -490,6 +492,12 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, Unmute>) {
           return MessageType::Unmute;
         }
+        if constexpr (std::is_same_v<T, ChangePassword>) {
+          return MessageType::ChangePassword;
+        }
+        if constexpr (std::is_same_v<T, PasswordChanged>) {
+          return MessageType::PasswordChanged;
+        }
         if constexpr (std::is_same_v<T, ChatMessage>) {
           return MessageType::ChatMessage;
         }
@@ -610,6 +618,11 @@ std::string serialize(const Message& message) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
           root["by_user_id"] = value.by_user_id;
+        } else if constexpr (std::is_same_v<T, ChangePassword>) {
+          root["current_password"] = value.current_password;
+          root["new_password"] = value.new_password;
+        } else if constexpr (std::is_same_v<T, PasswordChanged>) {
+          // No payload at all. The type is the whole message.
         } else if constexpr (std::is_same_v<T, ChatMessage>) {
           root["message"] = chat_message_to_json(value.message);
         } else if constexpr (std::is_same_v<T, ListChat>) {
@@ -837,6 +850,18 @@ Result<Message> parse(std::string_view json_text) {
       value.by_user_id = reader.optional_string("by_user_id");
       return finish(reader, value);
     }
+    case MessageType::ChangePassword: {
+      ChangePassword value;
+      // Both required. An absent new_password read as an empty string would be
+      // refused by the authenticator anyway, but "you did not send the field"
+      // and "you asked for an empty password" are different mistakes and the
+      // sender is told which one they made.
+      value.current_password = reader.string("current_password");
+      value.new_password = reader.string("new_password");
+      return finish(reader, value);
+    }
+    case MessageType::PasswordChanged:
+      return finish(reader, PasswordChanged{});
     case MessageType::Unmute: {
       Unmute value;
       value.room_id = reader.string("room_id");

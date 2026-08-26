@@ -236,6 +236,9 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
                              std::is_same_v<T, protocol::IceCandidate>) {
           handle_relay(out, *state, message, value.room_id, value.from_user_id, value.to_user_id);
 
+        } else if constexpr (std::is_same_v<T, protocol::ChangePassword>) {
+          handle_change_password(out, *state, value);
+
         } else if constexpr (std::is_same_v<T, protocol::Mute>) {
           handle_mute(out, *state, value.room_id, value.user_id, true);
 
@@ -1212,6 +1215,62 @@ void Hub::handle_list_users(std::vector<Outgoing>& out, Connection& connection) 
 
 void Hub::handle_list_rooms(std::vector<Outgoing>& out, Connection& connection) {
   out.push_back(Outgoing{.connection = connection.id, .message = room_list()});
+}
+
+void Hub::handle_change_password(std::vector<Outgoing>& out, Connection& connection,
+                                 const protocol::ChangePassword& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  // A copy, not the pointer. Everything below the change signs this connection
+  // out, and signing out clears `connection.user` - which is what `actor`
+  // points into.
+  const models::User account = *actor;
+
+  if (auto failure = authenticator_.change_password(account.id, message.current_password,
+                                                    message.new_password)) {
+    // Nothing has been written at this point: the authenticator checks the
+    // current password before it derives anything. A refusal here leaves the
+    // session exactly as it was, which is what lets somebody who mistyped one
+    // field try again without logging back in.
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  // Recorded before the session ends, so the entry is written while the
+  // account is still resolvable to a username. What it does not record is
+  // either password, in any form - the action and who took it is the whole of
+  // what an audit log has any business knowing about this.
+  DV_LOG_INFO("{} changed their own password", account.id);
+  record(account, "change_password", account.id, {}, "password");
+
+  // Out of any room first. What follows stops this connection from being
+  // answered, and a participant list still holding somebody whose session has
+  // ended is a room with a ghost in it. The interface only offers the change
+  // from the home screen, so this is the defensive path rather than the usual
+  // one - but "the client would not do that" is not a property the server can
+  // rely on.
+  if (const auto room_id = rooms_.room_of(account.id)) {
+    evict(out, *room_id, account.id, "the password was changed");
+  }
+
+  // Every session of the account, this one included. A password is most often
+  // changed because the old one is believed to be loose, and a change that
+  // leaves the tokens the old one minted alive for another eight hours has not
+  // closed the door it was opened to close. The cost is one sign-in, paid by
+  // somebody who has just proved they know the new password.
+  authenticator_.revoke_tokens_of(account.id);
+  user_to_connection_.erase(account.id);
+  connection.user.reset();
+  connection.room_id.reset();
+
+  // Sent after the session is gone, and it is the only thing that makes the
+  // change visible to the client: nothing else about this connection changes
+  // shape. Without it the client would find out at its next message, as an
+  // `unauthorized` it has no way to explain.
+  out.push_back(Outgoing{.connection = connection.id, .message = protocol::PasswordChanged{}});
 }
 
 void Hub::handle_create_user(std::vector<Outgoing>& out, Connection& connection,

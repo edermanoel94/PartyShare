@@ -51,6 +51,11 @@ enum class MessageType : std::uint8_t {
   ScreenShareStopped,
   Mute,
   Unmute,
+  // An account looking after itself, section 4.8 of docs/protocol.md. Not
+  // administration: the only account either of these can touch is the one that
+  // sent the message.
+  ChangePassword,
+  PasswordChanged,
   // The room's conversation, section 4.5 of docs/protocol.md.
   ChatMessage,
   ListChat,
@@ -87,6 +92,27 @@ struct Authenticate {
   std::string password;
 
   friend bool operator==(const Authenticate&, const Authenticate&) = default;
+};
+
+/// Replaces the password of the account that sent it.
+///
+/// There is no `user_id`, and that absence is the whole security argument for
+/// this being its own message rather than an `update_user` opened up to
+/// ordinary users. The account acted on is the one the connection's token
+/// resolves to, so there is no field an attacker could aim somewhere else. A
+/// message that named its target would need a rule saying the target must be
+/// the sender, and a rule can be forgotten by the next handler; a message with
+/// nowhere to write a target cannot be pointed at anybody.
+///
+/// `current_password` is required and checked. Without it, an unattended
+/// session - a laptop left open for two minutes - is enough to lock the owner
+/// out of their own account permanently, which is a bigger hole than the one
+/// changing a password is meant to close.
+struct ChangePassword {
+  std::string current_password;
+  std::string new_password;
+
+  friend bool operator==(const ChangePassword&, const ChangePassword&) = default;
 };
 
 struct CreateRoom {
@@ -127,6 +153,17 @@ struct Authenticated {
   int expires_in_seconds = 0;
 
   friend bool operator==(const Authenticated&, const Authenticated&) = default;
+};
+
+/// The password was replaced, and with it every session of that account - the
+/// one that asked included.
+///
+/// Carries nothing. The client's only job on receiving it is to sign out and
+/// say why, and anything this message could add about the account is already
+/// stale: the token that would have been used to ask for it has just been
+/// revoked.
+struct PasswordChanged {
+  friend bool operator==(const PasswordChanged&, const PasswordChanged&) = default;
 };
 
 struct RoomCreated {
@@ -496,10 +533,10 @@ struct Pong {
 using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
-                 ScreenShareStopped, Mute, Unmute, ChatMessage, ListChat, ChatHistory, ErrorMessage,
-                 Ping, Pong, KickUser, UserKicked, ForceMute, RestrictUser, UserRestricted,
-                 ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms, RoomList,
-                 DeleteRoom, ListAudit, AuditList>;
+                 ScreenShareStopped, Mute, Unmute, ChangePassword, PasswordChanged, ChatMessage,
+                 ListChat, ChatHistory, ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute,
+                 RestrictUser, UserRestricted, ListUsers, UserList, CreateUser, UpdateUser,
+                 DeleteUser, ListRooms, RoomList, DeleteRoom, ListAudit, AuditList>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

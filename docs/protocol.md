@@ -47,6 +47,7 @@ Since server assigned identifiers are 16 hexadecimal characters, there is no way
 | Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `authenticate` | `username`, `password` | |
+| `change_password` | `current_password`, `new_password` | |
 | `create_room` | `user_id` | `room_name`, `persistent` |
 | `join_room` | `room_id`, `user_id` | `display_name` |
 | `leave_room` | `room_id`, `user_id` | |
@@ -60,14 +61,15 @@ Anything else before it is answered with an `error` carrying code `unauthorized`
 `ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.
 Without that exception the two rules contradict each other, and a connection that failed to authenticate is told `unauthorized` once per heartbeat interval for as long as it stays open.
 
-The password appears only in that message.
-The server never echoes it back and never writes it to a log.
+The password appears only in that message and in `change_password`, section 4.8.
+The server never echoes one back and never writes one to a log.
 
 ### 4.2 Server to client
 
 | Type | Mandatory fields | Optional fields |
 | --- | --- | --- |
 | `authenticated` | `user`, `token`, `expires_in_seconds` | |
+| `password_changed` | | |
 | `room_created` | `room_id` | `room_name` |
 | `user_joined` | `room_id`, `user` | |
 | `user_left` | `room_id`, `user_id` | |
@@ -412,17 +414,50 @@ An empty or absent `actor_id` means every actor.
 
 Ordinary participation is not recorded: joining, leaving, sharing a screen and muting yourself produce no entry, because a log full of them is a log nobody reads.
 
-### 4.8 Who may send what
+### 4.8 An account's own password
+
+```json
+{"type": "change_password", "current_password": "…", "new_password": "…"}
+```
+
+Answered with `password_changed`, which carries no fields, or with an `error`.
+
+There is no `user_id`, and that absence is the design.
+The account acted on is the one the connection's token resolves to, so the message has no field an attacker could aim at somebody else's account.
+The alternative — letting an ordinary user send `update_user` with a `password` and a rule saying the `user_id` must be their own — puts the safety of the whole thing in a check that a later handler can forget to make.
+
+`current_password` is mandatory and is checked before anything is written.
+It is what stands in for the authority an administrator has when they set somebody else's password: an ordinary user has no such authority, and the only thing left to prove is that they already know the password they are replacing.
+Without it, two unattended minutes at somebody's desk is enough to take their account away from them permanently.
+
+A refusal changes nothing.
+The password is checked before the new one is derived, so a wrong `current_password` leaves the account and the session exactly as they were, and the client can offer the form again without signing back in.
+
+| Situation | Code |
+| --- | --- |
+| `current_password` is not the account's password | `invalid_password` |
+| `new_password` is empty, or is the current password | `invalid_value` |
+
+Succeeding revokes **every** session of the account, including the one that asked.
+The connection stays open and its token stops resolving to anything, so `password_changed` is the last message it is answered with; anything after it is `unauthorized`.
+A client that receives it should disconnect and sign in again.
+
+That is deliberate, and it is the reason the change is worth making at all: a password is most often replaced because the old one is believed to be loose, and a change that leaves the tokens the old one minted alive for the rest of their lifetime has not closed the door it was opened to close.
+
+The audit log records `change_password` with the account as both actor and target.
+Neither password appears in the entry, in any form.
+
+### 4.9 Who may send what
 
 | Role | May send |
 | --- | --- |
-| `user` | `authenticate`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `ping`, `pong` |
+| `user` | `authenticate`, `change_password`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `ping`, `pong` |
 | `admin` | everything above, plus every message in section 4.7 |
 
 This table says what a role may send, not who they may send it about.
 Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
@@ -449,12 +484,18 @@ The message alongside them is for humans only and may change.
 | `user_not_found` | No account exists with that `user_id` |
 | `invalid_target` | The action cannot be aimed at that user, such as an administrator kicking or deleting themselves |
 | `last_administrator` | The action would leave the system with no administrator |
+| `invalid_password` | The `current_password` sent with `change_password` is not the account's password |
 | `invalid_value` | A field is present and of the right type, but its value is not usable |
 | `database_error` | The persistence layer could not carry out the operation |
 
 The first five are detected in the parsing layer and have been implemented since M1.
 The next ones depend on the server and arrived in M2, and `media_unavailable` in M4.
 The rest come with roles and persistence, and `account_banned` with account restrictions.
+
+`invalid_password` and `unauthorized` are deliberately different too, and for a related reason.
+`unauthorized` says the server does not know who is asking, and a client answers it by going back to the login screen.
+`invalid_password` comes from a session the server knows perfectly well, about one field of a form that was filled in wrong.
+A client that treated them the same would sign somebody out for a typo.
 
 `forbidden` and `unauthorized` are deliberately different.
 `unauthorized` means the server does not know who is asking; `forbidden` means it does, and the answer is still no.

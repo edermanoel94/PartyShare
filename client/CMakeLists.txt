@@ -241,6 +241,8 @@ qt_add_executable(dv_client
   src/ui/metrics_dialog.hpp
   src/ui/notifier.cpp
   src/ui/notifier.hpp
+  src/ui/password_dialog.cpp
+  src/ui/password_dialog.hpp
   src/ui/sound.hpp
   src/ui/screen_view.cpp
   src/ui/screen_view.hpp

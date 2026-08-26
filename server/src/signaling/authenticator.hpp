@@ -92,6 +92,33 @@ class Authenticator {
   [[nodiscard]] std::optional<Error> set_password(const std::string& user_id,
                                                   const std::string& password);
 
+  /// Replaces a password after checking the one the account has now.
+  ///
+  /// The check is what separates this from set_password, and it is not
+  /// politeness: set_password is what an administrator uses on somebody else's
+  /// account, and the authority there is the administrator's role. An ordinary
+  /// user has no such authority over anything, so the only thing that can
+  /// stand in for it is proof that they already know the password they are
+  /// replacing. Without that, an unattended session is enough to take an
+  /// account away from its owner.
+  ///
+  /// Failure codes:
+  ///   user_not_found    no account with that identifier
+  ///   invalid_password  `current_password` is not the account's password
+  ///   invalid_value     the new password is empty, or is the current one
+  ///
+  /// Deliberately not `unauthorized`: that code means "this session is not who
+  /// it says it is", and the client answers it by sending somebody back to the
+  /// login screen. The session here is perfectly valid and one field of the
+  /// form is wrong.
+  ///
+  /// Does not revoke anything. Whether the account's sessions survive a
+  /// password change is a policy question, and the Hub is where it is
+  /// answered - see Hub::handle_change_password.
+  [[nodiscard]] std::optional<Error> change_password(const std::string& user_id,
+                                                     const std::string& current_password,
+                                                     const std::string& new_password);
+
   /// Ends every session of one account. Used when the account is deleted, so
   /// that a token issued a minute earlier stops working immediately rather
   /// than at its own expiry.

@@ -43,6 +43,17 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::ScreenShareStopped:
     case protocol::MessageType::Mute:
     case protocol::MessageType::Unmute:
+    // Replacing one's own password. Deliberately here and not in the
+    // administration block below: an ordinary user who cannot change their own
+    // password has to ask an administrator, which means saying the new one out
+    // loud to somebody, and the administrator ends up knowing a password they
+    // have no business knowing.
+    //
+    // Nothing about this grants power over another account. The message has no
+    // target field at all - see protocol::ChangePassword - so "any
+    // authenticated connection may send it" and "any authenticated connection
+    // may change its own password" are the same sentence here.
+    case protocol::MessageType::ChangePassword:
     // Talking in a room and reading what was said in it. Open to everybody who
     // has logged in, and narrowed to the room's own participants by the
     // handlers: this table says what a role may send, not who they may send it
@@ -83,6 +94,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserLeft:
     case protocol::MessageType::UserKicked:
     case protocol::MessageType::UserRestricted:
+    case protocol::MessageType::PasswordChanged:
     case protocol::MessageType::ChatHistory:
     case protocol::MessageType::UserList:
     case protocol::MessageType::RoomList:

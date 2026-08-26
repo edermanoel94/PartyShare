@@ -87,6 +87,121 @@ class HubTest : public ::testing::Test {
   ConnectionId next_connection_ = 1;
 };
 
+// --- an account's own password -----------------------------------------------
+//
+// The one thing in this file an ordinary user does to the account store. What
+// makes it safe is not a check in the handler but the shape of the message:
+// protocol::ChangePassword has no field naming an account, so the only one it
+// can reach is the one the connection's token resolved to.
+
+class HubPasswordTest : public HubTest {};
+
+TEST_F(HubPasswordTest, AnOrdinaryUserChangesTheirOwnPassword) {
+  const auto [connection, user] = login("ana");
+
+  const auto out = send(connection, proto::ChangePassword{"password", "new-password"});
+  EXPECT_TRUE(find<proto::PasswordChanged>(out, connection).has_value());
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, connection).has_value());
+
+  // Signing in again is the proof the store was written, and is also the only
+  // thing left to do: the change ended the session that made it.
+  const ConnectionId again = connect();
+  EXPECT_TRUE(
+      find<proto::Authenticated>(send(again, proto::Authenticate{"ana", "new-password"}), again)
+          .has_value());
+}
+
+TEST_F(HubPasswordTest, TheOldPasswordStopsWorking) {
+  const auto [connection, user] = login("ana");
+  (void)send(connection, proto::ChangePassword{"password", "new-password"});
+
+  const ConnectionId again = connect();
+  const auto error =
+      find<proto::ErrorMessage>(send(again, proto::Authenticate{"ana", "password"}), again);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unauthorized");
+}
+
+TEST_F(HubPasswordTest, TheWrongCurrentPasswordIsRefusedWithoutEndingTheSession) {
+  const auto [connection, user] = login("ana");
+
+  const auto out = send(connection, proto::ChangePassword{"not-it", "new-password"});
+  const auto error = find<proto::ErrorMessage>(out, connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_password");
+  EXPECT_FALSE(find<proto::PasswordChanged>(out, connection).has_value());
+
+  // Still signed in, which is the point of refusing before writing anything:
+  // somebody who mistyped one field of a form gets to try again rather than to
+  // log back in first.
+  EXPECT_TRUE(find<proto::RoomList>(send(connection, proto::ListRooms{}), connection).has_value());
+}
+
+TEST_F(HubPasswordTest, RefusesANewPasswordEqualToTheCurrentOne) {
+  const auto [connection, user] = login("ana");
+
+  const auto error = find<proto::ErrorMessage>(
+      send(connection, proto::ChangePassword{"password", "password"}), connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+}
+
+TEST_F(HubPasswordTest, ChangingThePasswordEndsTheSessionThatAskedForIt) {
+  const auto [connection, user] = login("ana");
+  (void)send(connection, proto::ChangePassword{"password", "new-password"});
+
+  // The socket is still open and its token no longer resolves to anything, so
+  // the connection is back to being one that has not authenticated.
+  const auto error = find<proto::ErrorMessage>(send(connection, proto::ListRooms{}), connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unauthorized");
+}
+
+TEST_F(HubPasswordTest, ChangingThePasswordRevokesEverySessionOfTheAccount) {
+  const auto [connection, user] = login("ana");
+  ASSERT_GT(hub_.authenticator().active_token_count(), 0U);
+
+  (void)send(connection, proto::ChangePassword{"password", "new-password"});
+
+  // Not only this connection's token. A password is changed most often because
+  // the old one is believed to be loose, and the tokens it minted elsewhere are
+  // exactly what a change has to invalidate.
+  EXPECT_EQ(hub_.authenticator().active_token_count(), 0U);
+}
+
+TEST_F(HubPasswordTest, ChangingThePasswordTakesTheUserOutOfTheirRoom) {
+  const auto [connection, user] = login("ana");
+  const std::string room = create_room(connection, user.id);
+  (void)send(connection, proto::JoinRoom{room, user.id, "Ana"});
+
+  const auto out = send(connection, proto::ChangePassword{"password", "new-password"});
+
+  // The interface only offers the change from the home screen, so this is the
+  // defensive path. What it defends against is a room whose participant list
+  // still holds somebody whose session has stopped being answered.
+  EXPECT_TRUE(find<proto::UserKicked>(out, connection).has_value());
+  EXPECT_TRUE(find<proto::PasswordChanged>(out, connection).has_value());
+}
+
+TEST_F(HubPasswordTest, ChangingAPasswordIsRefusedBeforeAuthentication) {
+  const ConnectionId connection = connect();
+
+  const auto error = find<proto::ErrorMessage>(
+      send(connection, proto::ChangePassword{"password", "new-password"}), connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unauthorized");
+}
+
+TEST_F(HubPasswordTest, APasswordChangedFromAClientIsRefused) {
+  const auto [connection, user] = login("ana");
+
+  // Server to client, and the table in permissions.hpp is what says so.
+  const auto error =
+      find<proto::ErrorMessage>(send(connection, proto::PasswordChanged{}), connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unknown_message_type");
+}
+
 // --- authentication ----------------------------------------------------------
 
 TEST_F(HubTest, AuthenticationSucceedsWithValidCredentials) {

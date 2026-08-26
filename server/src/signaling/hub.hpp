@@ -193,6 +193,15 @@ class Hub {
   void evict(std::vector<Outgoing>& out, const std::string& room_id, const std::string& user_id,
              const std::string& reason);
 
+  /// Replaces the password of the connection's own account, and ends the
+  /// session that asked for it.
+  ///
+  /// The only handler an ordinary user reaches that writes to the account
+  /// store. There is no target to check because protocol::ChangePassword has
+  /// no target field: the account is whichever one this connection's token
+  /// resolved to.
+  void handle_change_password(std::vector<Outgoing>& out, Connection& connection,
+                              const protocol::ChangePassword& message);
   void handle_create_room(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::CreateRoom& message);
   void handle_join_room(std::vector<Outgoing>& out, Connection& connection,

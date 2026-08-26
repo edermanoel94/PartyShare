@@ -211,9 +211,39 @@ std::optional<Error> Authenticator::set_password(const std::string& user_id,
     return Error{.code = "user_not_found", .message = "no such account"};
   }
 
-  account->salt_hex = std::move(credentials).take().salt_hex;
-  account->password_hash_hex = derive_key_hex(password, account->salt_hex);
+  // Both halves of the same derivation. Taking only the salt and deriving the
+  // key again from it gives the identical answer for a second scrypt run, and
+  // scrypt is expensive on purpose.
+  auto value = std::move(credentials).take();
+  account->salt_hex = std::move(value.salt_hex);
+  account->password_hash_hex = std::move(value.password_hash_hex);
   return users_->update(*account);
+}
+
+std::optional<Error> Authenticator::change_password(const std::string& user_id,
+                                                    const std::string& current_password,
+                                                    const std::string& new_password) {
+  const auto account = users_->find_by_id(user_id);
+  if (!account.has_value()) {
+    return Error{.code = "user_not_found", .message = "no such account"};
+  }
+
+  if (!constant_time_equals(account->password_hash_hex,
+                            derive_key_hex(current_password, account->salt_hex))) {
+    return Error{.code = "invalid_password", .message = "the current password is not correct"};
+  }
+
+  // Against the old salt, which is what makes this a comparison of passwords
+  // rather than of hashes: the new password gets its own salt a moment later,
+  // and derived under that one it would differ from the stored hash even if
+  // the two passwords were the same string.
+  if (constant_time_equals(account->password_hash_hex,
+                           derive_key_hex(new_password, account->salt_hex))) {
+    return Error{.code = "invalid_value",
+                 .message = "the new password must be different from the current one"};
+  }
+
+  return set_password(user_id, new_password);
 }
 
 void Authenticator::revoke_tokens_of(const std::string& user_id) {

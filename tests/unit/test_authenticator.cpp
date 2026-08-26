@@ -212,4 +212,77 @@ TEST(AuthenticatorTest, TheSamePasswordStoresDifferentlyForDifferentUsers) {
   EXPECT_TRUE(authenticator.authenticate("bruno", "same-password", kNow).ok());
 }
 
+TEST(Authenticator, ChangesAPasswordAfterCheckingTheCurrentOne) {
+  Authenticator auth;
+  const auto user = auth.add_user("ana", "old-password", "Ana");
+  ASSERT_TRUE(user.ok());
+
+  EXPECT_FALSE(auth.change_password(user.value().id, "old-password", "new-password").has_value());
+
+  // The pair of assertions is the whole test. Only the second one says the new
+  // password works; only the first says the old one stopped working, which is
+  // the half a change that wrote nothing would still pass.
+  EXPECT_FALSE(auth.authenticate("ana", "old-password", kNow).ok());
+  EXPECT_TRUE(auth.authenticate("ana", "new-password", kNow).ok());
+}
+
+TEST(Authenticator, RefusesAChangeWithTheWrongCurrentPassword) {
+  Authenticator auth;
+  const auto user = auth.add_user("ana", "old-password", "Ana");
+  ASSERT_TRUE(user.ok());
+
+  const auto failure = auth.change_password(user.value().id, "not-it", "new-password");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_password");
+
+  // Nothing was written. A refusal that had already replaced the password
+  // would leave an account whose owner was told no and whose password moved.
+  EXPECT_TRUE(auth.authenticate("ana", "old-password", kNow).ok());
+  EXPECT_FALSE(auth.authenticate("ana", "new-password", kNow).ok());
+}
+
+TEST(Authenticator, RefusesAChangeToTheSamePassword) {
+  Authenticator auth;
+  const auto user = auth.add_user("ana", "password", "Ana");
+  ASSERT_TRUE(user.ok());
+
+  const auto failure = auth.change_password(user.value().id, "password", "password");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_value");
+}
+
+TEST(Authenticator, RefusesAnEmptyNewPassword) {
+  Authenticator auth;
+  const auto user = auth.add_user("ana", "password", "Ana");
+  ASSERT_TRUE(user.ok());
+
+  const auto failure = auth.change_password(user.value().id, "password", "");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_value");
+  EXPECT_TRUE(auth.authenticate("ana", "password", kNow).ok());
+}
+
+TEST(Authenticator, RefusesAChangeForAnAccountThatIsNotThere) {
+  Authenticator auth;
+  const auto failure = auth.change_password("0123456789abcdef", "old", "new");
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "user_not_found");
+}
+
+TEST(Authenticator, DoesNotRevokeTokensOnAPasswordChange) {
+  // Pinning where the policy lives rather than approving of it. Ending the
+  // sessions of an account whose password just changed is the right answer,
+  // and it is the Hub that gives it - see Hub::handle_change_password. Here,
+  // a change is a change to the store and nothing else, which is what lets a
+  // future caller that should not sign anybody out use the same method.
+  Authenticator auth;
+  const auto user = auth.add_user("ana", "old-password", "Ana");
+  ASSERT_TRUE(user.ok());
+  ASSERT_TRUE(auth.authenticate("ana", "old-password", kNow).ok());
+  ASSERT_EQ(auth.active_token_count(), 1U);
+
+  EXPECT_FALSE(auth.change_password(user.value().id, "old-password", "new-password").has_value());
+  EXPECT_EQ(auth.active_token_count(), 1U);
+}
+
 }  // namespace

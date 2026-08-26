@@ -991,6 +991,48 @@ TEST_F(HubAdminTest, EveryAdministrativeActionIsRecorded) {
   EXPECT_EQ(log->entries.back().action, "force_mute");
 }
 
+TEST_F(HubAdminTest, ChangingOnesOwnPasswordIsRecordedWithoutThePassword) {
+  set_up_room();
+
+  (void)send(user_connection_, proto::ChangePassword{"password", "new-password"});
+
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  ASSERT_EQ(log->entries.size(), 1U);
+
+  const auto& entry = log->entries.front();
+  EXPECT_EQ(entry.action, "change_password");
+  // Actor and target are the same account, which is the only shape this action
+  // has: the message it comes from cannot name anybody else.
+  EXPECT_EQ(entry.actor_id, user_.id);
+  EXPECT_EQ(entry.target_id, user_.id);
+
+  // Neither password, in any form. What an audit log has business knowing here
+  // is that the change happened and who made it.
+  EXPECT_EQ(entry.detail.find("password"), 0U) << "the detail says what changed, not to what";
+  EXPECT_EQ(entry.detail, "password");
+}
+
+TEST_F(HubAdminTest, AnOrdinaryUserMayChangeTheirOwnPasswordAndNobodyElses) {
+  set_up_room();
+
+  // The ordinary user's own change goes through, while update_user - the
+  // administrator's way of setting a password - stays refused for them. Both
+  // halves in one test because it is the pair that matters: opening the second
+  // one up would have been the easy way to deliver the first.
+  EXPECT_TRUE(find<proto::PasswordChanged>(
+                  send(user_connection_, proto::ChangePassword{"password", "new-password"}),
+                  user_connection_)
+                  .has_value());
+
+  const auto [again, bruno] = login("carla", Role::User);
+  const auto refused = find<proto::ErrorMessage>(
+      send(again, proto::UpdateUser{admin_.id, std::nullopt, std::nullopt, "hijacked"}), again);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "forbidden");
+}
+
 TEST_F(HubAdminTest, TheLogCanBeNarrowedToOneActor) {
   set_up_room();
   const auto [second, carla] = login("carla", Role::Admin);

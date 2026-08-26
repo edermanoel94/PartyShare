@@ -179,6 +179,16 @@ class CallSession {
     /// otherwise be appended a second time.
     std::function<void(std::vector<models::ChatMessage> messages)> on_chat_history;
 
+    /// The password of this account was replaced, and every session of it -
+    /// this one - was revoked by the server.
+    ///
+    /// The session is still connected and still holds a token that no longer
+    /// resolves to anything, so the only correct next move is to disconnect
+    /// and sign in again. That is left to the interface rather than done here,
+    /// because it is also the moment somebody has to be told why they are
+    /// looking at a login screen.
+    std::function<void()> on_password_changed;
+
     // --- administration ---
     //
     // Only ever called on a session that authenticated as an administrator,
@@ -422,6 +432,18 @@ class CallSession {
   void set_signaling_url(std::string url);
 
   void disconnect();
+
+  /// Replaces this account's password. Not administration: it acts on
+  /// whoever is signed in and takes no identifier.
+  ///
+  /// Succeeding ends the session. The server revokes every token of the
+  /// account, this one included, and answers with `password_changed`, which
+  /// arrives at `Callbacks::on_password_changed`. A `Result` that says yes here
+  /// means the request went out, not that the password changed - like every
+  /// other request in this class, the answer comes back on the signaling
+  /// thread.
+  [[nodiscard]] Result<std::monostate> change_password(const std::string& current_password,
+                                                       const std::string& new_password);
 
   // --- administration --------------------------------------------------------
   //

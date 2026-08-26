@@ -77,6 +77,12 @@ class MainWindow : public QMainWindow {
   void on_leave_room();
   void on_toggle_mute();
   void on_toggle_share();
+  /// Opens the change-password form, and sends what it collected.
+  ///
+  /// Home screen only, which is where it is offered. Succeeding ends the
+  /// session, and doing that from inside a call would drop the call as a side
+  /// effect of a settings-shaped action.
+  void on_change_password();
   void on_open_settings();
   void on_open_metrics();
   void on_open_administration();
@@ -107,6 +113,12 @@ class MainWindow : public QMainWindow {
   /// app::LevelMeter for what decides how fast it is allowed to travel.
   void animate_level();
   void apply_error(const QString& code, const QString& message);
+  /// The server changed the password and revoked every session of the account.
+  ///
+  /// Signs out and says why on the login screen. The session is already dead
+  /// on the server's side by the time this runs; disconnecting here is what
+  /// makes this side agree with it.
+  void apply_password_changed();
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
   void apply_kicked(const QString& reason);

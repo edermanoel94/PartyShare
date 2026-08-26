@@ -132,6 +132,24 @@ Result<std::monostate> CallSession::create_room(const std::string& room_name, bo
       protocol::CreateRoom{.user_id = user_id, .room_name = room_name, .persistent = persistent});
 }
 
+Result<std::monostate> CallSession::change_password(const std::string& current_password,
+                                                    const std::string& new_password) {
+  std::string user_id;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    user_id = local_user_.id;
+  }
+  if (user_id.empty()) {
+    return Result<std::monostate>::failure("unauthorized",
+                                           "authenticate before changing a password");
+  }
+  // The identifier is read only to check there is one. It is deliberately not
+  // sent: protocol::ChangePassword has no field for it, and the account the
+  // server acts on is the one it resolved this connection's token to.
+  return signaling_.send(
+      protocol::ChangePassword{.current_password = current_password, .new_password = new_password});
+}
+
 Result<std::monostate> CallSession::join(const std::string& room_id,
                                          const std::string& display_name) {
   std::string user_id;
@@ -1047,6 +1065,18 @@ void CallSession::handle_signal(protocol::Message message) {
       }
     }
     publish_participants();
+    return;
+  }
+
+  if (std::holds_alternative<protocol::PasswordChanged>(message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_password_changed) {
+      handlers.on_password_changed();
+    }
     return;
   }
 

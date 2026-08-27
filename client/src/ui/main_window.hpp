@@ -310,6 +310,15 @@ class MainWindow : public QMainWindow {
   QLabel* status_ = nullptr;
   QLabel* quality_ = nullptr;
   QLabel* metrics_ = nullptr;
+  /// Which build this is, at the right hand end of the status bar.
+  ///
+  /// Written once in the constructor and never touched again: the version is
+  /// decided when the binary is compiled, not while it runs. It is on the
+  /// window rather than behind an About dialog because the question it answers
+  /// - "is the person I am in a room with running the same build as me" - is
+  /// asked while looking at the window, and an answer two clicks away gets
+  /// guessed at instead of looked up.
+  QLabel* version_ = nullptr;
 
   client::app::CallSession::State state_ = client::app::CallSession::State::Idle;
   /// Whose volume the slider is showing. Empty when nobody is selected.

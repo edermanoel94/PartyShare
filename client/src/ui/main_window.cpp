@@ -272,9 +272,31 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   metrics_->setFont(small);
   metrics_->setProperty("hint", true);
 
+  // DV_VERSION is the project version, handed to the compiler by
+  // shared/CMakeLists.txt, so this and `--version` on the command line cannot
+  // drift apart: there is one number and it lives in the top level
+  // CMakeLists.txt.
+  version_ = new QLabel(QStringLiteral("PartyShare " DV_VERSION), this);
+  version_->setFont(small);
+  version_->setProperty("hint", true);
+  // Selectable, because the first thing a bug report is asked for is the
+  // version, and a number that has to be retyped is a number that gets sent
+  // wrong.
+  version_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  // The Qt actually loaded rather than the one this was built against: where
+  // Qt is a shared library the two are allowed to differ, and the one that
+  // explains a misbehaving window is the one in the process.
+  version_->setToolTip(
+      QStringLiteral("PartyShare %1, on Qt %2").arg(QStringLiteral(DV_VERSION), qVersion()));
+
   statusBar()->addWidget(status_);
   statusBar()->addWidget(quality_);
   statusBar()->addPermanentWidget(metrics_);
+  // Last, so that it sits against the right hand edge and stays there. The
+  // permanent widgets are laid out in the order they are added, and the call
+  // metrics beside it change width every second; the other way round, the
+  // version would slide back and forth for the length of a call.
+  statusBar()->addPermanentWidget(version_);
 
   // Runs only while the meter has somewhere to go. A timer beating sixty times
   // a second for the whole time a window is open, to redraw a bar that is not

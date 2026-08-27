@@ -40,16 +40,20 @@ is written to an audit log.
 
 ## Status
 
-| Platform | State |
-| --- | --- |
-| Linux x64 | Built, run and measured. Every number in the documentation comes from here |
-| Windows x64 | Built, run and packaged. Media layer included, MSI installs and runs |
-| macOS ARM64 | Built and run, media layer included. The published `.dmg` still ships a client that cannot make a call |
-| macOS x64 | Code, presets and packaging exist. Never built, never run |
+| Platform | Development | A tagged release ships |
+| --- | --- | --- |
+| Linux x64 | Built, run and measured. Every number in the documentation comes from here | **nothing** — build from source |
+| Windows x64 | Built, run and packaged. Media layer included | `.msi` and `.zip`, installed and run |
+| macOS ARM64 | Built and run, media layer included | `.dmg`, which still ships a client that **cannot make a call** |
+| macOS x64 | Code, presets and packaging exist. Never built | **nothing** — the build fails on the Intel runner |
 
-Two gaps remain open: screen capture on a Wayland session, and audio latency
-measured on a real network rather than on loopback. Everything not yet verified
-is listed in section 4 of [PLAN.md](PLAN.md).
+Windows is the one platform where a downloaded release works. The other three
+each have a named blocker, and [chapter 14](docs/14-release.md) says what each
+one is.
+
+Two gaps remain open in the product itself: screen capture on a Wayland session,
+and audio latency measured on a real network rather than on loopback. Everything
+not yet verified is listed in section 4 of [PLAN.md](PLAN.md).
 
 ## Documentation
 
@@ -73,4 +77,8 @@ order. The ones most people want first:
 A push to `master` cuts a release: the workflow works out the next version, tags
 it, and publishes. No artifact is ever built on a development machine — a binary
 published from a laptop is one nobody can reproduce afterwards.
-[Chapter 14](docs/14-release.md) is the procedure.
+
+A tag carries three files and a checksum list — the Windows `.msi` and `.zip` and
+the macOS arm64 `.dmg`. The Linux and macOS x64 jobs are switched off, so the run
+is green with two artifacts missing and nothing in its output says so.
+[Chapter 14](docs/14-release.md) is the procedure, and the reason for each.

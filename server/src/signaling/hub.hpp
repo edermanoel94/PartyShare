@@ -48,7 +48,12 @@ class MediaSignals {
   MediaSignals(MediaSignals&&) = delete;
   MediaSignals& operator=(MediaSignals&&) = delete;
 
-  virtual void on_participant_joined(const std::string& room_id, const models::User& user) = 0;
+  /// `room_name` is what people call the room and `user_label` is how the
+  /// participant should read in a log line. Both are resolved here and handed
+  /// over rather than looked up on the other side, because the implementation
+  /// runs on its own thread and may not touch the Hub's state to ask.
+  virtual void on_participant_joined(const std::string& room_id, const std::string& room_name,
+                                     const models::User& user, const std::string& user_label) = 0;
   virtual void on_participant_left(const std::string& room_id, const std::string& user_id) = 0;
 
   /// An `answer` or `ice_candidate` addressed to protocol::kSfuUserId, already
@@ -134,6 +139,15 @@ class Hub {
     ConnectionId id = 0;
     /// Set once the connection has authenticated.
     std::optional<models::User> user;
+    /// The account name behind `user`, remembered at login.
+    ///
+    /// Here rather than looked up per log line because the store may be a
+    /// database, and a log line that costs a query is a log line somebody
+    /// eventually deletes. It is also the half of a label that cannot change
+    /// while the connection is open: the display name is read from `user` each
+    /// time instead, because a participant may rename themselves on the way
+    /// into a room.
+    std::string username;
     std::optional<std::string> room_id;
     Clock::time_point last_seen;
     Clock::time_point last_ping;
@@ -179,6 +193,25 @@ class Hub {
   /// empty set, because there is nothing left to take away from it and the
   /// handlers that follow will refuse it on other grounds.
   [[nodiscard]] models::Restrictions restrictions_of(const std::string& user_id) const;
+
+  /// How `user_id` should read in a log line: their name and their account,
+  /// per `models::user_label`.
+  ///
+  /// Answers from the open connections first, which costs nothing and covers
+  /// every line about somebody who is here. The store is asked only for
+  /// somebody who is not, which is a real case and not a defensive one: the
+  /// line about a disconnect is written after the connection has been
+  /// forgotten. An identifier nothing answers to comes back as itself.
+  ///
+  /// Never call this from inside a DV_LOG_DEBUG or DV_LOG_TRACE. spdlog's
+  /// macros here expand straight to `logger->log(...)` with no level guard, so
+  /// the arguments are evaluated even when the level is off, and a store
+  /// lookup per suppressed line is a cost nobody can see to remove.
+  [[nodiscard]] std::string user_label(const std::string& user_id) const;
+
+  /// What to call `room_id` in a log line: its name, or the identifier itself
+  /// when it has none or when no room answers to it. See `models::room_label`.
+  [[nodiscard]] std::string room_label(const std::string& room_id) const;
 
   /// Writes one entry, and complains loudly if it cannot.
   ///

@@ -30,8 +30,9 @@ namespace proto = dv::protocol;
 /// the room.
 class RecordingMediaSignals final : public dv::server::MediaSignals {
  public:
-  void on_participant_joined(const std::string& /*room_id*/,
-                             const dv::models::User& /*user*/) override {}
+  void on_participant_joined(const std::string& /*room_id*/, const std::string& /*room_name*/,
+                             const dv::models::User& /*user*/,
+                             const std::string& /*user_label*/) override {}
 
   void on_participant_left(const std::string& /*room_id*/, const std::string& user_id) override {
     left.push_back(user_id);

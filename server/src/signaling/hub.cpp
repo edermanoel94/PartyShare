@@ -63,6 +63,39 @@ models::Restrictions Hub::restrictions_of(const std::string& user_id) const {
   return account.has_value() ? account->user.restrictions : models::Restrictions{};
 }
 
+std::string Hub::user_label(const std::string& user_id) const {
+  // The open connections first. It costs a hash lookup and covers every line
+  // written about somebody who is here, which is nearly all of them.
+  if (const auto mapped = user_to_connection_.find(user_id); mapped != user_to_connection_.end()) {
+    if (const auto connection = connections_.find(mapped->second);
+        connection != connections_.end()) {
+      // The identity is bound to a name and then tested through that name,
+      // rather than reached through the iterator twice. The two spellings mean
+      // the same thing, but clang-tidy's unchecked-optional-access cannot see
+      // that two dereferences of one iterator are one object, so it reads the
+      // second as unguarded and the build treats that as an error.
+      const std::optional<models::User>& identity = connection->second.user;
+      if (identity.has_value()) {
+        return models::user_label(user_id, identity->display_name, connection->second.username);
+      }
+    }
+  }
+  // Then the store, for somebody who is not. Not a defensive branch: the line
+  // about an account deleted from under a session is written once the identity
+  // on the connection has already been taken away.
+  if (const auto account = users_->find_by_id(user_id)) {
+    return models::user_label(user_id, account->user.display_name, account->username);
+  }
+  // Nothing left to ask. The identifier is not a name, but it is what the
+  // caller meant, and a line naming nobody is worse than one carrying a code.
+  return user_id;
+}
+
+std::string Hub::room_label(const std::string& room_id) const {
+  const models::Room* room = rooms_.find(room_id);
+  return room != nullptr ? models::room_label(room->id, room->name) : room_id;
+}
+
 void Hub::record(const models::User& actor, std::string action, std::string target_id,
                  std::string room_id, std::string detail) {
   models::AuditEntry entry;
@@ -82,11 +115,16 @@ void Hub::record(const models::User& actor, std::string action, std::string targ
   // Copied before the move, because the failure message below needs it and the
   // entry is gone by then.
   const std::string action_name = entry.action;
+  // Built from the username the entry already resolved, so this costs no
+  // second lookup, and it falls back the same way: an actor whose account has
+  // just been deleted reads as the display name alone.
+  const std::string actor_label =
+      models::user_label(actor.id, actor.display_name, entry.actor_username);
   if (auto failure = audit_->append(std::move(entry))) {
     // Error level and not warning: an administrative action that happened and
     // was not recorded is the exact hole an audit log exists to close, and
     // whoever reads the logs has to see it.
-    DV_LOG_ERROR("Audit entry for '{}' by {} was not written: {}", action_name, actor.id,
+    DV_LOG_ERROR("Audit entry for '{}' by {} was not written: {}", action_name, actor_label,
                  failure->message);
   }
 }
@@ -208,7 +246,8 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
       state->user->role = role;
       if (!is_allowed(role, type)) {
         DV_LOG_WARN("Connection {} ({}) attempted '{}' without administrator rights", connection,
-                    user_id, protocol::type_name(type));
+                    models::user_label(user_id, state->user->display_name, state->username),
+                    protocol::type_name(type));
         reply_error(out, connection,
                     Error{.code = "forbidden", .message = "this action requires an administrator"});
         return out;
@@ -331,13 +370,19 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
     if (Connection* stale = find_connection(*previous)) {
       stale->user.reset();
       stale->room_id.reset();
+      stale->username.clear();
     }
   }
 
   connection.user = value.user;
+  // What was typed, which is what the account is called: both stores match a
+  // username exactly, so a login that got this far got it letter for letter.
+  connection.username = message.username;
   user_to_connection_[value.user.id] = connection.id;
 
-  DV_LOG_INFO("User {} authenticated on connection {}", value.user.id, connection.id);
+  DV_LOG_INFO("User {} authenticated on connection {}",
+              models::user_label(value.user.id, value.user.display_name, message.username),
+              connection.id);
   out.push_back(
       Outgoing{.connection = connection.id,
                .message = protocol::Authenticated{.user = value.user,
@@ -428,7 +473,11 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   // administrator had to ask for; creating a room is now something every
   // participant does, and the log is for administrative actions only. See
   // NothingAParticipantDoesReachesTheLog.
-  DV_LOG_INFO("Room {} (\"{}\") created by {}", room_id, room_name, user->id);
+  // Both the name and the identifier, and this is the one line that keeps the
+  // identifier on purpose: it is what the creator has to pass to whoever they
+  // want in the room, so it is the fact an operator is here to read.
+  DV_LOG_INFO("Room {} (\"{}\") created by {}", room_id, room_name,
+              models::user_label(user->id, user->display_name, connection.username));
   out.push_back(
       Outgoing{.connection = connection.id,
                .message = protocol::RoomCreated{.room_id = room_id, .room_name = room_name}});
@@ -529,12 +578,18 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
   // first screen they see. A count that only moved when a room appeared or was
   // closed showed nought for a room somebody was sitting in.
   broadcast_room_list(out);
-  DV_LOG_INFO("User {} joined room {} ({} participants)", user.id, message.room_id, room->size());
+  // Resolved once. The line below and the SFU want the same two names, and the
+  // SFU keeps its copies for the life of the session rather than asking again:
+  // it runs on its own thread and nothing here would be safe for it to read.
+  const std::string joined_label =
+      models::user_label(user.id, user.display_name, connection.username);
+  const std::string joined_room = models::room_label(room->id, room->name);
+  DV_LOG_INFO("User {} joined room {} ({} participants)", joined_label, joined_room, room->size());
 
   // Last, so that the participant already knows who is in the room by the time
   // the SFU starts negotiating media with them.
   if (media_signals_ != nullptr) {
-    media_signals_->on_participant_joined(message.room_id, user);
+    media_signals_->on_participant_joined(message.room_id, joined_room, user, joined_label);
   }
 }
 
@@ -566,7 +621,7 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
   broadcast(out, message.room_id,
             protocol::UserLeft{.room_id = message.room_id, .user_id = message.user_id});
   broadcast_room_list(out);
-  DV_LOG_INFO("User {} left room {}", message.user_id, message.room_id);
+  DV_LOG_INFO("User {} left room {}", user_label(message.user_id), room_label(message.room_id));
 
   if (media_signals_ != nullptr) {
     media_signals_->on_participant_left(message.room_id, message.user_id);
@@ -682,12 +737,12 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
   }
 
   if (sharing) {
-    DV_LOG_INFO("User {} started sharing in room {}", user_id, room_id);
+    DV_LOG_INFO("User {} started sharing in room {}", user_label(user_id), room_label(room_id));
     broadcast(out, room_id,
               protocol::ScreenShareStarted{
                   .room_id = room_id, .user_id = user_id, .has_audio = with_audio});
   } else {
-    DV_LOG_INFO("User {} stopped sharing in room {}", user_id, room_id);
+    DV_LOG_INFO("User {} stopped sharing in room {}", user_label(user_id), room_label(room_id));
     broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});
   }
 }
@@ -764,8 +819,9 @@ void Hub::handle_chat(std::vector<Outgoing>& out, Connection& connection,
   // is worse than one the sender was told about.
   auto appended = chat_->append(std::move(written));
   if (!appended) {
-    DV_LOG_ERROR("A message from {} in room {} was not stored: {}", user->id, room_id,
-                 appended.error().message);
+    DV_LOG_ERROR("A message from {} in room {} was not stored: {}",
+                 models::user_label(user->id, user->display_name, connection.username),
+                 room_label(room_id), appended.error().message);
     reply_error(out, connection.id, appended.error());
     return;
   }
@@ -777,8 +833,13 @@ void Hub::handle_chat(std::vector<Outgoing>& out, Connection& connection,
   // The size and not the text. What people say to each other has no business
   // in an operator's log file, and a message is the one field of this protocol
   // that is written by a person for other people rather than for the server.
-  DV_LOG_DEBUG("Message {} from {} in room {}, {} bytes", stored.id, stored.user_id, room_id,
-               stored.text.size());
+  // Assembled from what is already in hand and never through `user_label`,
+  // which would reach the store. spdlog's macros here carry no level guard, so
+  // the arguments of a debug line are evaluated even when debug is off, and
+  // this one is written once per message somebody sends.
+  DV_LOG_DEBUG("Message {} from {} in room {}, {} bytes", stored.id,
+               models::user_label(stored.user_id, stored.display_name, connection.username),
+               room_label(room_id), stored.text.size());
   broadcast(out, room_id, protocol::ChatMessage{.message = stored});
 }
 
@@ -854,7 +915,11 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
     media_signals_->on_participant_left(*room_id, user_id);
   }
 
-  DV_LOG_INFO("Connection {} closed, user {} removed from room {}", connection, user_id, *room_id);
+  // From the copy of the connection taken before it was erased, because the
+  // identity behind it is no longer reachable through `user_label`.
+  DV_LOG_INFO("Connection {} closed, user {} removed from room {}", connection,
+              models::user_label(user_id, state.user->display_name, state.username),
+              room_label(*room_id));
   return out;
 }
 
@@ -909,7 +974,8 @@ void Hub::apply_restrictions_written_elsewhere(std::vector<Outgoing>& out) {
       continue;
     }
 
-    DV_LOG_INFO("Restrictions on {} were changed outside this server: {}", change.user_id,
+    DV_LOG_INFO("Restrictions on {} were changed outside this server: {}",
+                models::user_label(change.user_id, account->user.display_name, account->username),
                 models::describe(change.after));
 
     // No actor, and no audit entry written here. Whoever edited the account
@@ -938,7 +1004,10 @@ void Hub::apply_restrictions_written_elsewhere(std::vector<Outgoing>& out) {
   // database leave a room the same way and look identical to everybody's
   // client and to the SFU.
   for (const std::string& user_id : found.gone) {
-    DV_LOG_INFO("Account {} was removed outside this server, ending the session it held", user_id);
+    // Resolved before the session ends, while the connection still carries the
+    // identity: the account itself is already gone from the store.
+    const std::string label = user_label(user_id);
+    DV_LOG_INFO("Account {} was removed outside this server, ending the session it held", label);
     end_session_of(out, user_id, "the account was removed");
   }
 }
@@ -1010,7 +1079,9 @@ void Hub::handle_kick(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  DV_LOG_INFO("{} kicked {} from room {}", actor->id, message.user_id, message.room_id);
+  DV_LOG_INFO("{} kicked {} from room {}",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              user_label(message.user_id), room_label(message.room_id));
   record(*actor, "kick", message.user_id, message.room_id, message.reason);
   evict(out, message.room_id, message.user_id, message.reason);
 }
@@ -1157,7 +1228,9 @@ void Hub::handle_restrict_user(std::vector<Outgoing>& out, Connection& connectio
     detail += " reason=" + message.reason;
   }
 
-  DV_LOG_INFO("{} restricted {}: {}", actor->id, message.user_id, detail);
+  DV_LOG_INFO("{} restricted {}: {}",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              user_label(message.user_id), detail);
   record(*actor, "restrict_user", message.user_id, rooms_.room_of(message.user_id).value_or(""),
          detail);
 
@@ -1179,6 +1252,7 @@ void Hub::end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
     if (Connection* state = find_connection(*target)) {
       state->user.reset();
       state->room_id.reset();
+      state->username.clear();
     }
     user_to_connection_.erase(user_id);
   }
@@ -1250,7 +1324,8 @@ void Hub::enforce(std::vector<Outgoing>& out, const models::User& actor, const m
       // already on everybody's screen there, which is the one thing the
       // administrator was reaching for the control to stop.
       if (const auto failure = rooms_.stop_screen_share(*room_id, user_id); !failure) {
-        DV_LOG_INFO("{} stopped the share of {} in room {}", actor.id, user_id, *room_id);
+        DV_LOG_INFO("{} stopped the share of {} in room {}", user_label(actor.id),
+                    user_label(user_id), room_label(*room_id));
         broadcast(out, *room_id,
                   protocol::ScreenShareStopped{.room_id = *room_id, .user_id = user_id});
       }
@@ -1342,7 +1417,8 @@ void Hub::handle_change_password(std::vector<Outgoing>& out, Connection& connect
   // account is still resolvable to a username. What it does not record is
   // either password, in any form - the action and who took it is the whole of
   // what an audit log has any business knowing about this.
-  DV_LOG_INFO("{} changed their own password", account.id);
+  DV_LOG_INFO("{} changed their own password",
+              models::user_label(account.id, account.display_name, connection.username));
   record(account, "change_password", account.id, {}, "password");
 
   // Out of any room first. What follows stops this connection from being
@@ -1387,7 +1463,9 @@ void Hub::handle_create_user(std::vector<Outgoing>& out, Connection& connection,
   }
 
   const models::User& user = created.value();
-  DV_LOG_INFO("{} created account {} with role {}", actor->id, message.username,
+  DV_LOG_INFO("{} created account {} with role {}",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              models::user_label(user.id, message.display_name, message.username),
               models::to_string(message.role));
   record(*actor, "create_user", user.id, {},
          "username=" + message.username + " role=" + std::string(models::to_string(message.role)));
@@ -1496,7 +1574,9 @@ void Hub::handle_delete_user(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  DV_LOG_INFO("{} deleted account {}", actor->id, account->username);
+  DV_LOG_INFO("{} deleted account {}",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              models::user_label(message.user_id, account->user.display_name, account->username));
   record(*actor, "delete_user", message.user_id, {}, "username=" + account->username);
   out.push_back(Outgoing{.connection = connection.id, .message = user_list()});
 }
@@ -1512,7 +1592,11 @@ void Hub::handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
   // that each of them gets told and the SFU tears each connection down. Read
   // the identifiers out first: evict mutates the list being walked.
   std::vector<std::string> occupants;
+  // Read while there is still a room to ask. `remove_room` below takes it away,
+  // and the log line comes after that.
+  std::string closed_label = message.room_id;
   if (const models::Room* room = rooms_.find(message.room_id); room != nullptr) {
+    closed_label = models::room_label(room->id, room->name);
     occupants.reserve(room->participants.size());
     for (const models::Participant& participant : room->participants) {
       occupants.push_back(participant.user.id);
@@ -1532,7 +1616,9 @@ void Hub::handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
     }
   }
 
-  DV_LOG_INFO("{} closed room {}", actor->id, message.room_id);
+  DV_LOG_INFO("{} closed room {}",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              closed_label);
   record(*actor, "delete_room", message.room_id, message.room_id,
          "participants=" + std::to_string(occupants.size()));
   broadcast_room_list(out);

@@ -212,4 +212,55 @@ TEST(RoomName, RejectsControlCharacters) {
   EXPECT_FALSE(dv::models::is_valid_room_name(std::string("Retro\0de sexta", 14)));
 }
 
+TEST(UserLabel, PutsTheAccountBehindTheName) {
+  // The whole point of the pair. The display name is what an operator
+  // recognises and it is not unique; the username is unique and is what they
+  // type to find the account again.
+  EXPECT_EQ(dv::models::user_label("u_7f3a", "Ana", "ana.silva"), "Ana (ana.silva)");
+}
+
+TEST(UserLabel, TellsTwoPeopleOfTheSameNameApart) {
+  // The case the username is carried for. Two accounts may call themselves
+  // "Ana", and a log line naming one of them has to say which.
+  EXPECT_NE(dv::models::user_label("u_1", "Ana", "ana"),
+            dv::models::user_label("u_2", "Ana", "ana.silva"));
+}
+
+TEST(UserLabel, SaysOneNameOnceWhenBothAreTheSame) {
+  // Not a nicety: an account created without a display name is given its
+  // username as one, which makes this the common case rather than the odd one.
+  // "ana (ana)" says nothing twice.
+  EXPECT_EQ(dv::models::user_label("u_7f3a", "ana", "ana"), "ana");
+}
+
+TEST(UserLabel, FallsBackToTheUsernameWithoutADisplayName) {
+  // A row that came back from the store with the field empty. The username is
+  // a name a person can read, so there is no reason to reach past it.
+  EXPECT_EQ(dv::models::user_label("u_7f3a", "", "ana"), "ana");
+}
+
+TEST(UserLabel, FallsBackToTheIdentifierWhenThereIsNothingElse) {
+  // What a caller holding an identifier no account answers to gets: somebody
+  // deleted while they were still connected. The identifier is not a name, but
+  // a line naming nobody at all is worse.
+  EXPECT_EQ(dv::models::user_label("u_7f3a", "", ""), "u_7f3a");
+}
+
+TEST(RoomLabel, PrefersTheNamePeopleCallIt) {
+  EXPECT_EQ(dv::models::room_label("8F42A1", "Daily"), "Daily");
+}
+
+TEST(RoomLabel, FallsBackToTheIdentifier) {
+  // Very nearly dead code, because create_room writes the identifier into the
+  // name of a room nobody named. It is reached by a room stored before that
+  // field existed, and by an identifier no room answers to any more.
+  EXPECT_EQ(dv::models::room_label("8F42A1", ""), "8F42A1");
+}
+
+TEST(RoomLabel, PrintsOneThingAndNotTwo) {
+  // Unlike a user label. A room name is unique, because create_room refuses
+  // one that is taken, so the name alone already says which room.
+  EXPECT_EQ(dv::models::room_label("8F42A1", "Daily").find("8F42A1"), std::string::npos);
+}
+
 }  // namespace

@@ -14,6 +14,21 @@ Role role_from_string(std::string_view name) noexcept {
   return name == "admin" ? Role::Admin : Role::User;
 }
 
+std::string user_label(const std::string& id, const std::string& display_name,
+                       const std::string& username) {
+  // The username stands in for a missing display name rather than the two
+  // being joined blindly: an account whose display name did not survive a
+  // store round trip should read as its username, not as empty parentheses.
+  const std::string& name = display_name.empty() ? username : display_name;
+  if (name.empty()) {
+    return id;
+  }
+  if (username.empty() || name == username) {
+    return name;
+  }
+  return name + " (" + username + ")";
+}
+
 std::string describe(const Restrictions& restrictions) {
   // The wire names, in the order the struct declares them, so that two
   // accounts carrying the same restrictions produce the same line and an audit

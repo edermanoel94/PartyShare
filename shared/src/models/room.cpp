@@ -82,6 +82,10 @@ bool is_valid_room_name(const std::string& name) {
       trimmed, [](unsigned char character) { return character < 0x20 || character == 0x7F; });
 }
 
+std::string room_label(const std::string& id, const std::string& name) {
+  return name.empty() ? id : name;
+}
+
 std::string room_name_key(const std::string& name) {
   std::string key = trim_room_name(name);
   for (char& character : key) {

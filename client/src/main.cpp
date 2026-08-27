@@ -315,7 +315,7 @@ int run(int argc, char* argv[]) {
   if (!dv::client::media::media_is_available()) {
     DV_LOG_WARN(
         "This build has no media layer, so calls will have no audio. "
-        "Rebuild with -DDV_BUILD_CLIENT_MEDIA=ON, see docs/build.md.");
+        "Rebuild with -DDV_BUILD_CLIENT_MEDIA=ON, see docs/02-build.md.");
   }
 
   // Declared before the window and destroyed after it: the window installs

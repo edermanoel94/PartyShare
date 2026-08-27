@@ -6,7 +6,7 @@
 // connections, real ICE, DTLS and SRTP. Only the network is local.
 //
 // Built only when DV_BUILD_CLIENT_MEDIA is on, because it needs the libwebrtc
-// tree from docs/webrtc-toolchain.md.
+// tree from docs/07-webrtc-toolchain.md.
 //
 // Set DV_AUDIO_NULL_DEVICE=1 to run them on a machine with no sound card. The
 // negotiation cases still pass. The cases that assert something *about*
@@ -724,7 +724,7 @@ TEST_F(MediaEndToEndTest, TheSoundOfASharedScreenReachesTheOtherParticipant) {
   // the same share carrying silence and then carrying sound. Comparing against
   // "no share at all" would also be comparing mono against stereo.
   //
-  // See docs/audio-da-tela-compartilhada.md.
+  // See docs/09-screen-audio.md.
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());
   const std::string room = ana.create_room();

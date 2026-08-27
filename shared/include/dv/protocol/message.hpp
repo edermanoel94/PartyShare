@@ -20,7 +20,7 @@
 ///
 /// The protocol is deliberately independent of this C++ representation, so the
 /// server can be reimplemented in another language later (section 14 of
-/// SPEC.md). docs/protocol.md is the normative description.
+/// SPEC.md). docs/06-protocol.md is the normative description.
 namespace dv::protocol {
 
 /// Reserved participant identifier for the server's own media endpoint.
@@ -51,12 +51,12 @@ enum class MessageType : std::uint8_t {
   ScreenShareStopped,
   Mute,
   Unmute,
-  // An account looking after itself, section 4.8 of docs/protocol.md. Not
+  // An account looking after itself, section 4.8 of docs/06-protocol.md. Not
   // administration: the only account either of these can touch is the one that
   // sent the message.
   ChangePassword,
   PasswordChanged,
-  // The room's conversation, section 4.5 of docs/protocol.md.
+  // The room's conversation, section 4.5 of docs/06-protocol.md.
   ChatMessage,
   ListChat,
   ChatHistory,
@@ -230,7 +230,7 @@ struct ScreenShareStarted {
   /// audio track and arrives whether or not anybody was told. What it buys is
   /// the interface being able to say so - and, less obviously, being able to
   /// explain why the volume slider for that participant now controls two
-  /// things at once. See docs/audio-da-tela-compartilhada.md, section 6.
+  /// things at once. See docs/09-screen-audio.md, section 3.
   ///
   /// Absent from an older peer's message, and false is the right reading of
   /// that: a client that does not know about this cannot be sending it.

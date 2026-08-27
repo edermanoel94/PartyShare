@@ -2,7 +2,7 @@
 //
 // Linux and macOS can both do this - a PulseAudio or PipeWire monitor source
 // there, ScreenCaptureKit's audio output here - but neither is written yet, and
-// section 10 of docs/audio-da-tela-compartilhada.md says so out loud. Until
+// section 8 of docs/09-screen-audio.md says so out loud. Until
 // then this answers honestly rather than silently sharing nothing.
 //
 // The same shape as client/src/video/screen_capturer.cpp and
@@ -20,7 +20,7 @@ namespace {
 
 constexpr const char* kUnavailable =
     "capturing what an application is playing is only implemented on Windows. "
-    "See docs/audio-da-tela-compartilhada.md, section 10.";
+    "See docs/09-screen-audio.md, section 8.";
 
 }  // namespace
 

@@ -13,7 +13,7 @@ namespace {
 
 constexpr const char* kUnavailable =
     "this client was built without libwebrtc, so it cannot capture a screen. "
-    "See docs/webrtc-toolchain.md.";
+    "See docs/07-webrtc-toolchain.md.";
 
 }  // namespace
 

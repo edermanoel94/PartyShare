@@ -1,55 +1,280 @@
 # Install
 
-Getting PartyShare built and running, on one machine, in as few steps as possible.
-This page is the short path; [docs/build.md](docs/build.md) is the long one, with every option, every
-environment variable and the media layer.
+From an empty machine to two people in a room.
 
-The whole thing is two binaries:
+There are two machines in the normal case, and they need different things built:
 
-| Binary | What it is | Where it lands |
+| | Machine | What you build | Section |
+| --- | --- | --- | --- |
+| **A** | The server — Linux, headless, no Qt, no sound card | `partyshare-server` against MongoDB | [1](#1-the-server) |
+| **B** | Yours — Windows, Linux or macOS, with a desktop | `partyshare`, the client | [2](#2-the-client) |
+
+In a hurry, or testing alone, [section 3](#3-everything-on-one-machine) puts both
+on one machine in about five minutes.
+
+Nothing has to be installed system-wide to try any of it. Binaries land in
+`<build tree>/bin/`.
+
+**MongoDB is the standard for the server.** Without it the server keeps accounts,
+rooms, conversations and the audit log in memory and loses all four when it
+stops — fine for a five minute test, and not a deployment. A build without the
+option refuses to start when the database is turned on, rather than silently
+falling back to memory.
+
+---
+
+## 1. The server
+
+### 1.1 What it needs
+
+| Tool | Minimum | |
 | --- | --- | --- |
-| `partyshare-server` | Signaling server and SFU | `build/<preset>/bin/` |
-| `partyshare` | Desktop client, Qt 6 | `build/<preset>/bin/` |
+| CMake | 3.25 | |
+| Ninja | 1.11 | or use `-G "Unix Makefiles"` |
+| C++20 compiler | GCC 12, Clang 15, MSVC 2022 | |
+| libdatachannel, OpenSSL, mongo-cxx-driver | — | all three through vcpkg |
+| MongoDB | 7 | may live on this machine or another |
 
-Both come out of a single build. Nothing has to be installed system-wide to try it.
-
-## 1. Prerequisites
-
-| Tool | Minimum | Needed by |
-| --- | --- | --- |
-| CMake | 3.25 | everything |
-| Ninja | 1.11 | every preset except `linux-make` |
-| C++20 compiler | MSVC 2022, GCC 12, Clang 15 | everything |
-| Qt | 6.5 | the client only |
-| libdatachannel and OpenSSL | — | the server only, through vcpkg |
-
-spdlog, nlohmann/json and GoogleTest are resolved automatically: found if installed, downloaded if not.
-There is no step for them.
-
-### Linux
+No Qt, no graphics server, no sound card. spdlog, nlohmann/json and GoogleTest
+resolve themselves — found if installed, downloaded if not.
 
 ```sh
-# Arch
-sudo pacman -S --needed cmake ninja gcc git qt6-base openssl
-
 # Debian and Ubuntu
-sudo apt install cmake ninja-build g++ git qt6-base-dev libssl-dev
+sudo apt install build-essential cmake ninja-build git curl zip unzip tar pkg-config
+
+# Arch
+sudo pacman -S --needed base-devel cmake ninja git curl zip unzip
 ```
 
-libdatachannel is rarely packaged, so it comes from vcpkg like everywhere else:
+### 1.2 vcpkg, at the pinned commit
 
 ```sh
-./scripts/ci_vcpkg.sh      # checks out the pinned vcpkg into .vcpkg, prints the toolchain file
+./scripts/ci_vcpkg.sh
 ```
 
-### macOS
+That checks out vcpkg into `.vcpkg` at the commit `vcpkg.json` names, and prints
+the toolchain file. Use it rather than a vcpkg already on the machine: a ports
+tree newer than the pinned version database fails with
+`no version database entry for <package>`.
+
+### 1.3 MongoDB
+
+```sh
+docker run -d --restart=unless-stopped -p 27017:27017 \
+  -v partyshare-mongo:/data/db --name partyshare-mongo mongo:7
+```
+
+Or a managed instance, or a package — anything the server can reach. It holds one
+document per account, per persistent room, per chat message and per
+administrative action, none of which carries media, so it is not what sizes the
+machine.
+
+If it is not on this machine, the server needs latency rather than throughput: it
+holds its own lock while it talks to the database, which is why the timeout
+defaults to a deliberately short two seconds.
+
+### 1.4 Build
+
+```sh
+cmake -S . -B build/server \
+  -DDV_ENABLE_MONGO=ON -DVCPKG_MANIFEST_FEATURES=mongo \
+  -DDV_BUILD_CLIENT=OFF -DDV_BUILD_TESTS=OFF \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
+
+cmake --build build/server
+```
+
+Four flags, and each one earns its place:
+
+| Flag | Why |
+| --- | --- |
+| `-DDV_ENABLE_MONGO=ON` | Compiles the persistence layer |
+| `-DVCPKG_MANIFEST_FEATURES=mongo` | Brings `mongo-cxx-driver`. It is a vcpkg *feature*, so a build without it needs nothing installed |
+| `-DDV_BUILD_CLIENT=OFF` | What lets a machine with no Qt build this at all |
+| `-DDV_BUILD_TESTS=OFF` | Faster. Drop it if you want to run the suite here |
+
+**No preset is used, deliberately.** Every preset fixes its own `binaryDir`, so
+`--preset linux-release` with the client turned off would overwrite the full tree
+rather than sit beside it.
+
+The first configure builds the vcpkg dependencies from source and takes minutes;
+later ones reuse them. Rebuilding after a code change is
+`cmake --build build/server`, and the executable target is `dv_server` if you
+want to name it.
+
+The binary is `build/server/bin/partyshare-server`.
+
+### 1.5 The first administrator
+
+```sh
+./build/server/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 \
+  --create-admin=ana:choose-a-password
+```
+
+It creates that administrator — or promotes an existing account and resets its
+password — and then exits without listening. It is also the way back in when the
+only administrator password is lost.
+
+The password is visible in `ps` while the command runs, so change it from the
+client afterwards. So is a database URI carrying credentials, which is why
+`DV_DATABASE_URI` in the environment is the better place for one.
+
+`--create-admin` needs a database. Against a server with none it answers
+`--create-admin needs a database` rather than pretending.
+
+### 1.6 Start it
+
+```sh
+./build/server/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 \
+  --port=8080 \
+  --ice-port-range=50000-50100 \
+  --log-level=info
+```
+
+`--database-uri` turns the database on by itself — there is no second switch that
+has to agree with the first.
+
+Every option takes the `--key=value` form, with the value attached. A bare
+`--key` is **refused** rather than quietly ignored: a server is started by a
+script nobody is watching, and a typo that is silently dropped leaves it
+listening on a default nobody chose. `partyshare-server --help` lists them all,
+and [chapter 3](docs/03-configuration.md) is the complete reference.
+
+The ones that matter here:
+
+| Option | Default | |
+| --- | --- | --- |
+| `--port=PORT` | 8080 | |
+| `--bind-address=ADDRESS` | 0.0.0.0 | Must not be `127.0.0.1` if clients are on other machines |
+| `--ice-port-range=A-B` | — | **Read the next section before skipping this** |
+| `--max-participants=N` | 5 | |
+| `--database-uri=URI` | — | Turns persistence on |
+| `--log-level=LEVEL` | info | `debug` while you are setting this up |
+
+### 1.7 The firewall, and the one setting that is easy to miss
+
+Two holes, not one:
+
+```sh
+sudo ufw allow 8080/tcp          # signaling
+sudo ufw allow 50000:50100/udp   # ICE and media
+```
+
+On AWS, GCP or Azure the security group needs the same two entries; the host
+firewall alone does not open them.
+
+**`--ice-port-range` is what makes the second rule possible.** Without it the SFU
+asks the system for an ephemeral port on every connection — 32768 to 60999 on
+most Linux systems — and a firewall in front of it has nothing narrower to allow
+than that entire range.
+
+The symptom of getting this wrong is specific and misleading: the room, the
+participant list, the chat and every signaling message work perfectly, and nobody
+hears or sees anybody. It cost a real afternoon; entry 8 of
+[chapter 15](docs/15-postmortems.md).
+
+Size the range from the load, because the SFU binds one port per participant:
+`max-participants` times the number of rooms running at once. A hundred ports
+carries twenty full rooms. Both ends have to be given — half a range is refused
+at startup. And `1024-65535` is worth nothing: libdatachannel reads it as its own
+default and hands out an ephemeral port anyway.
+
+The server logs the range it ended up with on startup, or warns that the ports
+are ephemeral when none was set.
+
+### 1.8 Keeping it running
+
+```ini
+# /etc/systemd/system/partyshare.service
+[Unit]
+Description=PartyShare signaling server and SFU
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=partyshare
+WorkingDirectory=/opt/partyshare
+Environment=DV_DATABASE_ENABLED=1
+Environment=DV_DATABASE_URI=mongodb://127.0.0.1:27017
+Environment=DV_DATABASE_NAME=partyshare
+ExecStart=/opt/partyshare/bin/partyshare-server --port=8080 --ice-port-range=50000-50100
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now partyshare
+journalctl -u partyshare -f
+```
+
+The URI lives in `Environment=` rather than on the `ExecStart` line so that it
+does not appear in `ps` for every user on the machine. `DV_DATABASE_ENABLED=1` is
+needed alongside it: unlike `--database-uri`, naming a URI in the environment does
+not turn persistence on by itself.
+
+### 1.9 Check it is up
+
+```sh
+journalctl -u partyshare -n 40      # or the terminal it was started in
+ss -lntp | grep 8080
+```
+
+A healthy startup names the port, the ICE range and the database. If the database
+is unreachable the server **fails to start** and says so, rather than carrying on
+in memory.
+
+### 1.10 Without MongoDB, for a quick test only
+
+A development account list, plain text passwords and all:
+
+```json
+[
+  {"username": "ana", "password": "test-password", "display_name": "Ana", "role": "admin"},
+  {"username": "bruno", "password": "test-password", "display_name": "Bruno"}
+]
+```
+
+```sh
+./build/server/bin/partyshare-server --port=8080 --users-file=dev-users.json
+```
+
+`role` is optional, and anything other than `"admin"` reads as an ordinary user.
+Section 17 of [SPEC.md](SPEC.md) forbids this file in production and the server
+warns about it on every startup that reads one.
+
+---
+
+## 2. The client
+
+### 2.1 What it needs
+
+Everything from 1.1, plus **Qt 6.5 or newer**. MongoDB is not involved: the
+client never talks to a database.
+
+**Linux**
+
+```sh
+sudo apt install cmake ninja-build g++ git qt6-base-dev libssl-dev   # Debian, Ubuntu
+sudo pacman -S --needed cmake ninja gcc git qt6-base openssl         # Arch
+./scripts/ci_vcpkg.sh
+```
+
+**macOS**
 
 ```sh
 brew install cmake ninja qt
 ./scripts/ci_vcpkg.sh
 ```
 
-### Windows
+**Windows**
 
 ```powershell
 winget install -e --id Microsoft.VisualStudio.2022.BuildTools `
@@ -62,21 +287,33 @@ python -m aqt install-qt windows desktop 6.7.3 win64_msvc2019_64 -O C:\Qt
 bash scripts/ci_vcpkg.sh
 ```
 
-The `windows-*` presets name `cl` as the compiler, so configure, build and test all have to run from a
-Developer Command Prompt, or from a shell that has sourced `vcvars64.bat`:
+Qt comes from `aqtinstall` because the Qt installer wants an account.
+
+**Every `cmake` and `ctest` command on Windows has to run from a shell that has
+sourced `vcvars64.bat`**, because the `windows-*` presets name `cl` as the
+compiler:
 
 ```
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 ```
 
-## 2. Build
+Configuring from a shell that has not is worse than a clean failure. It dies on
+`The CXX compiler identification is unknown` and leaves behind a `CMakeCache.txt`
+with an **empty** `CMAKE_CXX_FLAGS`. Reconfiguring from the right shell does not
+repair it — the cache is reused, the `/EHsc` CMake normally injects never appears,
+and the next build dies on `warning C4530 ... treated as an error` coming out of
+`<chrono>`, in a file that has nothing wrong with it. **Delete the whole build
+directory**; `--fresh` from some other shell is not enough.
 
-Pick the preset for the platform. Everything else is identical.
+### 2.2 Build
+
+Presets do the work here, one per platform.
 
 **Linux**
 
 ```sh
-cmake --preset linux-release -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --preset linux-release \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build --preset linux-release
 ```
 
@@ -89,7 +326,7 @@ cmake --preset macos-arm64-release \
 cmake --build --preset macos-arm64-release
 ```
 
-**Windows**
+**Windows**, from the vcvars shell:
 
 ```
 cmake --preset windows-release ^
@@ -98,270 +335,205 @@ cmake --preset windows-release ^
 cmake --build --preset windows-release
 ```
 
-The first configure builds the vcpkg dependencies from source and takes minutes; later ones reuse them.
-Binaries land in `build/<preset>/bin/`.
+To build the client without the server — no libdatachannel, no OpenSSL — add
+`-DDV_BUILD_SERVER=OFF`. To build it without Qt at all, `-DDV_BUILD_CLIENT_UI=OFF`
+keeps the client core and drops the interface.
 
-Other presets: `linux-debug`, `linux-asan`, `linux-make` (Unix Makefiles, for machines without Ninja),
-`windows-debug`, `windows-asan`, `macos-arm64-debug`, `macos-arm64-asan`, `macos-x64-release`.
+### 2.3 Screen share and voice
 
-### Building only one half
+**The build above has no media layer.** The interface, the login, the rooms and
+the chat all work, and there is no call: `create_media_session` fails with
+`media_unavailable`.
 
-| Situation | Flag |
-| --- | --- |
-| No Qt installed | `-DDV_BUILD_CLIENT_UI=OFF` keeps the client core, drops the interface |
-| Server only | `-DDV_BUILD_CLIENT=OFF` |
-| Client only | `-DDV_BUILD_SERVER=OFF` |
-| Faster iteration | `-DDV_BUILD_TESTS=OFF` |
+Turning it on needs a libwebrtc tree, and where that comes from depends on the
+platform.
 
-#### Only the server
+**Windows** — `cmake/Findlibwebrtc.cmake` fetches a published tree by itself, so
+one flag is the whole change:
 
-Two ways, and which one is right depends on whether the machine has Qt on it at all.
-
-In a build tree that already exists, name the target. The executable target is `dv_server`;
-`partyshare-server` is only the name it is written under, so `--target partyshare-server` is not a thing:
-
-```sh
-cmake --build build/linux-release --target dv_server
+```
+cmake --preset windows-release ^
+  -DCMAKE_TOOLCHAIN_FILE=%CD%\.vcpkg\scripts\buildsystems\vcpkg.cmake ^
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.7.3/msvc2019_64 ^
+  -DDV_BUILD_CLIENT_MEDIA=ON
+cmake --build --preset windows-release
 ```
 
-That builds the shared library, the server library and the executable, and stops: no Qt, no client, no
-tests. It is the one to use while working on the server, because it is incremental against a tree that is
-already configured.
-
-On a machine with no Qt, or a CI runner that has no reason to install it, configure a tree that never
-mentions the client:
+**Linux and macOS** — build libwebrtc first. Set aside the time: the checkout is
+over 30 GB, the build takes tens of minutes, and linking wants 16 GB of memory.
 
 ```sh
-cmake -S . -B build/server-only \
-  -DDV_BUILD_CLIENT=OFF -DDV_BUILD_TESTS=OFF \
+scripts/build_webrtc.sh                      # once, into ~/.cache/partyshare/webrtc/dist
+
+cmake -S . -B build/media \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DDV_BUILD_CLIENT_MEDIA=ON \
+  -DDV_WEBRTC_ROOT=$HOME/.cache/partyshare/webrtc/dist \
   -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build/server-only
+cmake --build build/media
 ```
 
-Windows, from a shell that has sourced `vcvars64.bat`:
+Two things that cost time if they are learned the hard way:
 
-```
-cmake -S . -B build\server-only -G Ninja ^
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-  -DDV_BUILD_CLIENT=OFF -DDV_BUILD_TESTS=OFF ^
-  -DCMAKE_TOOLCHAIN_FILE=%CD%\.vcpkg\scripts\buildsystems\vcpkg.cmake
-cmake --build build\server-only
-```
+- **The media layer needs a release tree.** A Debug configuration does not link
+  against this libwebrtc.
+- **Point `DV_WEBRTC_ROOT` at the tree carrying the `DV_EXTERNAL_SSL` marker.** A
+  tree with BoringSSL bundled cannot be linked with libdatachannel, and getting it
+  wrong produces a wall of `LNK2005` that reads like an unsolvable OpenSSL
+  conflict. `cmake/Findlibwebrtc.cmake` documents which is which, and
+  [chapter 7](docs/07-webrtc-toolchain.md) is the whole story.
 
-The presets are not used here on purpose: each one fixes its own `binaryDir`, so `--preset windows-release`
-with the client turned off would overwrite the full tree rather than sit beside it.
+Why that separate build has to exist at all is section 5 of
+[chapter 7](docs/07-webrtc-toolchain.md).
 
-Either way the binary lands in `<build tree>/bin/partyshare-server`, and section 3 runs it from there.
-
-## 3. Run the server
-
-The server needs accounts before anyone can log in. For a first run, a development account list is enough.
-Write `dev-users.json`:
-
-```json
-[
-  {"username": "ana", "password": "test-password", "display_name": "Ana", "role": "admin"},
-  {"username": "bruno", "password": "test-password", "display_name": "Bruno"}
-]
-```
-
-Then start it:
-
-```sh
-./build/linux-release/bin/partyshare-server \
-  --port=8080 --log-level=debug --users-file=dev-users.json
-```
-
-On Windows: `build\windows-release\bin\partyshare-server.exe --port=8080 --users-file=dev-users.json`.
-
-`role` is optional and anything other than `"admin"` reads as an ordinary user. That file keeps passwords in
-plain text and exists only so the MVP has users: the server warns about it at every startup, and section 17
-of [SPEC.md](SPEC.md) forbids it in production.
-
-Every option takes the `--key=value` form, with the value attached; a bare `--key` is refused rather than
-quietly ignored. `partyshare-server --help` lists all of them. The ones that matter here:
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| `--port=PORT` | 8080 | Port to listen on |
-| `--bind-address=ADDRESS` | 0.0.0.0 | Address to listen on |
-| `--max-participants=N` | 5 | Participants per room |
-| `--ice-port-range=A-B` | — | UDP range the SFU binds media in, one port per participant. Unset, the system picks an ephemeral port and the firewall has to allow the whole ephemeral range. See [requirements.md](docs/requirements.md) |
-| `--users-file=PATH` | — | Development account list |
-| `--config=PATH` | — | Configuration file, read before anything else |
-| `--log-level=LEVEL` | info | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `off` |
-
-### With MongoDB, optional
-
-Persistence for accounts, roles, rooms and the audit log. Off by default; without it the server keeps all
-four in memory and behaves as it did before persistence existed.
-
-It needs both a CMake option and the vcpkg feature that brings the driver, so it is a separate build tree:
-
-```sh
-cmake -S . -B build/mongo -DDV_ENABLE_MONGO=ON -DVCPKG_MANIFEST_FEATURES=mongo \
-  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build/mongo
-```
-
-Then a database, an administrator, and the server:
-
-```sh
-docker run -d -p 27017:27017 --name partyshare-mongo mongo:7
-
-./build/mongo/bin/partyshare-server \
-  --database-uri=mongodb://127.0.0.1:27017 --create-admin=ana:choose-a-password
-
-./build/mongo/bin/partyshare-server \
-  --database-uri=mongodb://127.0.0.1:27017 --port=8080
-```
-
-`--database-uri` turns the database on by itself, so there is no second switch that has to agree with the
-first. `--create-admin` creates that administrator, or promotes an existing account and resets its password,
-and then exits; it is also the way back in when the only administrator password is lost. The password is
-visible in `ps` while it runs, so change it from the client afterwards.
-
-A build without `-DDV_ENABLE_MONGO` refuses to start when the database is on, rather than falling back to
-memory: a server that was told to persist and quietly did not is one whose accounts vanish at the next restart.
-
-[tools/dbadmin](tools/dbadmin/README.md) does the same job from a terminal, without a running server.
-
-## 4. Run the client
-
-```sh
-./build/linux-release/bin/partyshare
-```
-
-It connects to `ws://127.0.0.1:8080` by default, which is where the server above is listening. To point it
-somewhere else:
+### 2.4 Point it at the server
 
 ```sh
 ./build/linux-release/bin/partyshare --signaling-url=ws://192.168.1.10:8080
 ```
 
-Log in with one of the accounts from `dev-users.json`, create a room, and share the code with whoever else
-is connecting to that same server. `partyshare --help` lists the rest: `--input-device`, `--output-device`,
-`--codec`, `--fps`, `--log-level`, `--log-file`.
+The default is `ws://127.0.0.1:8080`, which only serves a server on the same
+machine.
 
-### Writing the address down instead of typing it
-
-A flag is fine for one run and useless for a machine somebody else uses: an installed client is started
-from a shortcut, and a shortcut carries no arguments. So the client looks for a `config.ini` on its own,
-in two places, and neither has to exist:
+A flag is fine for one run and useless for a machine somebody else uses: an
+installed client starts from a shortcut, and a shortcut carries no arguments. So
+the client reads a `config.ini` it is not told about, in two places, and the
+second wins:
 
 | Order | Windows | Linux | macOS |
 | --- | --- | --- | --- |
-| 1. The machine's | Beside `partyshare.exe` | Beside the binary | Beside the binary |
+| 1. The machine's | Beside `partyshare.exe` | Beside the binary | Inside the `.app` |
 | 2. This user's | `%LOCALAPPDATA%\partyshare\` | `$XDG_CONFIG_HOME/partyshare/` | `~/Library/Application Support/partyshare/` |
 
-The second wins over the first. That is the split that matters: whoever installs a machine writes the first
-one and it answers for every account on it, and a person overrides it in the second without being asked for
-an administrator password.
-
-One line is the whole file:
+Neither has to be created by hand — the installer writes the first and the client
+writes the second on its first run, both fully commented and entirely inert. One
+uncommented line is the whole edit:
 
 ```ini
 [network]
 signaling_url = ws://192.168.1.10:8080
 ```
 
-Neither file has to be created by hand.
-The installer drops a fully commented `config.ini` beside the executable, and the client writes a second copy of the same file into this user's directory the first time it runs.
-Both are inert as they ship — every line is commented out — so uncommenting one line is the whole edit.
+Edit the second one where there is a choice: the first belongs to the installer
+and is replaced on the next upgrade, taking the address of your server with it.
 
-Edit the second one where there is a choice.
-The first belongs to the installer and is replaced on the next upgrade, which would take the address of the server with it; the second is never touched by an installer, and on macOS the first one lives inside the signed `.app` where editing it breaks the signature.
-It is also where the client saves what you pick in **Settings**: the microphone, the output device, the screen resolution and frame rate, and the two ends of the bitrate range are written into this user's `config.ini` as you choose them, so the choice is still there next time.
-The monitor is the one thing on that screen that is not saved, because it is which screen to share next rather than a setting.
+The client prints which of those files it read and which it did not find on every
+startup, at `info`. That log line is the answer to "I put the address in and it
+still connects to localhost", which is almost always a file written one directory
+away from the one being read.
 
-**Resolution** and **Frame rate** are `video.width`, `video.height` and `video.fps`, and the dialog offers 720p and 1080p at 30 or 60 fps.
-Both take effect at once, including mid-call: a share that is running restarts on the same monitor, which costs a stutter and no renegotiation.
-30 fps is right for a document or an editor; 60 is for what 30 makes unwatchable, which is scrolling, a terminal redrawing, anything animated.
-The resolution is a ceiling and not the size sent — a monitor is fitted inside it with its shape kept, so 1080p on a 3440x1440 ultrawide sends 1920x802 and never a stretched 1920x1080, and a monitor smaller than the box is sent untouched rather than upscaled.
+Every other setting — resolution, frame rate, bitrate, devices, shared screen
+sound — is in [chapter 3](docs/03-configuration.md), and most of them are in the
+Settings dialog, which writes them back into this user's file.
 
-Raising either asks more of the encoder, and 1080p at 60 asks a lot: on an NVIDIA card it is encoded by the card and costs almost no processor, and without one it is encoded in software and costs a great deal.
-Which one is happening is in the log, and [docs/build.md](docs/build.md) explains how to read it.
+### 2.5 Log in
 
-The dialog also says something when the maximum bitrate below is lower than what the choice is worth — 1080p at 60 is worth around four times what 720p at 30 is.
-It says it rather than doing it: a ceiling you set to fit your link is not one the client should raise behind your back.
-The configuration is free to name a size or a rate the dialog does not offer, `width = 2560` is perfectly valid, and the dialog then shows that as a row of its own instead of quietly rounding you down to 720p.
+Use one of the accounts created in 1.5, create a room, and give the code to
+whoever else is connecting to that same server. The client has no `--username`
+flag: logging in happens on the login screen.
 
-The minimum bitrate the dialog offers stops at `video.floor_bitrate_kbps`, which defaults to 300 kbps.
-The floor is how far congestion control may squeeze the picture when the link cannot carry the minimum, and a configuration whose floor sits above its minimum is one the client refuses to start on — so the dialog will not let you save one.
-Lower both together if you need to go under 300.
+`partyshare --help` lists the rest: `--input-device`, `--output-device`,
+`--codec`, `--fps`, `--log-level`, `--log-file`.
 
-Sections and keys are the same names the JSON form uses, so nothing has to be learned twice. Comments start
-with `;` or `#`. A key the client does not know is a startup error naming the line, rather than a line that
-quietly does nothing:
+### 2.6 Two clients on one machine
 
-```text
-configuration error [invalid_ini]: line 2: no such setting as [network] signalling_url
+Nothing stops it — start the binary twice and log in as different accounts. It is
+the quickest way to see a room work without a second computer.
+
+**Give each one its own profile**, or the two fight over one `config.ini`. The
+Settings dialog always writes to this user's file and ignores `--config`, so the
+separation has to be in the environment. On Windows the client reads
+`LOCALAPPDATA`:
+
+```powershell
+$env:LOCALAPPDATA = "$env:TEMP\partyshare-ana"
+Start-Process .\build\windows-release\bin\partyshare.exe
+
+$env:LOCALAPPDATA = "$env:TEMP\partyshare-bruno"
+Start-Process .\build\windows-release\bin\partyshare.exe
 ```
 
-The client prints which of these files it read and which it did not find, every startup, at `info`. That
-log line is the answer to "I put the address in and it still connects to localhost", which is almost always
-a file written one directory away from the one being read.
+Each then gets its own `config.ini`, its own log and its own crash folder. On
+Linux and macOS the same trick uses `XDG_CONFIG_HOME` and `HOME`.
 
-Configuration precedence is: built-in defaults, the machine's `config.ini`, this user's `config.ini`, then
-`DV_`-prefixed environment variables, then the command line. `--config=PATH` takes either `.ini` or `.json`
-and **replaces** both discovered files rather than joining them. The complete list of variables is in
-`shared/src/config/config.cpp`.
+Windows also needs `C:\Qt\6.7.3\msvc2019_64\bin` on `PATH` for a client started
+outside the shell that built it — see 5.
 
-### Two clients on one machine
+---
 
-Nothing stops it: start the binary twice and log in as `ana` in one and `bruno` in the other. That is the
-quickest way to see a room work without a second computer.
+## 3. Everything on one machine
 
-### Screen share and voice
-
-The client builds without libwebrtc by default, and in that mode the interface, the login, the rooms and the
-signaling all work, but there is no call: `create_media_session` fails with `media_unavailable`.
-
-Media needs the libwebrtc tree that `scripts/build_webrtc.sh` produces, and then a build that points at it:
+The five minute version, with persistence, for trying it out:
 
 ```sh
-cmake -S . -B build/media \
-  -DDV_BUILD_CLIENT_MEDIA=ON \
-  -DDV_WEBRTC_ROOT=$HOME/.cache/partyshare/webrtc/dist
-cmake --build build/media
+./scripts/ci_vcpkg.sh
+docker run -d -p 27017:27017 --name partyshare-mongo mongo:7
+
+cmake --preset linux-release \
+  -DDV_ENABLE_MONGO=ON -DVCPKG_MANIFEST_FEATURES=mongo \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/.vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build --preset linux-release
+
+./build/linux-release/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 --create-admin=ana:test-password
+./build/linux-release/bin/partyshare-server \
+  --database-uri=mongodb://127.0.0.1:27017 --port=8080 &
+
+./build/linux-release/bin/partyshare
 ```
 
-Why that separate build exists is section 5 of [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md).
+One tree, both binaries, and the preset is fine here because the client is being
+built too. No `--ice-port-range` is needed: there is no firewall between a machine
+and itself.
 
-## 5. Check it works
+Without Docker, swap the database for `--users-file=dev-users.json`, as in 1.10.
+
+---
+
+## 4. Check it works
 
 ```sh
 ctest --preset linux-release                            # everything
 ctest --test-dir build/linux-release -L unit            # unit only
 ctest --test-dir build/linux-release -L integration     # integration only
+ctest --test-dir build/media -L media                   # needs the media layer
 ```
 
-The integration tests start a real server on an ephemeral port and connect real WebSocket clients, so a
-passing suite means the server half is genuinely working.
+The integration tests start a real server on an ephemeral port and connect real
+WebSocket clients, so a passing suite means the server half is genuinely working.
 
-The `mongo` labelled tests skip themselves unless `DV_TEST_MONGO_URI` is set, so a machine with no database
-still runs the whole suite:
+The `mongo` labelled tests skip themselves unless `DV_TEST_MONGO_URI` is set, so a
+machine with no database still runs the whole suite:
 
 ```sh
-DV_TEST_MONGO_URI=mongodb://127.0.0.1:27017 ctest --test-dir build/mongo -L mongo
+DV_TEST_MONGO_URI=mongodb://127.0.0.1:27017 ctest --test-dir build/server -L mongo
 ```
 
-They leave behind databases named `partyshare_test_*`, one per test and per run, which are safe to drop.
+They leave behind databases named `partyshare_test_*`, one per test and per run,
+which are safe to drop.
 
-## 6. When it does not work
+---
+
+## 5. When it does not work
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `unable to find a build program corresponding to "Ninja"` | Ninja is not on the path. Install it, or use `--preset linux-make`. |
-| `Could NOT find Qt6` | Qt is not where CMake looks. Pass `-DCMAKE_PREFIX_PATH=<qt>`, or build without it: `-DDV_BUILD_CLIENT_UI=OFF`. |
-| libdatachannel or OpenSSL not found | The vcpkg toolchain file was not passed to the configure step. Run `./scripts/ci_vcpkg.sh` and add `-DCMAKE_TOOLCHAIN_FILE=...`. |
-| `no version database entry for <package>` | A vcpkg other than the pinned one. `scripts/ci_vcpkg.sh` checks out the commit `vcpkg.json` names; use that tree. |
-| `Qt6Core.dll was not found` on Windows | The build tree is not self-contained: vcpkg copies its own libraries next to the binaries, Qt is not among them. Keep `C:\Qt\6.7.3\msvc2019_64\bin` on `PATH`, or work from an install tree, below. |
-| `cl is not recognized` on Windows | The shell has not sourced `vcvars64.bat`. |
-| Nobody appears in the room | Both clients have to reach the *same* server. Check `--signaling-url` on each, and that `--bind-address` is not `127.0.0.1` when they are on different machines. |
-| Login refused | The account is not in `--users-file`, or the server was started without one. It warns at startup when the file is missing. |
-| `--create-admin needs a database` | That option only works against MongoDB, so pass `--database-uri=...` as well. |
-| The server exits on an unknown option | Deliberate. Options are `--key=value`; a detached `--key value` does not parse, and a typo that is silently ignored leaves a server listening on a default nobody chose. |
+| `unable to find a build program corresponding to "Ninja"` | Ninja is not on the path. Install it, or use `--preset linux-make` |
+| `Could NOT find Qt6` | Pass `-DCMAKE_PREFIX_PATH=<qt>`, or build without it: `-DDV_BUILD_CLIENT_UI=OFF` |
+| libdatachannel or OpenSSL not found | The vcpkg toolchain file was not passed to the **configure** step. Run `./scripts/ci_vcpkg.sh` and add `-DCMAKE_TOOLCHAIN_FILE=...` |
+| `no version database entry for <package>` | A vcpkg other than the pinned one. `scripts/ci_vcpkg.sh` checks out the commit `vcpkg.json` names; use that tree |
+| mongocxx not found, with `DV_ENABLE_MONGO=ON` | `-DVCPKG_MANIFEST_FEATURES=mongo` was left off. The driver is a vcpkg feature, not a plain dependency |
+| The server exits saying it was built without MongoDB | Deliberate. A server told to persist that quietly did not is one whose accounts vanish at the next restart. Rebuild with `-DDV_ENABLE_MONGO=ON` |
+| `--create-admin needs a database` | That option only works against MongoDB. Pass `--database-uri=...` as well |
+| `cl is not recognized` on Windows | The shell has not sourced `vcvars64.bat` |
+| `warning C4530 ... treated as an error` from `<chrono>` | A cache poisoned by a configure without vcvars. Delete the whole build directory, then reconfigure from the right shell |
+| `Qt6Core.dll was not found` on Windows | The build tree is not self-contained: vcpkg copies its own libraries next to the binaries, Qt is not among them. Keep `C:\Qt\6.7.3\msvc2019_64\bin` on `PATH`, or work from an install tree, below |
+| A wall of `LNK2005` when building with media | The wrong libwebrtc tree. Point `DV_WEBRTC_ROOT` at the one with the `DV_EXTERNAL_SSL` marker |
+| The room works and nobody hears anybody | `--ice-port-range` unset, or the UDP range not open in the firewall. Section 1.7 |
+| Nobody appears in the room | Both clients have to reach the *same* server. Check `--signaling-url` on each, and that `--bind-address` is not `127.0.0.1` |
+| Login refused | The account does not exist. Create it with `--create-admin`, from `tools/dbadmin`, or from the admin panel |
+| "This build was compiled without audio and video" | The client was built without `-DDV_BUILD_CLIENT_MEDIA=ON`. Section 2.3 |
+| The server exits on an unknown option | Deliberate. Options are `--key=value`; a detached `--key value` does not parse |
 
 An install tree, on Windows, carries everything the program loads:
 
@@ -370,17 +542,23 @@ cmake --install build\windows-release --prefix stage
 windeployqt --release stage\bin\partyshare.exe
 ```
 
-`windeployqt` brings the Qt half and the install rule brings the vcpkg half. Neither covers what the other does.
+`windeployqt` brings the Qt half and the install rule brings the vcpkg half.
+Neither covers what the other does.
 
-Crash reports are written to `$XDG_STATE_HOME/partyshare/crashes` on Linux, `~/Library/Logs` on macOS and
-`%LOCALAPPDATA%` on Windows, the ten most recent kept. Each carries the build, the signal and a backtrace.
+Crash reports are written to `$XDG_STATE_HOME/partyshare/crashes` on Linux,
+`~/Library/Logs` on macOS and `%LOCALAPPDATA%` on Windows, the ten most recent
+kept. Each carries the build, the signal and a backtrace.
+
+---
 
 ## Where to go next
 
-| Document | Subject |
+| | |
 | --- | --- |
-| [docs/build.md](docs/build.md) | Every option and environment variable, media debugging, virtual audio, network impairment |
-| [docs/requirements.md](docs/requirements.md) | The hardware the client and the server need |
-| [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md) | Building libwebrtc, and why it is a separate build |
-| [tools/dbadmin/README.md](tools/dbadmin/README.md) | Managing accounts and reading the audit log from a terminal |
-| [docs/release.md](docs/release.md) | Cutting a release, and what each platform produces |
+| [The book](docs/README.md) | Everything, in reading order |
+| [Configuration](docs/03-configuration.md) | Every setting, and which copy wins |
+| [Server and database](docs/04-server-and-database.md) | Ports, bandwidth, what the database holds |
+| [Administration](docs/05-administration.md) | Roles, restrictions and the audit log |
+| [tools/dbadmin](tools/dbadmin/README.md) | Managing accounts from a terminal, with no server running |
+| [Build](docs/02-build.md) | Every option and environment variable, media debugging |
+| [Requirements](docs/12-requirements.md) | The hardware each side needs |

@@ -111,7 +111,7 @@ Nothing here ever writes one — the server does that when somebody creates a ro
 Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user`, `restrict_user` and `delete_room`, with the detail naming what actually moved.
 A `delete_room` entry carries the room in both `target_id` and `room_id`, which is what the server writes for its own: an entry the two programs disagree on is one somebody has to know the origin of before they can read it.
 When the change succeeds and the entry cannot be written, the change stands and the status line says so in the colour of a warning rather than a success.
-Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/security-review.md](../../docs/security-review.md) already states for the server.
+Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/13-security.md](../../docs/13-security.md) already states for the server.
 
 The last administrator cannot be deleted or demoted, here as on the server.
 A system with nobody able to administer it is a system that needs the database edited by hand to be recovered, and this program is that hand.

@@ -623,7 +623,7 @@ Do not implement initially:
 * Mobile applications.
 
 Chat was on this list and is not any more.
-It is implemented, persisted with the rooms, and described in section 4.5 of docs/protocol.md.
+It is implemented, persisted with the rooms, and described in section 4.5 of docs/06-protocol.md.
 
 These may be added later.
 

@@ -2,7 +2,7 @@
 # Runs the M3 spike on this machine and prints a report.
 #
 # Purpose: confirm that libwebrtc links and works on a platform the development
-# environment cannot reach. See docs/webrtc-validation.md.
+# environment cannot reach. See docs/08-webrtc-validation.md.
 #
 # Usage:
 #   scripts/validate_webrtc.sh                 # prebuilt binaries, quick

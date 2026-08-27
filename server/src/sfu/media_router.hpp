@@ -69,7 +69,7 @@ class MediaRouter : public MediaSignals {
     /// Until the screen learned to carry sound it did not matter and was not
     /// applied at all: voice fits in 48 kbps and nobody was near the ceiling.
     /// Music is not voice, and a share is stereo. See
-    /// docs/audio-da-tela-compartilhada.md, section 5.
+    /// docs/09-screen-audio.md, section 5.
     int opus_max_bitrate_kbps = 96;
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.

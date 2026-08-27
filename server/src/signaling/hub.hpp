@@ -184,7 +184,7 @@ class Hub {
   ///
   /// The action goes ahead either way: refusing to remove a disruptive
   /// participant because the audit database is unreachable protects the record
-  /// at the expense of the thing being recorded. See docs/security-review.md.
+  /// at the expense of the thing being recorded. See docs/13-security.md.
   void record(const models::User& actor, std::string action, std::string target_id,
               std::string room_id, std::string detail);
 

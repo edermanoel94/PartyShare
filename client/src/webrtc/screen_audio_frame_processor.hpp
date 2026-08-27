@@ -25,7 +25,7 @@ namespace dv::client::media {
 /// capture path, which is what makes it the right seam: the echo canceller, the
 /// noise suppressor and the gain control have already finished with the
 /// microphone, so music mixed in here never meets any of them. See
-/// docs/audio-da-tela-compartilhada.md, section 4, and the spike in
+/// docs/09-screen-audio.md, section 1, and the spike in
 /// tools/screen_audio_spike that measured it rather than assuming it.
 ///
 /// Thin on purpose. Everything that could be got wrong - gain, saturation,

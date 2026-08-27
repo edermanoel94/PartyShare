@@ -27,7 +27,7 @@ namespace dv::server::sfu {
 /// share that degrades and one that freezes: a viewer that misses a packet can
 /// only ask for a new intra frame, an intra frame of a 720p screen is more than
 /// a hundred packets, and on a 5% loss link almost none of them arrive whole.
-/// The measurement that led to this class is in docs/benchmarks.md.
+/// The measurement that led to this class is in docs/11-benchmarks.md.
 ///
 /// So the SFU repairs the incoming stream instead. A gap in the sequence
 /// numbers becomes an RTCP Generic NACK, RFC 4585 section 6.2.1, and the

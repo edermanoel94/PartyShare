@@ -15,7 +15,7 @@ namespace dv::server::store {
 /// expected to log it loudly and carry on with the action anyway. The other
 /// choice, refusing to remove a disruptive participant because the database is
 /// unreachable, protects the log at the expense of the thing the log is about.
-/// The trade is deliberate and is stated in docs/security-review.md.
+/// The trade is deliberate and is stated in docs/13-security.md.
 ///
 /// Not thread safe. See UserStore.
 class AuditLog {

@@ -389,7 +389,7 @@ int main(int argc, char* argv[]) {
           "Media UDP ports: ephemeral, one per participant, chosen by the system. Any "
           "firewall in front of this server has to allow the whole ephemeral range, or no "
           "media will connect at all. --ice-port-range=A-B narrows it to something an "
-          "operator can open; see docs/requirements.md");
+          "operator can open; see docs/04-server-and-database.md");
     }
     DV_LOG_INFO("Press Ctrl+C to stop");
 

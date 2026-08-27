@@ -15,7 +15,7 @@ namespace dv::ui {
 /// not even carry the module.
 ///
 /// The platform underneath is five lines instead. See
-/// client/src/ui/sound_windows.cpp, and docs/avisos-de-entrada-e-saida.md for
+/// client/src/ui/sound_windows.cpp, and docs/10-join-leave-alerts.md for
 /// how this sits next to the notification, which is Qt's all the way through.
 ///
 /// `wav` must stay alive and unchanged until the sound has finished playing.

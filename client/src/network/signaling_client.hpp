@@ -123,7 +123,7 @@ class SignalingClient {
   /// - which is exactly when somebody is sitting on the lobby screen wondering
   /// whether the network is any good.
   ///
-  /// Section 4.1 of docs/protocol.md exempts the heartbeat from the
+  /// Section 4.1 of docs/06-protocol.md exempts the heartbeat from the
   /// authentication gate, so this answers on the login screen too.
   ///
   /// Fails with `not_connected` when there is no socket. Calling it again

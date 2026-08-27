@@ -19,7 +19,7 @@ enum class LoopbackMode : std::uint8_t {
   /// The exception is not a convenience. Without it the capture picks up the
   /// other participants coming out of the speakers and sends them back into the
   /// call, after the echo canceller has already done its work and with nothing
-  /// left to remove it. See docs/audio-da-tela-compartilhada.md, section 6.
+  /// left to remove it. See docs/09-screen-audio.md, section 2.
   System,
   /// One application and the processes below it, and nothing else.
   Process,

@@ -65,7 +65,7 @@ struct AudioConfig {
 
 /// What a screen share carries besides the picture. Client side only: the
 /// sound rides in the sharer's own audio track and the server never sees it as
-/// a separate thing. See docs/audio-da-tela-compartilhada.md.
+/// a separate thing. See docs/09-screen-audio.md.
 struct ScreenAudioConfig {
   /// What the share dialog opens on: "none", "system" or "process".
   ///

@@ -229,7 +229,7 @@ jobs:
             exit 1
           fi
 
-          # vcpkg.json carries the same number, and docs/release.md has always
+          # vcpkg.json carries the same number, and docs/14-release.md has always
           # said to keep the two equal. By hand that was a thing to remember; on
           # every merge it is a thing to forget, and twenty merges later
           # CMakeLists.txt would say 0.1.21 next to a manifest still saying

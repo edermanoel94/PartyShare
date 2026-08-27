@@ -17,7 +17,7 @@ namespace dv::ui {
 ///   2. QApplication::alert, which lights the taskbar button.
 ///
 /// Both are Qt's own, portable, and cost nothing to deploy. What that buys and
-/// what it gives up is written down in docs/avisos-de-entrada-e-saida.md, because
+/// what it gives up is written down in docs/10-join-leave-alerts.md, because
 /// the alternative was built and then deliberately removed and the next person
 /// to wonder deserves the reasoning rather than the archaeology. The short
 /// version: Qt's documentation warns that a balloon "may not appear at all",

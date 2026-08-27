@@ -256,7 +256,7 @@ TEST_F(SignalingClientTest, AnAddressChangedMidCallIsNotAdoptedByAReconnection) 
 TEST_F(SignalingClientTest, MeasuresTheRoundTripToTheServerBeforeSigningIn) {
   // Before authenticating on purpose. This measurement is what the network
   // indicator shows outside a call, and the login screen is one of the places
-  // it has to answer on. Section 4.1 of docs/protocol.md exempts the heartbeat
+  // it has to answer on. Section 4.1 of docs/06-protocol.md exempts the heartbeat
   // from the authentication gate, which is what makes that possible.
   Recorder& recorder = new_recorder();
   SignalingClient client(SignalingClient::Options{url()});

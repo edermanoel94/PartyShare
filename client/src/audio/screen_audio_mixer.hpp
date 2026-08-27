@@ -59,7 +59,7 @@ struct MixResult {
 
 /// Adds what the machine is playing to what the microphone captured.
 ///
-/// This is the Opção A of docs/audio-da-tela-compartilhada.md: rather than a
+/// This is option A of docs/09-screen-audio.md: rather than a
 /// second track, a second connection and a second negotiation, the screen audio
 /// rides in the participant's own audio track. The spike in
 /// tools/screen_audio_spike proved the three things that makes possible - the
@@ -73,7 +73,7 @@ struct MixResult {
 ///
 /// This class holds no libwebrtc type on purpose. `mix` is arithmetic over two
 /// buffers, which is what makes it testable without a sound card, a call or the
-/// toolchain of docs/webrtc-toolchain.md. The adapter that turns it into a
+/// toolchain of docs/07-webrtc-toolchain.md. The adapter that turns it into a
 /// `webrtc::AudioFrameProcessor` lives in
 /// client/src/webrtc/libwebrtc_media_session.cpp.
 ///

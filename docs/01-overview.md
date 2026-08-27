@@ -102,7 +102,11 @@ space.
 | Linux x64 | Built, run and measured. Every number in this book comes from here |
 | Windows x64 | Built, run and packaged on Windows 11 with MSVC 19.44, Qt 6.7.3 and vcpkg. The media layer builds and runs over a source build of libwebrtc, and the media suite passes; the virtual audio device test skips, because its script is Linux only. The MSI installs and the client it installs opens |
 | macOS ARM64 | Built and run, media layer included, over a source build of libwebrtc. 22 of 25 media tests pass, one skips for want of a virtual device, and two fail on the audio device rather than on transport. The `.dmg` the pipeline publishes still ships a client that cannot make a call |
-| macOS x64 | Code, presets and DMG packaging exist. Never built, never run |
+| macOS x64 | Code, presets and DMG packaging exist. Never built: the matrix entry is commented out because Homebrew's OpenSSL headers in `/usr/local` reach the compiler ahead of vcpkg's, and `-Wold-style-cast -Werror` kills the build |
+
+Development and *release* are two different questions, and this table answers the
+first. What a tagged release actually carries — three files, with Linux and macOS
+x64 switched off — is in [chapter 14](14-release.md).
 
 One capture gap remains: screen capture on a Wayland session, through the XDG
 portal. Everything not yet verified is listed in section 4 of

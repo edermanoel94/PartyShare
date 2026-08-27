@@ -32,6 +32,10 @@ pass, and the thing they were meant to protect is simply absent.
 | 17 | Smart App Control and an unelevated `msiexec` | Two failures read as one |
 | 18 | The first MSVC build | Four defects that stop the build |
 
+A last section, unnumbered, holds what has been **seen once and not reproduced**.
+Nothing in it is understood, and that is the point of writing it down: entry 5
+spent a while there before anybody knew what it was.
+
 ---
 
 ## 1. The second call in a process had no microphone
@@ -404,3 +408,49 @@ themselves m152, measured by a two line probe at configure time; `libyuv` in a
 different place in each tree; and a missing `#include <array>` in
 `test_benchmark.cpp`, latent for as long as the file has existed, because
 libstdc++ brings it in by transitivity and the MSVC standard library does not.
+
+---
+
+## Seen once, not yet reproduced
+
+Not numbered, because nothing here is understood yet. This section exists so that
+the second occurrence has a first one to be compared against — which is how entry
+5 got solved, after being written down as "seen and never reproduced" long before
+anybody knew what it was.
+
+### An SFU connection that failed 2 ms after it was created
+
+**When.** The CI run on `master` for the merge of PR #47, 2026-08-27.
+`SfuTest.TheSecondSharerReachesTheViewerAsOneContinuousStream`, the only failure
+in 638 tests.
+
+**What the log says.** Three participants join one room. Ana's and Carla's media
+connections come up. Bruno's goes straight to `Failed`:
+
+```text
+12:28:20.292 [info]  SFU: session for b109ba47… in room B738CD (2 sessions)
+12:28:20.294 [error] SFU: the connection of b109ba47… is failed, no media will
+                     reach them again
+```
+
+Two milliseconds between the session being created and the connection being
+declared failed. That is too fast to be ICE giving up on connectivity checks, so
+whatever happened happened at or before gathering. `wait_until_media_connected()`
+then spent its full ten seconds and returned false.
+
+**What it is not.** The merge that ran it changed two lines under
+`server/src/sfu/`, both of them doc comments naming a renamed file. The same
+commit passed this job on the pull request, and passed again on a re-run of the
+failed job — so the code is not the difference between the two outcomes.
+
+**What is worth knowing next time.** The error line exists at all only because
+these transitions were moved off `debug`; a release build compiles `debug` out,
+so before that change this job would have failed with no trace of a dead
+connection anywhere in the log. Whoever meets this again should reach for the
+same instrument and record the state *before* `Failed` — the `default:` branch of
+that switch logs it, and a debug build is what makes it visible.
+
+**Why there is no retry.** `ctest --preset` runs once, so one unstable
+integration test turns `master` red. Adding `--repeat until-pass:2` would hide
+exactly the signal the logging above was written to produce. The cost of leaving
+it is a red job that has to be read; the cost of the retry is never being told.

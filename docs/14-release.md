@@ -47,30 +47,69 @@ to be.
 
 ## What the tag produces
 
-| Artifact | Platform | State |
-| --- | --- | --- |
-| `partyshare-x.y.z-linux-x64.AppImage` | Linux x64 | Built and verified end to end |
-| `partyshare-x.y.z-windows-x64.msi` | Windows x64 | Built, installed and run |
-| `partyshare-x.y.z-windows-x64.zip` | Windows x64 | Built, installed and run |
-| `partyshare-x.y.z-macos-arm64.dmg` | macOS ARM64 | Built by hand, installed and run. Ships a client that **cannot make a call** |
-| `partyshare-x.y.z-macos-x64.dmg` | macOS x64 | Written, never run |
-| `SHA256SUMS` | — | Generated over whatever exists |
+**Three files and a checksum list.** That is the whole answer today, and it is
+worth stating before the table, because two of the five jobs this repository
+carries do not run:
+
+```text
+partyshare-x.y.z-macos-arm64.dmg
+partyshare-x.y.z-windows-x64.msi
+partyshare-x.y.z-windows-x64.zip
+SHA256SUMS
+```
+
+Verified against every release from v0.1.31 to v0.1.34: each one carries exactly
+those four assets and nothing else.
+
+| Job | Runs on a tag? | Produces | State |
+| --- | --- | --- | --- |
+| Windows x64 installer | **yes** | `.msi` and `.zip` | Built, installed and run |
+| macOS arm64 | **yes** | `.dmg` | Built and installed. Ships a client that **cannot make a call** |
+| Linux x64 AppImage | **no** — skipped | nothing | Off behind `RELEASE_LINUX`, below |
+| macOS x64 | **no** — the matrix entry is commented out | nothing | Off, with a known cause, below |
+| Publish | yes | `SHA256SUMS` over whatever exists | — |
 
 The `publish` job runs with `always()` and requires that either the Windows or the
 macOS job passed. A failing macOS job cannot hold back a Windows artifact that is
 already built: partial is a worse release than complete, and a much better one
 than none.
 
-The Linux job is not among them, and is off entirely behind the `RELEASE_LINUX`
-repository variable: `scripts/build_webrtc.sh` cannot get past the depot_tools
-bootstrap on a runner, and without libwebrtc there is no AppImage. So an automatic
-release today carries the Windows and macOS artifacts and no Linux one, which is
-worth knowing before the first tag nobody asked for arrives.
+### Why the Linux job does not run
+
+`if: vars.RELEASE_LINUX == 'true'`, and that repository variable is unset, so the
+job is **skipped on every tag**. It is a variable rather than `if: false` because
+actionlint rejects a constant condition, and rightly — a switch that can only be
+flipped by editing the workflow is not a switch. Setting it to `true` under
+Settings → Secrets and variables → Actions → Variables turns it back on.
+
+The reason it is off: `scripts/build_webrtc.sh` cannot get past the depot_tools
+CIPD bootstrap on a runner — curl gets a 403 one second in, before a byte of
+WebRTC is fetched — and without libwebrtc there is no AppImage. The job is kept
+rather than deleted because nothing *in it* is known to be wrong.
+
+**A skipped job is green.** The release run reports success with the Linux job
+skipped, so nothing in the workflow's own output says an artifact is missing.
+The way to know is to look at what the release actually carries, which is the
+list at the top of this section.
+
+### Why the macOS x64 job does not run
+
+The matrix entry is commented out in `release.yml`, and the reason is specific
+rather than "nobody got to it": on the Intel runner Homebrew lives in
+`/usr/local`, which is on the default include path, so its OpenSSL headers reach
+the compiler ahead of the ones vcpkg passes with `-isystem`, and
+`-Wold-style-cast -Werror` kills the build inside `safestack.h`. On Apple Silicon
+Homebrew is in `/opt/homebrew`, off that path, which is the whole reason arm64
+builds and x64 does not.
 
 ## Linux
 
-The only one this project verifies end to end. `scripts/appimage.sh` does the
-work and can be run locally:
+Everything below describes a path that **is not currently exercised by any tag**,
+for the reason in the section above. It is kept because the script works when it
+is run by hand, and because turning `RELEASE_LINUX` back on is one variable rather
+than a rewrite.
+
+`scripts/appimage.sh` does the work and can be run locally:
 
 ```sh
 scripts/appimage.sh                 # configure, build, package
@@ -113,9 +152,15 @@ libEGL  libGLX  libOpenGL  libdrm  libgbm
 libfontconfig  libfreetype  libharfbuzz
 ```
 
-Every Linux desktop already has all thirteen. The workflow's clean machine test
-installs exactly that list and nothing else, which is what keeps it honest: a new
-dependency creeping in without being listed here fails there.
+Every Linux desktop already has all thirteen. The clean machine test installs
+exactly that list and nothing else inside an `ubuntu:24.04` container, which is
+what would keep the list honest: a new dependency creeping in without being listed
+here fails there.
+
+**Would**, not does. That test lives inside the `linux` job of `release.yml`, so
+it is skipped along with everything else in that job, and it has not run on any
+tag. The list above is therefore as good as the last time somebody ran it by
+hand, and not a claim the pipeline is currently checking.
 
 ## Windows
 
@@ -190,8 +235,19 @@ binary as it is loaded.
 
 ## What is not done yet
 
-- The macOS libwebrtc tree published as a release asset, which is what would make
-  the `.dmg` a working product.
-- A `.dmg` with a background image and icon positioning.
+Ordered by what it costs the person downloading a release.
+
+- **No Linux artifact at all.** Blocked on the depot_tools CIPD bootstrap getting
+  a 403 on a runner. Until that is solved, a Linux user has to build from source,
+  and [INSTALL.md](../INSTALL.md) is the path.
+- **The macOS `.dmg` ships a client that cannot make a call.** Blocked on
+  publishing the macOS libwebrtc tree as a release asset and recording its URL and
+  checksum in `cmake/Findlibwebrtc.cmake`, the way `_dv_url_windows_x64_md`
+  already is.
+- **No macOS x64 build.** Blocked on the Homebrew include-path collision
+  described above — a real diagnosis, not an untried job.
 - Signing and notarization, which depend on certificates nobody has bought.
-- macOS x64: never built, never run.
+- A `.dmg` with a background image and icon positioning. Appearance, not function.
+
+So one of the three platforms ships something that works, and it is Windows. That
+is worth saying plainly here, because the release run is green either way.

@@ -74,4 +74,19 @@ inline constexpr std::size_t kMaxRoomNameBytes = 48;
 /// for a letter this touches.
 [[nodiscard]] std::string room_name_key(const std::string& name);
 
+/// How a room is named in a log line: what people call it, falling back to the
+/// identifier when nobody named it.
+///
+/// The fallback is very nearly dead code, because `RoomManager::create_room`
+/// already writes the identifier into the name of a room nobody named, once,
+/// so that no screen has to. It is kept for the two callers that can still
+/// reach an empty name: a room stored before the field existed, and an
+/// identifier that no room answers to at all, which is what a log line about a
+/// room that has just been closed is holding.
+///
+/// Unlike `user_label` this prints one thing and not two. A room name is
+/// unique, because `create_room` refuses one that is taken, so the name alone
+/// already says which room. See docs/05-rooms.md.
+[[nodiscard]] std::string room_label(const std::string& id, const std::string& name);
+
 }  // namespace dv::models

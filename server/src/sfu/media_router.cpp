@@ -140,14 +140,15 @@ void MediaRouter::on_signal(SignalHandler handler) {
   signal_handler_ = std::move(handler);
 }
 
-void MediaRouter::on_participant_joined(const std::string& room_id, const models::User& user) {
+void MediaRouter::on_participant_joined(const std::string& room_id, const std::string& room_name,
+                                        const models::User& user, const std::string& user_label) {
   const std::lock_guard<std::mutex> lock(mutex_);
 
   if (sessions_.contains(user.id)) {
     // Rejoining, or a reconnection the signaling layer saw as a fresh join.
     // The old connection is worthless now, and the peers' tracks for it are
     // rebuilt below.
-    DV_LOG_INFO("SFU: replacing the existing session of {}", user.id);
+    DV_LOG_INFO("SFU: replacing the existing session of {}", user_label);
     Session old = std::move(sessions_.at(user.id));
     sessions_.erase(user.id);
     old.connection->close();
@@ -156,18 +157,24 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   Session session;
   session.user_id = user.id;
   session.room_id = room_id;
+  session.user_label = user_label;
+  session.room_label = room_name;
   session.connection = std::make_shared<rtc::PeerConnection>(make_configuration(options_));
 
   const std::string user_id = user.id;
+  // The identifier addresses the frames and the label names the person. Both
+  // are copied into the callbacks below, which outlive this call and run on
+  // libdatachannel's threads, where `session` is not theirs to read.
+  const std::string label = user_label;
 
   // Installed before anything can produce one. libdatachannel delivers these
   // from its own threads, and they must never take `mutex_` on a path that
   // could already hold it, which is why they only enqueue.
   session.connection->onLocalDescription(
-      [this, user_id, room_id](const rtc::Description& description) {
+      [this, user_id, room_id, label](const rtc::Description& description) {
         if (description.type() != rtc::Description::Type::Offer) {
           // The SFU is always the offerer, so anything else is a bug on our side.
-          DV_LOG_WARN("SFU: ignoring a local {} for {}", description.typeString(), user_id);
+          DV_LOG_WARN("SFU: ignoring a local {} for {}", description.typeString(), label);
           return;
         }
         // The offer is the contract with the client: which codecs, which
@@ -175,7 +182,7 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
         // environment variable away rather than a rebuild, because the
         // question "was nack negotiated" comes up every time video misbehaves.
         if (std::getenv("DV_DUMP_SDP") != nullptr) {
-          DV_LOG_INFO("SFU: offer to {}\n{}", user_id, std::string(description));
+          DV_LOG_INFO("SFU: offer to {}\n{}", label, std::string(description));
         }
         enqueue(user_id, protocol::Offer{.room_id = room_id,
                                          .from_user_id = std::string(protocol::kSfuUserId),
@@ -204,20 +211,20 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
   // different moments, and only the first one was logged. The rest stay at
   // debug: a room of five is five sessions, and every transition of each of
   // them is noise in a log an operator has to read.
-  session.connection->onStateChange([user_id](rtc::PeerConnection::State state) {
+  session.connection->onStateChange([label](rtc::PeerConnection::State state) {
     switch (state) {
       case rtc::PeerConnection::State::Connected:
-        DV_LOG_INFO("SFU: the connection of {} is {}", user_id, state_name(state));
+        DV_LOG_INFO("SFU: the connection of {} is {}", label, state_name(state));
         break;
       case rtc::PeerConnection::State::Disconnected:
-        DV_LOG_WARN("SFU: the connection of {} is {}", user_id, state_name(state));
+        DV_LOG_WARN("SFU: the connection of {} is {}", label, state_name(state));
         break;
       case rtc::PeerConnection::State::Failed:
-        DV_LOG_ERROR("SFU: the connection of {} is {}, no media will reach them again", user_id,
+        DV_LOG_ERROR("SFU: the connection of {} is {}, no media will reach them again", label,
                      state_name(state));
         break;
       default:
-        DV_LOG_DEBUG("SFU: the connection of {} is {}", user_id, state_name(state));
+        DV_LOG_DEBUG("SFU: the connection of {} is {}", label, state_name(state));
         break;
     }
   });
@@ -299,11 +306,14 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const models
 
   publish_routes();
   negotiate(created);
-  DV_LOG_INFO("SFU: session for {} in room {} ({} sessions)", user.id, room_id, sessions_.size());
+  DV_LOG_INFO("SFU: session for {} in room {} ({} sessions)", user_label, room_name,
+              sessions_.size());
 }
 
 void MediaRouter::on_participant_left(const std::string& room_id, const std::string& user_id) {
   std::shared_ptr<rtc::PeerConnection> closing;
+  std::string label;
+  std::string room_name;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -312,6 +322,10 @@ void MediaRouter::on_participant_left(const std::string& room_id, const std::str
       return;
     }
     closing = it->second.connection;
+    // Read out for the same reason `closing` is: the line at the end of this
+    // function is written once the session it names has been erased.
+    label = it->second.user_label;
+    room_name = it->second.room_label;
     sessions_.erase(it);
 
     // Drop the track that carried this participant everywhere else, and
@@ -334,7 +348,7 @@ void MediaRouter::on_participant_left(const std::string& room_id, const std::str
 
   // Closed outside the lock: it waits for the callbacks, which take the lock.
   closing->close();
-  DV_LOG_INFO("SFU: session of {} in room {} closed", user_id, room_id);
+  DV_LOG_INFO("SFU: session of {} in room {} closed", label, room_name);
 }
 
 void MediaRouter::on_media_signal(const std::string& room_id, const std::string& from_user_id,
@@ -343,9 +357,13 @@ void MediaRouter::on_media_signal(const std::string& room_id, const std::string&
 
   Session* session = find_session(from_user_id);
   if (session == nullptr || session->room_id != room_id) {
+    // Identifiers, because the session is the thing that would have carried
+    // the names and there is not one. A frame from somebody this router has
+    // never seen is exactly what the line is reporting.
     DV_LOG_WARN("SFU: {} sent media signaling with no session in room {}", from_user_id, room_id);
     return;
   }
+  const std::string& label = session->user_label;
 
   std::visit(
       [&](const auto& value) {
@@ -355,29 +373,29 @@ void MediaRouter::on_media_signal(const std::string& room_id, const std::string&
           // The other half of the DV_DUMP_SDP pair above: an offer nobody can
           // see the reply to only tells half of why media is not flowing.
           if (std::getenv("DV_DUMP_SDP") != nullptr) {
-            DV_LOG_INFO("SFU: answer from {}\n{}", from_user_id, value.sdp);
+            DV_LOG_INFO("SFU: answer from {}\n{}", label, value.sdp);
           }
           try {
             session->connection->setRemoteDescription(
                 rtc::Description(value.sdp, rtc::Description::Type::Answer));
           } catch (const std::exception& error) {
-            DV_LOG_WARN("SFU: rejected the answer of {}: {}", from_user_id, error.what());
+            DV_LOG_WARN("SFU: rejected the answer of {}: {}", label, error.what());
           }
 
         } else if constexpr (std::is_same_v<T, protocol::IceCandidate>) {
           try {
             session->connection->addRemoteCandidate(rtc::Candidate(value.candidate, value.sdp_mid));
           } catch (const std::exception& error) {
-            DV_LOG_WARN("SFU: rejected a candidate of {}: {}", from_user_id, error.what());
+            DV_LOG_WARN("SFU: rejected a candidate of {}: {}", label, error.what());
           }
 
         } else if constexpr (std::is_same_v<T, protocol::Offer>) {
           // The SFU offers, the participant answers. An offer from a
           // participant means the two sides disagree about that.
-          DV_LOG_WARN("SFU: ignoring an offer from {}, the server is the offerer", from_user_id);
+          DV_LOG_WARN("SFU: ignoring an offer from {}, the server is the offerer", label);
 
         } else {
-          DV_LOG_WARN("SFU: ignoring an unexpected frame from {}", from_user_id);
+          DV_LOG_WARN("SFU: ignoring an unexpected frame from {}", label);
         }
       },
       message);
@@ -530,7 +548,7 @@ void MediaRouter::negotiate(Session& session) {
   try {
     session.connection->setLocalDescription(rtc::Description::Type::Offer);
   } catch (const std::exception& error) {
-    DV_LOG_ERROR("SFU: could not offer to {}: {}", session.user_id, error.what());
+    DV_LOG_ERROR("SFU: could not offer to {}: {}", session.user_label, error.what());
   }
 }
 
@@ -633,8 +651,8 @@ void MediaRouter::forward_video(const std::string& from_user_id, const std::stri
       header->setSeqNumber(rewritten.sequence);
       header->setTimestamp(rewritten.timestamp);
       if (rewritten.rebased) {
-        DV_LOG_INFO("SFU: the screen in room {} now comes from {}, stitched onto ssrc {}", room_id,
-                    from_user_id, destination.ssrc);
+        DV_LOG_INFO("SFU: the screen in room {} now comes from {}, stitched onto ssrc {}",
+                    route->second.room_label, route->second.user_label, destination.ssrc);
       }
     }
 
@@ -674,6 +692,8 @@ void MediaRouter::publish_routes() {
   for (const auto& [user_id, session] : sessions_) {
     Route route;
     route.room_id = session.room_id;
+    route.room_label = session.room_label;
+    route.user_label = session.user_label;
 
     for (const auto& [other_id, other] : sessions_) {
       if (other_id == user_id || other.room_id != session.room_id) {

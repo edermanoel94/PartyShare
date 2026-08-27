@@ -96,7 +96,8 @@ class MediaRouter : public MediaSignals {
 
   // --- MediaSignals ----------------------------------------------------------
 
-  void on_participant_joined(const std::string& room_id, const models::User& user) override;
+  void on_participant_joined(const std::string& room_id, const std::string& room_name,
+                             const models::User& user, const std::string& user_label) override;
   void on_participant_left(const std::string& room_id, const std::string& user_id) override;
   void on_media_signal(const std::string& room_id, const std::string& from_user_id,
                        const protocol::Message& message) override;
@@ -173,6 +174,11 @@ class MediaRouter : public MediaSignals {
   /// Where one participant's media has to go, and what to rewrite it to.
   struct Route {
     std::string room_id;
+    /// The names the forwarding path writes its one log line with, carried
+    /// here for the reason everything else in this table is: that path takes
+    /// no lock, so it cannot read `sessions_` to ask.
+    std::string room_label;
+    std::string user_label;
     std::vector<Outbound> audio;
     std::vector<Outbound> video;
   };
@@ -206,6 +212,17 @@ class MediaRouter : public MediaSignals {
   struct Session {
     std::string user_id;
     std::string room_id;
+    /// How this participant and their room read in a log line, as the Hub
+    /// resolved them when the session was created.
+    ///
+    /// Copied rather than looked up later, and not only to save the lookup:
+    /// this class runs on its own thread and holds no reference to anything
+    /// that could answer the question. A session also outlives the account
+    /// behind it often enough -- somebody deleted mid-call is precisely the
+    /// case these lines get read for -- that asking afterwards would print an
+    /// identifier exactly when a name was worth having.
+    std::string user_label;
+    std::string room_label;
     std::shared_ptr<rtc::PeerConnection> connection;
     std::shared_ptr<rtc::Track> inbound;
     /// Keyed by the user whose audio the track carries.

@@ -102,6 +102,26 @@ struct User {
   friend bool operator==(const User&, const User&) = default;
 };
 
+/// How a person is named in a log line: the name they answer to, followed by
+/// the account it belongs to.
+///
+/// Both halves earn their place. `display_name` is what an operator reading the
+/// log recognises, and printing it instead of an identifier is the whole point.
+/// It is also not unique: nothing stops two accounts from calling themselves
+/// "Ana", and a line naming one of them would say nothing about which. The
+/// username is unique and is what an administrator types to find the account
+/// again, so it rides along in parentheses.
+///
+/// The parentheses are dropped when the two are the same string, which is the
+/// common case and not the exceptional one: an account created without a
+/// display name is given its username as one. "ana (ana)" says nothing twice.
+///
+/// `id` is the last resort, for a caller holding an identifier no account
+/// answers to any more. A line about somebody deleted mid-session should still
+/// say which identifier it meant.
+[[nodiscard]] std::string user_label(const std::string& id, const std::string& display_name,
+                                     const std::string& username);
+
 /// A user as seen inside a room, together with the state the other
 /// participants need to render them.
 struct Participant {

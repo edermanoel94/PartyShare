@@ -247,9 +247,43 @@ class Participant {
 
   [[nodiscard]] bool leave() { return signaling_.send(proto::LeaveRoom{room_id_, user_.id}).ok(); }
 
-  [[nodiscard]] bool wait_until_media_connected() {
-    return wait_until(
-        [this] { return connection_->state() == rtc::PeerConnection::State::Connected; });
+  /// Waits for media to come up, and stops the moment it cannot come up.
+  ///
+  /// This used to be `wait_until(state() == Connected)`, which treats a dead
+  /// connection as one that has not arrived yet. `Failed` is terminal -
+  /// libdatachannel leaves it only through an ICE restart and nothing here
+  /// performs one - and `Closed` is terminal by definition, so polling either
+  /// of them for the rest of the ten seconds waits for something that cannot
+  /// happen.
+  ///
+  /// It cost more than the ten seconds. Both outcomes reported the same bare
+  /// `Actual: false`, so a connection that died in two milliseconds and one
+  /// that was merely slow were indistinguishable in the failure, and the answer
+  /// was only in the server log further up - which is where a CI failure of
+  /// this test was read from, once. Returning an AssertionResult puts the state
+  /// it actually reached in the message, and every `ASSERT_TRUE` around the
+  /// twenty-three call sites prints it without changing.
+  [[nodiscard]] ::testing::AssertionResult wait_until_media_connected() {
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    for (;;) {
+      const rtc::PeerConnection::State state = connection_->state();
+      if (state == rtc::PeerConnection::State::Connected) {
+        return ::testing::AssertionSuccess();
+      }
+      if (state == rtc::PeerConnection::State::Failed ||
+          state == rtc::PeerConnection::State::Closed) {
+        return ::testing::AssertionFailure() << username_ << "'s media connection reached " << state
+                                             << ", which it does not leave";
+      }
+      // Disconnected is deliberately not in that list: ICE recovers from it,
+      // and a test that gave up there would fail on a hiccup the product is
+      // built to survive.
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return ::testing::AssertionFailure() << username_ << "'s media connection was still "
+                                             << state << " after " << kTimeout.count() << " ms";
+      }
+      std::this_thread::sleep_for(10ms);
+    }
   }
 
   /// Sends `count` Opus packets, spaced like the 20 ms frames of section 9 of

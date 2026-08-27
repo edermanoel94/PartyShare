@@ -162,10 +162,11 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
   session.connection = std::make_shared<rtc::PeerConnection>(make_configuration(options_));
 
   const std::string user_id = user.id;
-  // The identifier addresses the frames and the label names the person. Both
-  // are copied into the callbacks below, which outlive this call and run on
-  // libdatachannel's threads, where `session` is not theirs to read.
-  const std::string label = user_label;
+  // The identifier addresses the frames and the label names the person. Bound
+  // rather than copied: every lambda below captures `label` by value, so the
+  // copy that outlives this call is the one inside the closure. The reference
+  // only has to survive until those captures are made, which is this function.
+  const std::string& label = user_label;
 
   // Installed before anything can produce one. libdatachannel delivers these
   // from its own threads, and they must never take `mutex_` on a path that

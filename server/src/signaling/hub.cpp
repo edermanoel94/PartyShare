@@ -68,9 +68,16 @@ std::string Hub::user_label(const std::string& user_id) const {
   // written about somebody who is here, which is nearly all of them.
   if (const auto mapped = user_to_connection_.find(user_id); mapped != user_to_connection_.end()) {
     if (const auto connection = connections_.find(mapped->second);
-        connection != connections_.end() && connection->second.user.has_value()) {
-      return models::user_label(user_id, connection->second.user->display_name,
-                                connection->second.username);
+        connection != connections_.end()) {
+      // The identity is bound to a name and then tested through that name,
+      // rather than reached through the iterator twice. The two spellings mean
+      // the same thing, but clang-tidy's unchecked-optional-access cannot see
+      // that two dereferences of one iterator are one object, so it reads the
+      // second as unguarded and the build treats that as an error.
+      const std::optional<models::User>& identity = connection->second.user;
+      if (identity.has_value()) {
+        return models::user_label(user_id, identity->display_name, connection->second.username);
+      }
     }
   }
   // Then the store, for somebody who is not. Not a defensive branch: the line

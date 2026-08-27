@@ -15,7 +15,7 @@ struct TypeMapping {
   std::string_view name;
 };
 
-// The single source of truth for the wire names. docs/protocol.md must match.
+// The single source of truth for the wire names. docs/06-protocol.md must match.
 constexpr std::array<TypeMapping, 38> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},

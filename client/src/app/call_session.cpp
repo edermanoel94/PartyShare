@@ -92,7 +92,7 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
 
   // A second attempt on a socket that is already up is a retry after a refused
   // password, not a second connection. The server does not close the socket
-  // when it refuses one - section 4.1 of docs/protocol.md answers with an error
+  // when it refuses one - section 4.1 of docs/06-protocol.md answers with an error
   // and leaves the connection standing - so connect() would report
   // `already_connected` and the interface would show "disconnect() before
   // connecting again", which is a sentence written for whoever wrote the call

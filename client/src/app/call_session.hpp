@@ -33,7 +33,7 @@ struct ScreenAudio {
     None,
     /// Everything the machine plays except this process. The exception is the
     /// whole of the feedback protection - see
-    /// docs/audio-da-tela-compartilhada.md, section 6.
+    /// docs/09-screen-audio.md, section 2.
     System,
     /// One application and the processes below it.
     Application,

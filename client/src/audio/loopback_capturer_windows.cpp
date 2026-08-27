@@ -1,6 +1,6 @@
 // WASAPI process loopback, the Windows half of audio::LoopbackCapturer.
 //
-// See docs/audio-da-tela-compartilhada.md, section 3. The stub that takes its
+// See docs/09-screen-audio.md, section 2. The stub that takes its
 // place on every other platform lives in client/src/audio/loopback_stub.cpp.
 //
 // The shape of the activation follows Microsoft's own ApplicationLoopback

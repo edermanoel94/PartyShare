@@ -10,7 +10,7 @@
 # The media layer is optional at build time. It needs the libwebrtc tree built
 # by scripts/build_webrtc.sh, which is 66 MB of static library that cannot be
 # downloaded ready made: the published binaries carry Chromium's libc++ and do
-# not link with Qt. See docs/webrtc-toolchain.md.
+# not link with Qt. See docs/07-webrtc-toolchain.md.
 #
 # Off by default so that the server, the tests and a CI runner without the
 # toolchain still build the client library. With it off, create_media_session
@@ -19,7 +19,7 @@ option(DV_BUILD_CLIENT_MEDIA "Build the client media layer on libwebrtc" OFF)
 
 # Capturing what an application is playing is a platform API and nothing else:
 # it needs no libwebrtc, so it lives in the core rather than behind
-# DV_BUILD_CLIENT_MEDIA. See docs/audio-da-tela-compartilhada.md.
+# DV_BUILD_CLIENT_MEDIA. See docs/09-screen-audio.md.
 if(WIN32)
   set(dv_loopback_sources
     src/audio/loopback_capturer_windows.cpp
@@ -34,7 +34,7 @@ endif()
 # client/src/ui/sound.hpp.
 #
 # Notifying is not on this list any more: that goes through QSystemTrayIcon,
-# which is portable and needs nothing here. docs/avisos-de-entrada-e-saida.md
+# which is portable and needs nothing here. docs/10-join-leave-alerts.md
 # has what the native path did instead, and why it was dropped.
 if(WIN32)
   set(dv_sound_sources src/ui/sound_windows.cpp)

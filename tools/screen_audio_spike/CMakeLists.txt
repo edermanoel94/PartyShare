@@ -1,4 +1,4 @@
-# Fase 0 do áudio da tela compartilhada. Ver docs/audio-da-tela-compartilhada.md.
+# Phase 0 of the shared screen audio work. See docs/09-screen-audio.md.
 #
 # Não faz parte do produto: prova que AudioFrameProcessor é honrado por esta
 # build do libwebrtc e que um frame estéreo devolvido por ele chega estéreo do

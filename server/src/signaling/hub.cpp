@@ -161,7 +161,7 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
 
   // Authentication is the only thing an unauthenticated connection may do, and
   // the heartbeat is the exception, because it is not something the connection
-  // is doing. Section 4.6 of docs/protocol.md is titled "Transport level" for
+  // is doing. Section 4.6 of docs/06-protocol.md is titled "Transport level" for
   // that reason: the server pings every connection it holds, authenticated or
   // not, and a pong is the socket saying it is still there.
   //
@@ -492,7 +492,7 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
 
   // Everyone already in the room, then the joiner themselves. The client uses
   // its own user_joined as the signal that the initial state is complete, so it
-  // has to arrive last. See section 7 of docs/protocol.md.
+  // has to arrive last. See section 7 of docs/06-protocol.md.
   for (const models::Participant& participant : room->participants) {
     if (participant.user.id == user.id) {
       continue;
@@ -799,7 +799,7 @@ void Hub::handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
   // is what says so. Without it any account could read any room by trying six
   // characters at a time, which is a search of sixteen million and not a wall.
   // An administrator is not excepted: administration is in section 4.7 of
-  // docs/protocol.md, and reading what people said to each other is not in it.
+  // docs/06-protocol.md, and reading what people said to each other is not in it.
   if (!room->contains(user->id)) {
     reply_error(out, connection.id,
                 Error{.code = "not_in_room", .message = "you are not in " + message.room_id});

@@ -33,8 +33,8 @@ struct AudioSource {
 /// shown.
 ///
 /// This process is never in the list. Capturing our own output is the one thing
-/// the feature must never do - see docs/audio-da-tela-compartilhada.md, section
-/// 6 - and leaving it out of the menu is the cheapest place to enforce that.
+/// the feature must never do - see docs/09-screen-audio.md, section
+/// 2 - and leaving it out of the menu is the cheapest place to enforce that.
 ///
 /// Note on browsers: Chrome and Edge render from a child process rather than
 /// from the window you can see, so what appears here is that child. Targeting

@@ -381,7 +381,7 @@ jobs:
       # read: it ran, said "does NOT link in any test case", and exited 0. The
       # step above reported 63 of 63 passing while 272 unit tests were absent,
       # because the integration binary kept the total above zero. Counting per
-      # label is what turns that back into a red job. Entry 11 of docs/postmortems.md.
+      # label is what turns that back into a red job. Entry 11 of docs/15-postmortems.md.
       - name: Both halves of the suite have to be there
         shell: bash
         run: |
@@ -520,7 +520,7 @@ jobs:
 
       # A mongo test with no DV_TEST_MONGO_URI skips itself, and ctest counts a
       # skip as a pass. A job that never reached the database would therefore be
-      # green having verified nothing, which is entry 11 of docs/postmortems.md
+      # green having verified nothing, which is entry 11 of docs/15-postmortems.md
       # wearing a different hat and is guarded the same way.
       - name: The tests reached the database instead of skipping themselves
         shell: bash

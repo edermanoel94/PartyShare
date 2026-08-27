@@ -838,7 +838,7 @@ TEST_F(HubTest, AJoinerIsSentWhatWasAlreadySaid) {
 
 TEST_F(HubTest, AJoinerLearnsWhoIsThereBeforeWhatWasSaid) {
   // The history names people, so it has to arrive after the participant list
-  // it names them from. See section 7 of docs/protocol.md.
+  // it names them from. See section 7 of docs/06-protocol.md.
   const auto [ana, ana_user] = login("ana");
   const std::string room = create_room(ana, ana_user.id);
   (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});

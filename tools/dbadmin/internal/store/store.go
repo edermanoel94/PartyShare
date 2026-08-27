@@ -31,7 +31,7 @@ var (
 	ErrEmptyCredentials = errors.New("username and password must not be empty")
 	// ErrAuditNotWritten wraps the result of an action that happened and was
 	// not recorded. The action is not rolled back, for the reason
-	// docs/security-review.md gives: refusing an administrative change because
+	// docs/13-security.md gives: refusing an administrative change because
 	// the log is unreachable protects the log at the expense of the thing the
 	// log is about. It is reported loudly instead.
 	ErrAuditNotWritten = errors.New("the audit entry could not be written")

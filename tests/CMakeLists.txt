@@ -48,7 +48,7 @@ endif()
 
 # The client core is not built when DV_BUILD_CLIENT is off, and the tests that
 # drive it cannot be either. Keeping the two lists apart is what makes
-# -DDV_BUILD_CLIENT=OFF, which docs/build.md offers to machines without Qt,
+# -DDV_BUILD_CLIENT=OFF, which docs/02-build.md offers to machines without Qt,
 # configure instead of failing on a target that was never defined.
 set(dv_unit_sources
   unit/test_result.cpp

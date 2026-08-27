@@ -7,7 +7,7 @@
 # a SHA-256 recorded here.
 #
 # Everything in this file that looks surprising was found by running the M3
-# spike. See docs/webrtc-toolchain.md for the full account. In short:
+# spike. See docs/07-webrtc-toolchain.md for the full account. In short:
 #
 #   1. The archive extracts to a "webrtc/" subdirectory.
 #   2. The build uses Chromium's libc++ with the ABI namespace __Cr, and the
@@ -55,12 +55,12 @@ option(DV_WEBRTC_ALLOW_UNVERIFIED "Allow a download with no recorded checksum" O
 # The published shiguredo package is built against the static C runtime, /MT,
 # and Qt and everything vcpkg's x64-windows triplet produces is /MD. Linking
 # the two ends in LNK2038 repeated across the standard library, so the client
-# cannot use that archive at all: section 5 of docs/webrtc-toolchain.md.
+# cannot use that archive at all: section 5 of docs/07-webrtc-toolchain.md.
 #
 # With this on, the fetch is a tree built from the same milestone with
 # win_use_dynamic_crt=true and rtc_build_ssl=false, published from this
-# repository because reproducing it takes a 30 GB Chromium checkout. Section 8
-# of docs/webrtc-validation.md is the procedure that made it.
+# repository because reproducing it takes a 30 GB Chromium checkout. Section 7
+# of docs/08-webrtc-validation.md is the procedure that made it.
 #
 # Turn it off for the M3 spike, which is configured standalone with
 # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded and wants the /MT package.

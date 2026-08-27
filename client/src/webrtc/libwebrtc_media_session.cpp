@@ -3,7 +3,7 @@
 // This is the only file in the client that includes a libwebrtc header. Above
 // it there is the interface in client/src/media/media_session.hpp, and below it
 // nothing else in the project depends on the toolchain described in
-// docs/webrtc-toolchain.md.
+// docs/07-webrtc-toolchain.md.
 //
 // Built only when DV_BUILD_CLIENT_MEDIA is on. The stub that takes its place
 // otherwise lives in client/src/media/media_session.cpp.
@@ -1107,7 +1107,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
     // The server puts the participant's id in the msid of every track it
     // sends, which is the only thing that says whose voice this is. See
-    // section 4.3 of docs/protocol.md.
+    // section 4.3 of docs/06-protocol.md.
     const std::vector<std::string> stream_ids = receiver->stream_ids();
     if (stream_ids.empty()) {
       DV_LOG_WARN("Media: a remote track arrived with no msid, cannot tell whose voice it is");

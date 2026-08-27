@@ -1,4 +1,4 @@
-// Fase 0 do áudio da tela compartilhada. Ver docs/audio-da-tela-compartilhada.md.
+// Phase 0 of the shared screen audio work. See docs/09-screen-audio.md.
 //
 // O plano inteiro depende de duas afirmações sobre o libwebrtc do dist m152.
 // Este executável prova ou desmente as duas, sem placa de som e sem rede:
@@ -9,7 +9,7 @@
 //   2. Um AudioFrame estéreo devolvido por esse processador chega estéreo do
 //      outro lado, com o Opus negociado em stereo=1.
 //
-// E, de brinde, a terceira afirmação da seção 4 do documento: que o processador
+// E, de brinde, a terceira afirmação da seção 1 do documento: que o processador
 // roda DEPOIS do módulo de processamento de áudio (AEC3, supressão de ruído,
 // AGC), que é o que permite misturar música sem que o supressor a destrua.
 //
@@ -897,8 +897,8 @@ int main(int argc, char** argv) {
   // junto, e o spike deixa de dizer onde estava.
   std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-  std::printf("\nSpike do audio da tela compartilhada - fase 0\n");
-  std::printf("Ver docs/audio-da-tela-compartilhada.md, secao 8.\n\n");
+  std::printf("\nShared screen audio spike - phase 0\n");
+  std::printf("See docs/09-screen-audio.md.\n\n");
 
   if (std::getenv("DV_SPIKE_VERBOSE") != nullptr) {
     webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);

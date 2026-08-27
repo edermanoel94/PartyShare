@@ -29,7 +29,7 @@ namespace {
 /// NVENC first where both exist. On an NVIDIA machine the Media Foundation
 /// transform is a wrapper around NVENC anyway, so going through it would add a
 /// layer and take away control; and NVENC direct is the path this project has
-/// actually measured, in docs/benchmarks.md. On an Intel or AMD machine the
+/// actually measured, in docs/11-benchmarks.md. On an Intel or AMD machine the
 /// NVENC probe fails cheaply - nvcuda.dll is simply not there - and the chain
 /// carries on to the next one.
 [[nodiscard]] std::vector<HardwareEncoderBackend> compiled_backends() {

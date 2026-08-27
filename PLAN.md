@@ -10,7 +10,7 @@ Three documents divide the job between them:
 | --- | --- | --- |
 | [SPEC.md](SPEC.md) | The product specification. Cited by section number from 57 files across the tree. | **Yes.** Normative. |
 | PLAN.md | This file. The milestone record and the decisions behind it. | Historical, except section 4. |
-| [docs/postmortems.md](docs/postmortems.md) | The bugs that cost real time, and what each turned out to be. | Yes, and it is where new ones go. |
+| [docs/15-postmortems.md](docs/15-postmortems.md) | The bugs that cost real time, and what each turned out to be. | Yes, and it is where new ones go. |
 
 ---
 
@@ -50,7 +50,7 @@ A source build answers that too, and needed a patch of its own, since GN ties th
 The cost accepted: this project maintains and distributes that binary on three platforms.
 The alternative it bought its way out of — libdatachannel on the client as well, plus libopus, standalone `webrtc-audio-processing`, OpenH264 and our own screen capture and bandwidth estimation — is significantly more work for less quality.
 
-Everything about that build is in [docs/webrtc-toolchain.md](docs/webrtc-toolchain.md); how to validate it on a new platform is in [docs/webrtc-validation.md](docs/webrtc-validation.md).
+Everything about that build is in [docs/07-webrtc-toolchain.md](docs/07-webrtc-toolchain.md); how to validate it on a new platform is in [docs/08-webrtc-validation.md](docs/08-webrtc-validation.md).
 
 ### The dependency rule
 
@@ -64,7 +64,7 @@ Everything about that build is in [docs/webrtc-toolchain.md](docs/webrtc-toolcha
 | | Milestone | Delivered | Left open |
 | --- | --- | --- | --- |
 | M0 | Build foundation | Presets for three platforms, sanitizers, clang-format and clang-tidy, logging, configuration, a Qt window, CI on Windows, Linux and macOS | — |
-| M1 | Shared protocol | The section 13 messages plus `create_room`, `room_created`, `error`, `ping`, `pong` and `authenticate`; models; [docs/protocol.md](docs/protocol.md); round trip and malformed input tests | — |
+| M1 | Shared protocol | The section 13 messages plus `create_room`, `room_created`, `error`, `ping`, `pong` and `authenticate`; models; [docs/06-protocol.md](docs/06-protocol.md); round trip and malformed input tests | — |
 | M2 | Signaling server | `rtc::WebSocketServer`, in memory accounts with salt and SHA-256, `RoomManager`, message routing, heartbeat, the one share at a time rule, integration tests with real clients | — |
 | M3 | WebRTC toolchain | Version pinned and checksummed, `Findlibwebrtc.cmake`, source builds on Linux and Windows, the spike passing on Linux and Windows, real capture under X11 | Capture on Wayland, through the XDG portal |
 | M4 | Audio between two clients | Signaling client off the UI thread, the client media layer, the SFU, STUN, a provisional UI, metrics every 5 s | Mouth to ear latency on a real network |
@@ -72,7 +72,7 @@ Everything about that build is in [docs/webrtc-toolchain.md](docs/webrtc-toolcha
 | M6 | Screen sharing | `ScreenCapturer`, monitor selection, a bounded frame queue, 720p at 30 FPS, H.264, SFU video forwarding with PLI, Qt rendering off the UI thread, the controls | Five simultaneous viewers; time to the first keyframe; FPS stability over ten minutes |
 | M7 | Final interface | Login, home, room, settings dialog, network quality indicator, visual error handling, reconnection with exponential backoff | The UI thread profile; startup under 3 s |
 | M8 | Hardening | Benchmarks at 5×720p30, `tc netem` and an in-process impairment path, bitrate adaptation, NVENC behind a fallback wrapper, sanitizers and static analysis, the security review, crash reporting | Latency on a real network; minidumps on Windows |
-| M9 | Packaging and release | MSI and zip on Windows, AppImage on Linux, `.app` and `.dmg` on macOS, signing steps, automatic publishing on a tag, [docs/release.md](docs/release.md) | macOS x64 never built; no signing secret configured; the DMG has never been run |
+| M9 | Packaging and release | MSI and zip on Windows, AppImage on Linux, `.app` and `.dmg` on macOS, signing steps, automatic publishing on a tag, [docs/14-release.md](docs/14-release.md) | macOS x64 never built; no signing secret configured; the DMG has never been run |
 
 The mapping to the fifteen MVP acceptance criteria of section 29 of the SPEC:
 
@@ -94,7 +94,7 @@ The mapping to the fifteen MVP acceptance criteria of section 29 of the SPEC:
 
 The ones that are not obvious from the code, and that would otherwise be rediscovered by argument.
 
-**The server is always the offerer.** Recorded in section 4.3 of [docs/protocol.md](docs/protocol.md).
+**The server is always the offerer.** Recorded in section 4.3 of [docs/06-protocol.md](docs/06-protocol.md).
 The participant only answers, which keeps mids, SSRCs and payload types under the SFU's control and reduces forwarding to rewriting a header rather than translating between two independent negotiations.
 The reserved `sfu` identifier is the address of that media endpoint: a message addressed to it is consumed by the server rather than relayed.
 
@@ -169,15 +169,15 @@ A number nobody measured is worth no more than a blank space, so these are state
 
 **Packaging and release**
 
-- No code signing secret is configured, so the signing steps are written and have never run. What that costs is in entry 17 of [docs/postmortems.md](docs/postmortems.md).
-- `docs/build.md` still says nothing about the artifacts.
+- No code signing secret is configured, so the signing steps are written and have never run. What that costs is in entry 17 of [docs/15-postmortems.md](docs/15-postmortems.md).
+- `docs/02-build.md` still says nothing about the artifacts.
 - Of the four artifacts a tag produces, only the Linux one is verified end to end: built on Ubuntu 22.04 and started inside an Ubuntu 24.04 container with only the thirteen system libraries the AppImage deliberately does not bundle.
 
 **Known open findings**
 
-- Three medium severity items remain in [docs/security-review.md](docs/security-review.md).
+- Three medium severity items remain in [docs/13-security.md](docs/13-security.md).
 - The `users-file` accounts hold plain text passwords. Accepted for the MVP only; the hash has to become Argon2id and the accounts have to come from a real store before any deployment.
-- The viewer half of bandwidth estimation is written and tested with real RTCP, and never fires, because negotiating `abs-send-time` makes libwebrtc probe, probing sends padding, and libdatachannel asserts on a padded packet. Entry 7 of [docs/postmortems.md](docs/postmortems.md).
+- The viewer half of bandwidth estimation is written and tested with real RTCP, and never fires, because negotiating `abs-send-time` makes libwebrtc probe, probing sends padding, and libdatachannel asserts on a padded packet. Entry 7 of [docs/15-postmortems.md](docs/15-postmortems.md).
 - Crash reporting on Windows writes no minidump. The seam is `install_handlers()` in `shared/src/diagnostics/crash_reporter.cpp`.
 
 ---
@@ -207,8 +207,8 @@ None of it is planned work: it is what was built after the plan ran out, through
 | | What |
 | --- | --- |
 | Server | Room chat, kept by the server and replayed to whoever joins. MongoDB persistence for accounts, roles, persistent rooms, conversations and the audit log, optional at build time. Roles and per account restrictions, checked server side against the account store rather than the session. An ICE port range, after a call that carried nothing through a firewall. |
-| Client | `config.ini`, saved settings, a rounded UI, smoothed metric rendering, per participant volume fixes, screen quality controls, automatic bitrate from the resolution, and the audio of the shared screen — the sound coming out of the sharer's machine, described in [docs/audio-da-tela-compartilhada.md](docs/audio-da-tela-compartilhada.md). |
+| Client | `config.ini`, saved settings, a rounded UI, smoothed metric rendering, per participant volume fixes, screen quality controls, automatic bitrate from the resolution, and the audio of the shared screen — the sound coming out of the sharer's machine, described in [docs/09-screen-audio.md](docs/09-screen-audio.md). |
 | Platforms | The Windows media layer over a source build, the macOS media layer and DMG packaging, and the libsrtp collision that had been silently breaking every call on a platform where both libraries meet. |
 | Tools | [tools/dbadmin](tools/dbadmin/README.md), a terminal front end for the accounts, restrictions and audit log, against the database with no server running. |
 
-Where each of those went wrong on the way is in [docs/postmortems.md](docs/postmortems.md).
+Where each of those went wrong on the way is in [docs/15-postmortems.md](docs/15-postmortems.md).

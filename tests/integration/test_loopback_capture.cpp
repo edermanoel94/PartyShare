@@ -8,7 +8,7 @@
 // the target process plays, which is the feature. And that the system-wide mode
 // does not hear this process, which is what stops a share from sending every
 // participant their own voice back - see
-// docs/audio-da-tela-compartilhada.md, section 6.
+// docs/09-screen-audio.md, section 2.
 //
 // The third is quieter: blocks have to keep arriving on the clock while nothing
 // plays at all. A process loopback produces no packets until there is sound, so

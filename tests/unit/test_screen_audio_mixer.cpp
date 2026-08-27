@@ -3,7 +3,7 @@
 // audio::ScreenAudioMixer holds no libwebrtc type on purpose, so everything
 // that could be got wrong here - gain, saturation, channel counts, what happens
 // while the capture is stopped - is testable without a call, a sound card or
-// the toolchain of docs/webrtc-toolchain.md.
+// the toolchain of docs/07-webrtc-toolchain.md.
 //
 // What is *not* tested here is the mixing with real screen audio in it: that
 // needs a capture running, which is tests/integration/test_loopback_capture.cpp

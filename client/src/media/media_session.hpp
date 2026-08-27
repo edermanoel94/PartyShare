@@ -174,12 +174,12 @@ enum class MediaState : std::uint8_t {
 ///
 /// This interface exists so that everything above it can be built and tested
 /// without libwebrtc. That matters twice over: libwebrtc is a 66 MB static
-/// library that has to be built from source (see docs/webrtc-toolchain.md), and
+/// library that has to be built from source (see docs/07-webrtc-toolchain.md), and
 /// the logic that drives a call is worth testing without a sound card, an ICE
 /// exchange or a second machine.
 ///
 /// The negotiation direction is fixed: the server offers and the client
-/// answers, as described in section 4.3 of docs/protocol.md. There is no method
+/// answers, as described in section 4.3 of docs/06-protocol.md. There is no method
 /// to create an offer, on purpose.
 ///
 /// Implementations are thread safe, and every callback arrives on a media
@@ -274,7 +274,7 @@ class MediaSession {
   /// playing, mixed into this participant's own audio track.
   ///
   /// Needs no renegotiation and no second track, for the reason
-  /// docs/audio-da-tela-compartilhada.md gives at length: libwebrtc has one
+  /// docs/09-screen-audio.md gives at length: libwebrtc has one
   /// capture stream per factory, so a second local audio track would carry the
   /// same sound as the first. What it has instead is a hook that runs after the
   /// echo canceller and before the encoder, and that is where the mixing
@@ -307,7 +307,7 @@ class MediaSession {
   /// has been encoded together with the voice and no receiver can tell the two
   /// apart again. One person turning this down turns it down for the whole
   /// room, which is the honest consequence of the design in
-  /// docs/audio-da-tela-compartilhada.md and not a limitation of this call.
+  /// docs/09-screen-audio.md and not a limitation of this call.
   /// `set_participant_volume` is the receiving side and a different question.
   ///
   /// Remembered whether or not a share is running: it is the level the next one

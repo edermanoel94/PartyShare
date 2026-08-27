@@ -1,8 +1,14 @@
-# Signaling protocol
+# 6. Signaling protocol
 
-This document is the normative definition of the protocol.
+This chapter is the **normative** definition of the protocol.
 The C++ implementation in `shared/include/dv/protocol/message.hpp` follows this document, not the other way around.
 That makes it possible to reimplement the server in another language without changing the clients, as anticipated in section 14 of the SPEC.
+
+It is deliberately the one chapter of this book that was not condensed. Every
+rule here is one a second implementation would have to obey, and the reasoning
+beside each rule is what stops it being read as arbitrary.
+The concepts behind sections 4.5 and 4.7 — chat, roles and restrictions — are in
+[chapter 5](05-administration.md).
 
 ## 1. Transport
 
@@ -176,7 +182,7 @@ Keyframe requests cross the SFU. A viewer that needs an intra frame sends a PLI 
 Retransmission works in both directions, and both video lines negotiate `a=rtcp-fb:96 nack`.
 A viewer that lost a packet asks the SFU for that packet, and the SFU resends it from a cache of the most recent ones.
 The SFU makes the same request upstream when a packet is lost on the way to it, rather than letting the hole propagate to every viewer.
-Without that second half, a lossy link turns a screen share into a sequence of keyframe requests that never arrive whole; the measurement is in [benchmarks.md](benchmarks.md).
+Without that second half, a lossy link turns a screen share into a sequence of keyframe requests that never arrive whole; the measurement is in [chapter 11](11-benchmarks.md).
 
 The SFU also tells the sharer how much to send, once per second, as REMB (`a=rtcp-fb:96 goog-remb`).
 The number comes from the loss the server observes upstream, capped by the lowest a viewer has reported, and libwebrtc treats it as a ceiling for its own congestion controller.

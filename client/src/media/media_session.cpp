@@ -20,7 +20,7 @@ Result<std::unique_ptr<MediaSession>> create_media_session(const MediaSessionOpt
   return Result<std::unique_ptr<MediaSession>>::failure(
       "media_unavailable",
       "this client was built without libwebrtc, so it cannot send or receive audio. "
-      "See docs/webrtc-toolchain.md.");
+      "See docs/07-webrtc-toolchain.md.");
 }
 
 bool media_is_available() noexcept {

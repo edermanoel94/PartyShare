@@ -6,7 +6,7 @@
 # The public libwebrtc API passes std::string and std::vector across every
 # call, and Qt on Linux is built against libstdc++, so the two cannot share a
 # binary. Building with use_custom_libcxx=false removes the conflict.
-# See section 5 of docs/webrtc-toolchain.md.
+# See section 5 of docs/07-webrtc-toolchain.md.
 #
 # Usage:
 #   scripts/build_webrtc.sh [--jobs N] [--out DIR] [--milestone BRANCH]
@@ -72,7 +72,7 @@ done
 case "$(uname -s)" in
   Linux)  TARGET_OS="linux" ;;
   Darwin) TARGET_OS="mac" ;;
-  *) echo "Unsupported host. On Windows, follow docs/webrtc-toolchain.md." >&2; exit 1 ;;
+  *) echo "Unsupported host. On Windows, follow docs/07-webrtc-toolchain.md." >&2; exit 1 ;;
 esac
 
 case "$(uname -m)" in
@@ -196,7 +196,7 @@ ensure_libstdcxx() {
 
 # use_custom_libcxx=false is the entire point of this script: it drops
 #   Chromium's own libc++, whose std::__Cr symbols cannot share a binary with
-#   Qt. See section 5 of docs/webrtc-toolchain.md.
+#   Qt. See section 5 of docs/07-webrtc-toolchain.md.
 # use_rtti=true matters because our code and Qt use RTTI, and polymorphic
 #   libwebrtc types cross the boundary.
 # rtc_use_h264 plus proprietary_codecs and ffmpeg_branding give the H.264
@@ -223,7 +223,7 @@ GN_ARGS=(
 
 # The two pairs have to agree with each other, or pc/BUILD.gn refuses the
 # configure with "Mismatch ssl build settings detected" and then with
-# "Mismatch in ssl root detected". Section 8.2 of docs/webrtc-validation.md.
+# "Mismatch in ssl root detected". Section 7.2 of docs/08-webrtc-validation.md.
 if [[ -n "${SSL_ROOT}" ]]; then
   GN_ARGS+=(
     "rtc_build_ssl=false"

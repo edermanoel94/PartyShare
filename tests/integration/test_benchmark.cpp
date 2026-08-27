@@ -9,7 +9,7 @@
 //   ctest --test-dir build/media -L benchmark --output-on-failure
 //
 // The output is the point: the assertions only guard against the run being
-// meaningless, and what goes into docs/benchmarks.md is what it prints.
+// meaningless, and what goes into docs/11-benchmarks.md is what it prints.
 
 #ifdef _WIN32
 // clang-format off
@@ -235,7 +235,7 @@ void BenchmarkTest::run(const char* title, const dv::client::media::NetworkImpai
   std::fflush(stdout);
 
   // The assertions guard against a run that measured nothing, not against the
-  // numbers themselves. Judging a target belongs in docs/benchmarks.md, where
+  // numbers themselves. Judging a target belongs in docs/11-benchmarks.md, where
   // the machine it ran on is written down next to it.
   for (std::size_t i = 1; i < kParticipants; ++i) {
     const std::uint64_t frames = everyone[i]->remote_frames() - frames_before[i];

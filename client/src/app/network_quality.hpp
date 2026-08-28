@@ -31,6 +31,37 @@ enum class NetworkQuality : std::uint8_t {
   return "unknown";
 }
 
+/// The shape that says what the colour says, as UTF-8.
+///
+/// The three verdicts are drawn in the success, warning and danger colours,
+/// and those are chosen to sit at the same weight so that none of them shouts
+/// over the others. Measured, that is 1.19:1 between success and warn in the
+/// light scheme and 1.05:1 in the dark one - so in greyscale, or to the eight
+/// per cent of men with deuteranopia, the three are one colour and the dot
+/// carries nothing. The circle fills as the link improves, which is a second
+/// cue that survives both.
+///
+/// Here rather than beside the colour, which lives in the window that draws
+/// it, because two indicators show this and a glyph that means "good" in one
+/// and "fair" in the other is worse than no glyph. Nothing in this header may
+/// include a Qt header - section 15 of SPEC.md - so it is bytes, and the two
+/// callers turn it into a QString the same way they already do for to_string.
+[[nodiscard]] constexpr std::string_view glyph(NetworkQuality quality) noexcept {
+  switch (quality) {
+    case NetworkQuality::Unknown:
+      // Not one of the three. A middle dot is small enough to read as "there
+      // is nothing here" next to any of the circles.
+      return "·";
+    case NetworkQuality::Good:
+      return "●";
+    case NetworkQuality::Fair:
+      return "◐";
+    case NetworkQuality::Poor:
+      return "○";
+  }
+  return "·";
+}
+
 /// Where each of the three measurements stops being good, and where it stops
 /// being acceptable.
 ///

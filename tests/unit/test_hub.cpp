@@ -401,6 +401,47 @@ TEST_F(HubTest, TheOthersAreToldAboutTheNewParticipant) {
   EXPECT_EQ(announced->user.id, bruno_user.id);
 }
 
+TEST_F(HubTest, ADisplayNameShapedLikeARowIsNotAdopted) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  // The forgery written out. The client flattens each participant into one tab
+  // separated row, and one of those fields is the identifier its moderation
+  // menu acts on: a name that closes the field, inserts somebody else's
+  // identifier and opens a new one used to put a row labelled "Bruno" in front
+  // of Ana carrying Ana's own id, so kicking "Bruno" kicked herself.
+  const std::string forged = "Bruno\t" + ana_user.id + "\tBruno";
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, forged});
+
+  const auto announced = find<proto::UserJoined>(out, ana);
+  ASSERT_TRUE(announced.has_value());
+  EXPECT_EQ(announced->user.id, bruno_user.id);
+  // Dropped, and the name on the account stands in its place. Note what is not
+  // asserted: that the join failed. It succeeds, because refusing would answer
+  // a forged name by locking an account out of every room, and the name is
+  // gone either way.
+  EXPECT_EQ(announced->user.display_name, "bruno");
+}
+
+TEST_F(HubTest, AnOrdinaryDisplayNameIsStillAdopted) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+
+  // The other half of the rule, so that the check above cannot be satisfied by
+  // dropping every name that arrives.
+  const auto out = send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno Souza"});
+
+  const auto announced = find<proto::UserJoined>(out, ana);
+  ASSERT_TRUE(announced.has_value());
+  EXPECT_EQ(announced->user.display_name, "Bruno Souza");
+}
+
 TEST_F(HubTest, TheCapacityLimitIsEnforced) {
   const auto [owner, owner_user] = login("owner");
   const std::string room = create_room(owner, owner_user.id);

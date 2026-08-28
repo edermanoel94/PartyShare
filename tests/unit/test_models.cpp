@@ -212,6 +212,40 @@ TEST(RoomName, RejectsControlCharacters) {
   EXPECT_FALSE(dv::models::is_valid_room_name(std::string("Retro\0de sexta", 14)));
 }
 
+TEST(DisplayName, RejectsControlCharacters) {
+  // The same rule as a room name, for a sharper reason. The client flattens
+  // each participant into one tab separated row whose first field is the user
+  // id the moderation menu acts on, so a tab in a name used to move which
+  // field was read as that id.
+  EXPECT_FALSE(dv::models::is_valid_display_name("Ana\tSilva"));
+  EXPECT_FALSE(dv::models::is_valid_display_name("Ana\nSilva"));
+  EXPECT_FALSE(dv::models::is_valid_display_name(std::string("Ana\0Silva", 9)));
+  EXPECT_FALSE(dv::models::is_valid_display_name("Ana\x7F"));
+}
+
+TEST(DisplayName, RejectsTheShapeOfTheForgery) {
+  // The attack written out: a name that ends the row early, inserts somebody
+  // else's identifier, and starts a new name, so that the list shows "Alice"
+  // over an identifier that is not hers.
+  EXPECT_FALSE(dv::models::is_valid_display_name("Alice\t9f2c1ab4d0e75613\tAlice"));
+}
+
+TEST(DisplayName, AcceptsAnyOrdinaryName) {
+  // Accented text, spaces, punctuation and emoji are all names somebody
+  // actually has. Only the C0 range and DEL are refused, so nothing above
+  // 0x7F is ever inspected and no multibyte character can be caught by it.
+  EXPECT_TRUE(dv::models::is_valid_display_name("Ana Silva"));
+  EXPECT_TRUE(dv::models::is_valid_display_name("Éder"));
+  EXPECT_TRUE(dv::models::is_valid_display_name("O'Brien-Souza"));
+  EXPECT_TRUE(dv::models::is_valid_display_name("ção 🚀"));
+}
+
+TEST(DisplayName, AcceptsTheEmptyString) {
+  // "No display name", which every reader already answers by falling back to
+  // the username. Refusing it here would turn a normal account into an error.
+  EXPECT_TRUE(dv::models::is_valid_display_name(""));
+}
+
 TEST(UserLabel, PutsTheAccountBehindTheName) {
   // The whole point of the pair. The display name is what an operator
   // recognises and it is not unique; the username is unique and is what they

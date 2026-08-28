@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <string_view>
 
 #include <dv/logging/logger.hpp>
 #include <dv/models/chat.hpp>
@@ -97,6 +98,39 @@ constexpr int kNoLinkQuality = -2;
       break;
   }
   return theme::colors().muted;
+}
+
+/// A run of UTF-8 bytes as a QString.
+///
+/// The core hands out string_view - it may not name a Qt type - and every
+/// place that shows one of its words was spelling this conversion out.
+[[nodiscard]] QString from_utf8(std::string_view text) {
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+/// One field of a tab separated row, with anything that could end it early
+/// turned into a space.
+///
+/// The rows this window builds are split back apart by field number on the
+/// other side, so a value carrying a tab does not corrupt itself - it moves
+/// every field after it, and the reader takes the wrong one. That is how a
+/// display name became a way to put somebody else's identifier in the field a
+/// moderation menu acts on.
+///
+/// The server refuses control characters in the names it accepts now, in
+/// models::is_valid_display_name and models::is_valid_room_name. This is the
+/// same rule applied where the rows are actually built, so that it holds for a
+/// value that never passed through either check: a name already in the store
+/// from before those existed, a record written straight into the database, or
+/// a field that has nothing to do with names at all.
+[[nodiscard]] QString as_field(const std::string& text) {
+  QString field = QString::fromStdString(text);
+  for (QChar& character : field) {
+    if (character < QChar(0x20) || character == QChar(0x7F)) {
+      character = QLatin1Char(' ');
+    }
+  }
+  return field;
 }
 
 /// How many emoji the picker puts on a row. Eight of them at 34 pixels plus
@@ -310,7 +344,39 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   show_page();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+  // Taking the handlers back before any of this window is taken apart.
+  //
+  // wire_session installs eighteen handlers that capture this, and the session
+  // calls them from three places that are not the interface thread: the
+  // signaling socket's own threads, the metrics thread, and libwebrtc's decode
+  // thread. main() declares the session before the window so that it outlives
+  // it, which means every one of those is live for as long as this destructor
+  // takes to run - and tearing down four pages of widgets and a tray icon is
+  // not instant.
+  //
+  // Seventeen of the eighteen post a queued invocation and would survive being
+  // late, because a QObject drops its own posted events when it goes. The
+  // eighteenth does not: on_remote_video calls screen_view_->submit straight
+  // from the decode thread, thirty times a second while a share is running, so
+  // quitting mid-share is a use-after-free with a stack in a codec.
+  //
+  // Clearing first, then quiescing, and the order is the point. Clearing alone
+  // fixes nothing: every dispatch site copies the callback struct under the
+  // mutex and invokes it with the lock released, so a thread already past that
+  // copy still holds these lambdas and will run them. What actually closes the
+  // window is disconnect(), which joins the metrics thread, closes the media
+  // session - whose close() detaches the remote video sink before it returns -
+  // and calls SignalingClient::disconnect, which waits for a callback that is
+  // running. Clearing first only makes disconnect()'s own closing set_state
+  // find nothing to report, which saves posting to a window that is going.
+  //
+  // When this returns, no thread can reach these widgets, and only then does
+  // the widget tree start to come apart.
+  session_.on_events({});
+  session_.on_room_created(nullptr);
+  session_.disconnect();
+}
 
 void MainWindow::show_login_error(const QString& text) {
   login_error_->setText(text);
@@ -748,13 +814,29 @@ void MainWindow::wire_session() {
             QStringList names;
             names.reserve(static_cast<qsizetype>(list.size()));
             for (const client::app::Participant& participant : list) {
-              // The id and the bare name travel after tabs, so that the volume
-              // slider knows whose volume it is changing and can say the name
-              // without the state that got appended to it. The list only shows
-              // what comes before the first tab.
-              const QString name = QString::fromStdString(participant.user.display_name.empty()
-                                                              ? participant.user.id
-                                                              : participant.user.display_name);
+              // Three tab separated fields: the id, then what the row shows,
+              // then the bare name. The last two are so that the volume slider
+              // knows whose volume it is changing and can say the name without
+              // the state that got appended to it.
+              //
+              // The id goes first, and that order is the point rather than a
+              // matter of taste. It used to sit in the middle, between two
+              // fields built out of the display name, and a display name is
+              // whatever another participant typed. A name containing a tab
+              // pushed a field of its own into the row and moved the id along
+              // by one, so "Alice<tab><somebody else's id><tab>Alice" produced
+              // a row that read Alice and carried a stranger's identifier -
+              // which on_participant_menu then kicked, muted or restricted.
+              //
+              // First, the id cannot be moved by anything that follows it: it
+              // is server generated hex with no tab in it, so it ends where the
+              // first tab is and a name can only ever garble itself. The server
+              // refuses control characters in a display name as well, in
+              // models::is_valid_display_name, but this side does not depend on
+              // that being true.
+              const QString name =
+                  as_field(participant.user.display_name.empty() ? participant.user.id
+                                                                 : participant.user.display_name);
               QString label = name;
               if (participant.muted) {
                 label += QStringLiteral("  (muted)");
@@ -770,9 +852,8 @@ void MainWindow::wire_session() {
                 label += participant.sharing_audio ? QStringLiteral("  (sharing with sound)")
                                                    : QStringLiteral("  (sharing)");
               }
-              label += QStringLiteral("\t") + QString::fromStdString(participant.user.id);
-              label += QStringLiteral("\t") + name;
-              names.push_back(label);
+              names.push_back(QString::fromStdString(participant.user.id) + QLatin1Char('\t') +
+                              label + QLatin1Char('\t') + name);
             }
             QMetaObject::invokeMethod(this, "apply_participants", Qt::QueuedConnection,
                                       Q_ARG(QStringList, names));
@@ -869,11 +950,11 @@ void MainWindow::wire_session() {
               // Identifier first, then one field per column. Tab separated for
               // the same reason the participant list is: it needs no
               // registered metatype to cross to the UI thread.
+              const models::Restrictions& taken = summary.user.restrictions;
               QStringList fields;
-              fields << QString::fromStdString(summary.user.id)
-                     << QString::fromStdString(summary.username)
-                     << QString::fromStdString(summary.user.display_name)
-                     << QString::fromStdString(std::string(models::to_string(summary.user.role)))
+              fields << as_field(summary.user.id) << as_field(summary.username)
+                     << as_field(summary.user.display_name)
+                     << from_utf8(models::to_string(summary.user.role))
                      << (summary.created_at > 0 ? QDateTime::fromSecsSinceEpoch(summary.created_at)
                                                       .toString(QStringLiteral("yyyy-MM-dd"))
                                                 : QString())
@@ -881,7 +962,26 @@ void MainWindow::wire_session() {
                      // Empty for an account with nothing taken away, which is
                      // most of them, so the column reads as an exception list
                      // rather than as a column of "none".
-                     << QString::fromStdString(models::describe(summary.user.restrictions));
+                     << as_field(models::describe(taken))
+                     // The same four flags once more, past the last column the
+                     // table draws, as one character each in the order
+                     // Restrictions declares them: banned, muted, silenced,
+                     // screen_share_blocked.
+                     //
+                     // A second copy rather than the panel reading the column
+                     // above, because that column is describe(), whose own
+                     // documentation calls it the display form. Reading a
+                     // rendering back as though it were protocol is how the
+                     // restrictions dialog came to open with every box
+                     // unchecked when the format moved under it - and it sends
+                     // all four boxes, so opening wrong means lifting three
+                     // restrictions nobody asked to lift. This field has one
+                     // reader and no other job, so it cannot drift.
+                     << QStringLiteral("%1%2%3%4")
+                            .arg(taken.banned ? 1 : 0)
+                            .arg(taken.muted ? 1 : 0)
+                            .arg(taken.silenced ? 1 : 0)
+                            .arg(taken.screen_share_blocked ? 1 : 0);
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             QMetaObject::invokeMethod(admin_panel_, "apply_users", Qt::QueuedConnection,
@@ -895,8 +995,7 @@ void MainWindow::wire_session() {
               QStringList fields;
               // Identifier first and unshown, then the columns in the order
               // both tables declare them. See ui::fill.
-              fields << QString::fromStdString(summary.id) << QString::fromStdString(summary.id)
-                     << QString::fromStdString(summary.name)
+              fields << as_field(summary.id) << as_field(summary.id) << as_field(summary.name)
                      << QString::number(summary.participant_count);
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
@@ -922,14 +1021,16 @@ void MainWindow::wire_session() {
             rows.reserve(static_cast<qsizetype>(entries.size()));
             for (const models::AuditEntry& entry : entries) {
               QStringList fields;
-              fields << QString::fromStdString(entry.id)
+              fields << as_field(entry.id)
                      << QDateTime::fromSecsSinceEpoch(entry.timestamp_seconds)
                             .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
-                     << QString::fromStdString(entry.actor_username)
-                     << QString::fromStdString(entry.action)
-                     << QString::fromStdString(entry.target_id)
-                     << QString::fromStdString(entry.room_id)
-                     << QString::fromStdString(entry.detail);
+                     << as_field(entry.actor_username) << as_field(entry.action)
+                     << as_field(entry.target_id)
+                     << as_field(entry.room_id)
+                     // The one that carries a name most of the time: an audit
+                     // detail is built from models::user_label, so it holds
+                     // whatever the account it names calls itself.
+                     << as_field(entry.detail);
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             QMetaObject::invokeMethod(admin_panel_, "apply_audit", Qt::QueuedConnection,
@@ -1435,18 +1536,21 @@ void MainWindow::apply_participants(const QStringList& names) {
   const QSignalBlocker blocker(participants_);
   participants_->clear();
   for (const QString& entry : names) {
+    // Field 0 is the identifier, field 1 is what the row shows, field 2 is the
+    // bare name. See on_participants for why the identifier is first and not
+    // in the middle.
     const QStringList parts = entry.split(QLatin1Char('\t'));
-    auto* item = new QListWidgetItem(parts.value(0), participants_);
-    item->setData(Qt::UserRole, parts.value(1));
+    auto* item = new QListWidgetItem(parts.value(1), participants_);
+    item->setData(Qt::UserRole, parts.value(0));
     item->setData(kNameRole, parts.value(2));
-    if (!selected.isEmpty() && parts.value(1) == selected) {
+    if (!selected.isEmpty() && parts.value(0) == selected) {
       participants_->setCurrentItem(item);
     }
 
     // An arrival is a difference between this list and the last one. The
     // server broadcasts the whole membership whenever it changes rather than
     // a join event, so there is nothing else to compare against.
-    const QString id = parts.value(1);
+    const QString id = parts.value(0);
     present.insert(id);
     if (participants_seeded_ && id != us && !known_participants_.contains(id)) {
       arrived.push_back(parts.value(2));
@@ -1554,10 +1658,9 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
     quality_->clear();
     return;
   }
-  quality_->setText(
-      QStringLiteral("● network %1")
-          .arg(QString::fromUtf8(client::app::to_string(measured).data(),
-                                 static_cast<qsizetype>(client::app::to_string(measured).size()))));
+  quality_->setText(QStringLiteral("%1 network %2")
+                        .arg(from_utf8(client::app::glyph(measured)),
+                             from_utf8(client::app::to_string(measured))));
   quality_->setStyleSheet(
       QStringLiteral("color: %1; font-weight: bold;").arg(quality_colour(measured).name()));
 }
@@ -1585,15 +1688,24 @@ void MainWindow::show_link_quality() {
       quality_->setStyleSheet(
           QStringLiteral("color: %1; font-weight: bold;").arg(theme::colors().muted.name()));
     }
-    quality_->setText(QStringLiteral("● no server"));
+    quality_->setText(
+        QStringLiteral("%1 no server")
+            .arg(from_utf8(client::app::glyph(client::app::NetworkQuality::Unknown))));
     return;
   }
 
   const auto measured = client::app::quality_of(std::chrono::milliseconds(link_round_trip_ms_));
-  // The number as well as the word, unlike the call indicator, because there
+  // The number rather than the word, unlike the call indicator, because there
   // is only one measurement here and hiding it behind an adjective would leave
   // "good" doing work three numbers do during a call.
-  quality_->setText(QStringLiteral("● server %1 ms").arg(link_round_trip_ms_));
+  //
+  // Which is why the glyph matters more here than there: during a call the
+  // verdict is written out beside the dot, and here it is not. Without a shape
+  // the reading is a bare number, and knowing whether 180 ms is fair or poor
+  // means remembering where the thresholds are.
+  quality_->setText(QStringLiteral("%1 server %2 ms")
+                        .arg(from_utf8(client::app::glyph(measured)))
+                        .arg(link_round_trip_ms_));
 
   if (const int verdict = static_cast<int>(measured); verdict != shown_link_quality_) {
     shown_link_quality_ = verdict;

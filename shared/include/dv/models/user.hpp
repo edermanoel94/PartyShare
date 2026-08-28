@@ -122,6 +122,27 @@ struct User {
 [[nodiscard]] std::string user_label(const std::string& id, const std::string& display_name,
                                      const std::string& username);
 
+/// Whether a display name is one the server may adopt.
+///
+/// The same rule `is_valid_room_name` applies, and for the same reason, which
+/// is worth stating here because the consequence is worse. The client flattens
+/// each participant into one tab separated row on its way to the list widget,
+/// and one of the fields in that row is the user id the moderation menu acts
+/// on. A name carrying a tab does not merely add columns to somebody else's
+/// table: it moves which field is read as the identifier, so a name of the
+/// form "Alice<tab><somebody else's id><tab>Alice" draws a row labelled Alice
+/// whose kick, mute and restrict commands are addressed to that other account.
+///
+/// Refused at the door rather than escaped at every screen that shows a name.
+/// The client no longer trusts this on its own - it now reads the identifier
+/// from a position no name can shift - but a name that cannot hold a control
+/// character is what keeps every other reader of these rows honest too, the
+/// administration tables included.
+///
+/// The empty string is valid: it means "no display name", and every reader
+/// already falls back to the username for it.
+[[nodiscard]] bool is_valid_display_name(const std::string& name);
+
 /// A user as seen inside a room, together with the state the other
 /// participants need to render them.
 struct Participant {

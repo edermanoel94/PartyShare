@@ -1,6 +1,22 @@
+#include <algorithm>
+
 #include <dv/models/user.hpp>
 
 namespace dv::models {
+
+bool is_valid_display_name(const std::string& name) {
+  // Not trimmed first, unlike a room name. A room name is stored trimmed, so
+  // measuring the untrimmed one would make the rule depend on padding; a
+  // display name is stored as given, so the thing to check is the thing that
+  // will be stored.
+  //
+  // No length limit here on purpose. An account created without a display name
+  // is given its username as one, usernames are not capped, and a rule that
+  // refused a long name would lock those accounts out of every room. Length is
+  // a separate question from this one and does not belong in the same answer.
+  return std::ranges::none_of(
+      name, [](unsigned char character) { return character < 0x20 || character == 0x7F; });
+}
 
 std::string_view to_string(Role role) noexcept {
   return role == Role::Admin ? "admin" : "user";

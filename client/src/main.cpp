@@ -318,8 +318,10 @@ int run(int argc, char* argv[]) {
         "Rebuild with -DDV_BUILD_CLIENT_MEDIA=ON, see docs/02-build.md.");
   }
 
-  // Declared before the window and destroyed after it: the window installs
-  // callbacks into the session, and removes them in its destructor.
+  // Declared before the window and destroyed after it, which is what lets
+  // ~MainWindow take its handlers back and stop the session's threads while
+  // there is still a session to stop. The other order would destroy the
+  // session first and leave the window's destructor talking to nothing.
   dv::client::app::CallSession session(session_options);
 
   dv::ui::MainWindow window(session);

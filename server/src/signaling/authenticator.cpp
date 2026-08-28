@@ -102,6 +102,13 @@ Result<models::User> Authenticator::add_user(const std::string& username,
     return Result<models::User>::failure("invalid_value",
                                          "username and password must not be empty");
   }
+  // Refused here rather than dropped, unlike the same check on joining a room.
+  // This is somebody creating an account and being told what is wrong with it,
+  // not somebody arriving with a name that can simply be ignored.
+  if (!models::is_valid_display_name(display_name)) {
+    return Result<models::User>::failure("invalid_value",
+                                         "display name must not contain control characters");
+  }
 
   store::Account account;
   account.username = username;

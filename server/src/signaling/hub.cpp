@@ -497,7 +497,21 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
 
   models::User user = *authenticated_user;
   if (!message.display_name.empty()) {
-    user.display_name = message.display_name;
+    // Adopted only if it is a name and not a payload. See
+    // models::is_valid_display_name: a tab in here moves which field every
+    // other client reads as the user id, and their moderation menu with it.
+    //
+    // Ignored rather than refused, and the join goes through under the name
+    // the account already has. Refusing would answer an attempt to forge a
+    // name by locking the account out of rooms, which punishes the one case
+    // where this fires by accident and gains nothing against the case where it
+    // does not - the name is dropped either way.
+    if (models::is_valid_display_name(message.display_name)) {
+      user.display_name = message.display_name;
+    } else {
+      DV_LOG_WARN("Rejected a display name carrying control characters from {}",
+                  models::user_label(user.id, user.display_name, connection.username));
+    }
   }
 
   // Read from the store rather than taken from the identity this connection

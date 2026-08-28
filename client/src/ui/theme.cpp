@@ -177,9 +177,6 @@ QPushButton:hover {
 QPushButton:pressed {
   background: @{surface_pressed};
 }
-QPushButton:focus {
-  border-color: @{accent};
-}
 QPushButton:disabled {
   background: @{window};
   border-color: @{border};
@@ -236,6 +233,60 @@ QPushButton[toggle="warn"]:checked {
   background: @{warn_soft};
   border-color: @{warn};
   color: @{warn};
+}
+
+/* Focus, last and one rule per variant, which is not tidiness but the only
+   arrangement that works.
+
+   Qt resolves a conflict between two rules by the CSS2 specificity count: the
+   number of id selectors, then of attributes and pseudo-states, then of type
+   names. A lone QPushButton:focus scores 0-1-1, and so does
+   QPushButton[accent="true"] - one type name, one qualifier each. Equal scores
+   are broken by the order they appear in, so a single focus rule above is
+   overridden by every variant below it that names a border colour, which is
+   all of them. That left Connect, Create room, Send and Leave room - the four
+   things the eye is meant to land on - with no focus ring at all, while the
+   plain buttons around them had one. It is the same fault as the disabled
+   QSlider: a rule that reads correctly and never fires.
+
+   Naming the variant in each selector raises it to 0-2-1 and settles it by
+   specificity rather than by order, so the block cannot be broken again by
+   somebody appending a rule underneath.
+
+   The colour changes per variant because none of them contrasts with every
+   background a button can wear. The accent reads against the pale surfaces,
+   so the plain and toggled buttons keep it. It disappears on a filled accent
+   button, which takes the window colour instead. The danger button is the
+   awkward one: its background swings from a near black tint at rest to bright
+   red under the pointer, at opposite ends of the scale, and no single colour
+   clears 3:1 against both - so it gets two rules, and the hovered one wins on
+   its own account by carrying one more pseudo-state than the other. Every pair
+   below was measured against WCAG 1.4.11 in both schemes: the worst case is
+   3.6:1, on the plain button in the dark scheme, and most are far above it.
+
+   Two pixels rather than one, with the pixel taken back out of the padding.
+   The border is inside the box, so widening it alone would move the label and
+   change the button's size hint at the moment it took focus. */
+QPushButton:focus {
+  border: 2px solid @{accent};
+  padding: 7px 17px;
+}
+QPushButton[accent="true"]:focus {
+  border: 2px solid @{window};
+  padding: 7px 17px;
+}
+QPushButton[danger="true"]:focus {
+  border: 2px solid @{text};
+  padding: 7px 17px;
+}
+QPushButton[danger="true"]:focus:hover {
+  border: 2px solid @{canvas};
+  padding: 7px 17px;
+}
+QPushButton[toggle="accent"]:checked:focus,
+QPushButton[toggle="warn"]:checked:focus {
+  border: 2px solid @{accent};
+  padding: 7px 17px;
 }
 
 /* --- fields -------------------------------------------------------------- */

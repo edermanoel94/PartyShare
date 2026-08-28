@@ -239,11 +239,13 @@ void MetricsDialog::show_verdict(const client::media::AudioStats& stats) {
   }
 
   const std::string_view word = client::app::to_string(quality);
+  const std::string_view mark = client::app::glyph(quality);
+  const QString shape = QString::fromUtf8(mark.data(), static_cast<qsizetype>(mark.size()));
   verdict_->setText(
       quality == client::app::NetworkQuality::Unknown
-          ? QStringLiteral("● nothing measured yet")
-          : QStringLiteral("● network %1")
-                .arg(QString::fromUtf8(word.data(), static_cast<qsizetype>(word.size()))));
+          ? QStringLiteral("%1 nothing measured yet").arg(shape)
+          : QStringLiteral("%1 network %2")
+                .arg(shape, QString::fromUtf8(word.data(), static_cast<qsizetype>(word.size()))));
   verdict_->setStyleSheet(QStringLiteral("color: %1;").arg(colour.name()));
 }
 

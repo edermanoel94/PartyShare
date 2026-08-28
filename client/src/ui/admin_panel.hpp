@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QHash>
+#include <QString>
 #include <QStringList>
 #include <QWidget>
 
@@ -22,6 +24,11 @@ namespace dv::ui {
 /// later, never a local edit: this widget holds no state that the server does
 /// not, so there is no way for the table to disagree with the truth. Each
 /// change is answered with the whole new list, which is what refreshes it.
+///
+/// `accounts_` is not an exception to that. It holds the server's own answer
+/// and nothing else, replaced whole every time one arrives; what it is for is
+/// keeping that answer in the form it came in, rather than leaving the panel
+/// to read it back out of the text it drew.
 ///
 /// The panel is only ever shown to an administrator, but that is presentation.
 /// The server refuses every one of these messages from anybody else, and this
@@ -73,8 +80,23 @@ class AdminPanel : public QWidget {
   QWidget* build_rooms_tab();
   QWidget* build_audit_tab();
 
-  /// The user id in the selected row of `table`, or empty when nothing is
-  /// selected.
+  /// What the server last said about one account, as it said it.
+  ///
+  /// The role and the restrictions are here because the two dialogs that
+  /// change them need to know what they are now, and the only other place to
+  /// find that is the table - where they exist as the sentence
+  /// models::describe wrote and the word models::to_string wrote, in cells
+  /// whose column number depends on nothing having shifted. Reading a
+  /// rendering back as though it were protocol is a decision that fails
+  /// quietly: the boxes open wrong and the dialog sends all four.
+  ///
+  /// The username rides along so that the dialogs can title themselves without
+  /// reaching into a cell either.
+  struct Account {
+    QString username;
+    models::Role role = models::Role::User;
+    models::Restrictions restrictions;
+  };
 
   /// Sends `request`, turning a local failure into the `failed` signal.
   /// Answers whether it went out, so a caller making several requests can stop
@@ -82,6 +104,10 @@ class AdminPanel : public QWidget {
   bool send(const Result<std::monostate>& request);
 
   client::app::CallSession& session_;
+
+  /// The accounts of the last `apply_users`, by user id. Cleared and rebuilt
+  /// with each one, so an account that has gone leaves with it.
+  QHash<QString, Account> accounts_;
 
   QTabWidget* tabs_ = nullptr;
 

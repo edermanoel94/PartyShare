@@ -46,7 +46,9 @@ class ScreenView;
 /// before a widget is touched, because Qt widgets may only be used from the
 /// thread that owns them.
 // A QObject cannot be copied or moved: its identity is the thing Qt tracks.
-// The destructor exists to unhook the session callbacks, and asking for the
+// The destructor exists to take the session's handlers back and stop the
+// threads that call them before any of this window is taken apart - see its
+// body for why clearing them is not on its own enough - and asking for the
 // other four special members here would be asking for members that must not
 // exist.
 // NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)

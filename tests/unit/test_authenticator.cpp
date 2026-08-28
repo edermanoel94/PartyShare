@@ -28,6 +28,16 @@ TEST(Authenticator, FallsBackToTheUsernameAsDisplayName) {
   EXPECT_EQ(user.value().display_name, "ana");
 }
 
+TEST(Authenticator, RefusesADisplayNameCarryingControlCharacters) {
+  Authenticator auth;
+  // Refused here rather than dropped, unlike the same name arriving on a join.
+  // This is an account being created, and the person creating it is present to
+  // be told what is wrong with it.
+  const auto user = auth.add_user("ana", "password", "Ana\tSilva");
+  ASSERT_FALSE(user.ok());
+  EXPECT_EQ(user.error().code, "invalid_value");
+}
+
 TEST(Authenticator, GivesEveryUserADistinctIdentifier) {
   Authenticator auth;
   const auto first = auth.add_user("ana", "password", "");

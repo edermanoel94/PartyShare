@@ -158,6 +158,34 @@ bool AdminPanel::send(const Result<std::monostate>& request) {
 }
 
 void AdminPanel::apply_users(const QStringList& rows) {
+  // Read here and not out of the table afterwards, because the table keeps
+  // only what it draws: ui::fill stops at the last column and the flags field
+  // is past it. The row is the one MainWindow's on_user_list builds.
+  accounts_.clear();
+  accounts_.reserve(static_cast<int>(rows.size()));
+  for (const QString& row : rows) {
+    const QStringList fields = row.split(QLatin1Char('\t'));
+    const QString id = fields.value(0);
+    if (id.isEmpty()) {
+      continue;
+    }
+    // One character per flag, in the order Restrictions declares them. Bounds
+    // checked rather than indexed blindly: a row from an older client, or one
+    // that lost its tail somewhere, should leave the boxes as they were and
+    // not read off the end of a string.
+    const QString flags = fields.value(7);
+    const auto flag = [&flags](qsizetype at) {
+      return flags.size() > at && flags.at(at) == QLatin1Char('1');
+    };
+    accounts_.insert(id, Account{
+                             .username = fields.value(1),
+                             .role = models::role_from_string(fields.value(3).toStdString()),
+                             .restrictions = models::Restrictions{.banned = flag(0),
+                                                                  .muted = flag(1),
+                                                                  .silenced = flag(2),
+                                                                  .screen_share_blocked = flag(3)},
+                         });
+  }
   fill(users_, rows);
 }
 
@@ -213,12 +241,16 @@ void AdminPanel::on_change_role() {
     return;
   }
 
-  const QString current = users_->item(users_->currentRow(), 2)->text();
-  const bool promoting = current != QStringLiteral("admin");
+  // The role the server last reported, not the word the Role column happens to
+  // be showing. Same reason the restrictions dialog reads from here.
+  const auto account = accounts_.constFind(user_id);
+  if (account == accounts_.constEnd()) {
+    return;
+  }
 
   protocol::UpdateUser change;
   change.user_id = user_id.toStdString();
-  change.role = promoting ? models::Role::Admin : models::Role::User;
+  change.role = account->role == models::Role::Admin ? models::Role::User : models::Role::Admin;
   (void)send(session_.update_user(change));
 }
 
@@ -248,15 +280,25 @@ void AdminPanel::on_restrict_user() {
     return;
   }
 
-  const QString username = users_->item(users_->currentRow(), 0)->text();
-  // Column 5 of the users table, which the session filled from
-  // models::describe. Reading the state back off the row rather than keeping a
-  // copy here is the same rule the rest of this panel follows: the widget
-  // holds nothing the server does not.
-  const QString in_force = users_->item(users_->currentRow(), 5) == nullptr
-                               ? QString()
-                               : users_->item(users_->currentRow(), 5)->text();
-  const QStringList current = in_force.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+  // The four flags as the server sent them.
+  //
+  // This used to take the text of column 5 and split it on spaces, looking for
+  // the words models::describe writes. Two things were wrong with that and
+  // both are quiet. The column number assumes nothing has shifted, and a value
+  // carrying a tab shifted every column along - so the Restricted column would
+  // be showing the Online one, and every box would open unchecked. And
+  // describe() is documented as the display form, so the day its punctuation
+  // changes the boxes open unchecked as well, with nothing failing to compile.
+  //
+  // Unchecked is the dangerous way to be wrong here, because the dialog sends
+  // all four boxes on OK: an administrator opening it to add one restriction
+  // would have silently lifted the three that were already there.
+  const auto account = accounts_.constFind(user_id);
+  if (account == accounts_.constEnd()) {
+    return;
+  }
+  const QString username = account->username;
+  const models::Restrictions current = account->restrictions;
 
   QDialog dialog(this);
   dialog.setWindowTitle(QStringLiteral("Restrictions for %1").arg(username));
@@ -270,10 +312,10 @@ void AdminPanel::on_restrict_user() {
   auto* muted = new QCheckBox(QStringLiteral("Cannot use the microphone"), &dialog);
   auto* silenced = new QCheckBox(QStringLiteral("Cannot write in the chat"), &dialog);
   auto* blocked = new QCheckBox(QStringLiteral("Cannot share their screen"), &dialog);
-  banned->setChecked(current.contains(QStringLiteral("banned")));
-  muted->setChecked(current.contains(QStringLiteral("muted")));
-  silenced->setChecked(current.contains(QStringLiteral("silenced")));
-  blocked->setChecked(current.contains(QStringLiteral("screen_share_blocked")));
+  banned->setChecked(current.banned);
+  muted->setChecked(current.muted);
+  silenced->setChecked(current.silenced);
+  blocked->setChecked(current.screen_share_blocked);
 
   form->addRow(banned);
   form->addRow(muted);
@@ -313,7 +355,14 @@ void AdminPanel::on_delete_user() {
     return;
   }
 
-  const QString username = users_->item(users_->currentRow(), 0)->text();
+  // From the same place the other two take it, so that the name in the
+  // question is the name of the account the request will actually delete and
+  // not whatever the Username column is drawing in that row.
+  const auto account = accounts_.constFind(user_id);
+  if (account == accounts_.constEnd()) {
+    return;
+  }
+  const QString username = account->username;
   // Deleting an account ends their session and cannot be undone from here, so
   // it is the one action in this panel that asks first.
   if (QMessageBox::question(this, QStringLiteral("Delete account"),

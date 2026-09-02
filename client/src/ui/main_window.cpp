@@ -777,8 +777,20 @@ void MainWindow::build_room_page() {
   // Return sends, which is what everybody expects of a field next to a Send
   // button and what nobody wants to reach for the mouse for.
   connect(chat_input_, &QLineEdit::returnPressed, this, &MainWindow::on_send_chat);
-  connect(mute_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_mute);
-  connect(share_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_share);
+  // `toggled` and not `clicked`, for the two checkable buttons only.
+  //
+  // Qt gives a checkable QPushButton the accessibility role of a check box,
+  // and a check box answers the platform's press action with
+  // QAbstractButton::toggle(). That sets the checked state and emits
+  // `toggled`; it never emits `clicked`. So a person driving this window with
+  // VoiceOver could press "Share screen", watch it light up, and share
+  // nothing - the button's appearance said one thing and the call another.
+  //
+  // The cost of listening to `toggled` is that refresh_controls() also sets
+  // these states, and that would come straight back here as a fresh command.
+  // The two setChecked calls there are blocked for exactly that reason.
+  connect(mute_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_mute);
+  connect(share_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(network_status_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
@@ -2129,7 +2141,13 @@ void MainWindow::refresh_controls() {
   // box that appears a second later.
   const models::Restrictions& restrictions = session_.local_user().restrictions;
 
-  mute_button_->setChecked(session_.muted());
+  {
+    // Reporting the session's state, not asking for a change. See the
+    // `toggled` connection: without the blocker this would call
+    // on_toggle_mute, which would call refresh_controls again.
+    const QSignalBlocker blocker(mute_button_);
+    mute_button_->setChecked(session_.muted());
+  }
   mute_button_->setText(session_.muted() ? QStringLiteral("Unmute microphone")
                                          : QStringLiteral("Mute microphone"));
   // A forced mute is not a button that turned itself off: it is one that will
@@ -2151,7 +2169,10 @@ void MainWindow::refresh_controls() {
   // lands can be ended from here as well as by the server.
   const bool may_share = !restrictions.screen_share_blocked || sharing;
   share_button_->setEnabled(in_call && !someone_else_is_sharing && may_share);
-  share_button_->setChecked(sharing);
+  {
+    const QSignalBlocker blocker(share_button_);
+    share_button_->setChecked(sharing);
+  }
   share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
   share_button_->setToolTip(
       restrictions.screen_share_blocked

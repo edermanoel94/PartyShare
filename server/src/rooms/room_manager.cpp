@@ -13,6 +13,16 @@ Error error(std::string code, std::string message) {
   return Error{.code = std::move(code), .message = std::move(message)};
 }
 
+/// What `models::user_label` is given for the username half of a name here.
+///
+/// `models::User` does not carry one. The username is a property of the account
+/// an authenticated connection is bound to, and `Hub` is what holds that; this
+/// class knows a room's participants and nothing about how they signed in. So a
+/// name from here is the display name alone, which is what `user_label` returns
+/// for an empty username, falling back to the identifier for a user who has no
+/// display name either.
+constexpr const char* kNoUsername = "";
+
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
 
 /// Enough attempts that exhausting them means the identifier space is
@@ -203,10 +213,11 @@ std::optional<Error> RoomManager::join(const std::string& room_id, models::User 
 
   models::Room& room = it->second;
   if (room.contains(user.id)) {
-    return error("already_in_room", user.id + " is already in " + room_id);
+    return error("already_in_room", models::user_label(user.id, user.display_name, kNoUsername) +
+                                        " is already in " + models::room_label(room_id, room.name));
   }
   if (std::cmp_greater_equal(room.size(), options_.max_participants_per_room)) {
-    return error("room_full", "room " + room_id + " is full");
+    return error("room_full", "room " + models::room_label(room_id, room.name) + " is full");
   }
 
   // A user can only be in one room at a time. Joining a second one leaves the
@@ -221,6 +232,17 @@ std::optional<Error> RoomManager::join(const std::string& room_id, models::User 
   return std::nullopt;
 }
 
+// Every message below that names a person or a room does it through
+// `models::user_label` and `models::room_label`, because these messages are not
+// only logged: `Hub` relays them to the client, which puts them in a dialog. A
+// person who joins a room twice used to be told
+// "f31d4c2809d51d780fdcc5e49d78340f is already in 332368".
+//
+// `not_in_room` is the exception, and stays an identifier on the user's side.
+// Somebody who is not a participant has no name to read here: this class knows
+// the people in its rooms and nobody else, and inventing a lookup so an error
+// path can print a nicer word would be the wrong trade. The room half of that
+// same message does resolve, because the room is in hand.
 std::optional<Error> RoomManager::leave(const std::string& room_id, const std::string& user_id) {
   const auto it = rooms_.find(room_id);
   if (it == rooms_.end()) {
@@ -232,7 +254,8 @@ std::optional<Error> RoomManager::leave(const std::string& room_id, const std::s
       room.participants,
       [&](const models::Participant& candidate) { return candidate.user.id == user_id; });
   if (participant == room.participants.end()) {
-    return error("not_in_room", user_id + " is not in " + room_id);
+    return error("not_in_room",
+                 user_id + " is not in " + models::room_label(room_id, it->second.name));
   }
 
   room.participants.erase(participant);
@@ -264,13 +287,16 @@ std::optional<Error> RoomManager::set_muted(const std::string& room_id, const st
   }
   models::Participant* participant = it->second.find(user_id);
   if (participant == nullptr) {
-    return error("not_in_room", user_id + " is not in " + room_id);
+    return error("not_in_room",
+                 user_id + " is not in " + models::room_label(room_id, it->second.name));
   }
 
   // A participant cannot take off a mute an administrator put on. Muting
   // themselves further is still allowed: it takes nothing away from anyone.
   if (!by_admin && !muted && participant->muted_by_admin) {
-    return error("forbidden", "an administrator muted " + user_id);
+    return error("forbidden", "an administrator muted " +
+                                  models::user_label(participant->user.id,
+                                                     participant->user.display_name, kNoUsername));
   }
 
   participant->muted = muted;
@@ -291,12 +317,15 @@ std::optional<Error> RoomManager::start_screen_share(const std::string& room_id,
   models::Room& room = it->second;
   models::Participant* participant = room.find(user_id);
   if (participant == nullptr) {
-    return error("not_in_room", user_id + " is not in " + room_id);
+    return error("not_in_room",
+                 user_id + " is not in " + models::room_label(room_id, it->second.name));
   }
 
   if (const models::Participant* current = room.screen_sharer();
       current != nullptr && current->user.id != user_id) {
-    return error("screen_share_busy", current->user.id + " is already sharing in " + room_id);
+    return error("screen_share_busy",
+                 models::user_label(current->user.id, current->user.display_name, kNoUsername) +
+                     " is already sharing in " + models::room_label(room_id, room.name));
   }
 
   participant->sharing_screen = true;
@@ -312,7 +341,8 @@ std::optional<Error> RoomManager::stop_screen_share(const std::string& room_id,
   }
   models::Participant* participant = it->second.find(user_id);
   if (participant == nullptr) {
-    return error("not_in_room", user_id + " is not in " + room_id);
+    return error("not_in_room",
+                 user_id + " is not in " + models::room_label(room_id, it->second.name));
   }
   participant->sharing_screen = false;
   participant->sharing_audio = false;

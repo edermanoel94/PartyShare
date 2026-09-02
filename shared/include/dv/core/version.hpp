@@ -111,11 +111,20 @@ constexpr std::optional<int> parse_component(std::string_view text) {
 
 #ifdef DV_VERSION
 /// What this build is.
+///
+/// The fallback is unreachable: the assertion below refuses to compile a
+/// DV_VERSION this cannot read, and it fires on the machine that builds the
+/// binary rather than on the machine that runs it.
+///
+/// It is written as value_or rather than as the dereference it plainly is
+/// because bugprone-unchecked-optional-access reads the two lines separately -
+/// it models the optional and not the static_assert underneath it - and the CI
+/// treats that check as an error. Naming the impossible answer costs one word
+/// and is worth more than a suppression comment: 0.0.0 is behind every release
+/// there has ever been, so even the branch that cannot be taken would err
+/// towards offering an update rather than towards hiding one.
 [[nodiscard]] constexpr Version running_version() {
-  // The assertion below is what makes this dereference safe, and it fires at
-  // compile time on the machine that built the binary rather than on the
-  // machine that runs it.
-  return *parse_version(DV_VERSION);
+  return parse_version(DV_VERSION).value_or(Version{});
 }
 
 static_assert(parse_version(DV_VERSION).has_value(),

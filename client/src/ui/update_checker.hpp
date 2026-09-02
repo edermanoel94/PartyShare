@@ -77,6 +77,10 @@ class UpdateChecker : public QObject {
  private slots:
   void check();
 
+  // Not redundant: the section above is `private slots:`, which Qt's moc needs
+  // as its own specifier, and the members below are not slots. The same note
+  // is on settings_dialog.hpp, for the same reason.
+  // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
   void handle(QNetworkReply* reply);
 

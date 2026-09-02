@@ -13,21 +13,21 @@ namespace dv::ui {
 /// What a participant row says besides the name, as bits on
 /// `kParticipantStateRole`. Bits rather than an enum of combinations because
 /// sharing is independent of the microphone: somebody can be muted and
-/// sharing, or speaking and sharing, and each of those is two icons.
-enum ParticipantState : int {
-  kParticipantNone = 0,
-  /// Their microphone is off, by their own hand or an administrator's.
-  kParticipantMuted = 1 << 0,
-  /// Their voice is coming through right now.
-  kParticipantSpeaking = 1 << 1,
-  /// Their audio track is up, whether or not anything is being said on it.
-  kParticipantAudioActive = 1 << 2,
-  /// Their screen is what everybody is watching.
-  kParticipantSharing = 1 << 3,
-  /// And what their machine is playing comes with it, which is why their
-  /// volume slider is now also the volume of a film. See docs/09-screen-audio.md.
-  kParticipantSharingWithSound = 1 << 4,
-};
+/// sharing, or speaking and sharing, and each of those is two icons. Plain
+/// constants rather than an enum, because a set of flags is not a choice of
+/// one value, and an `int` is what a QVariant role hands back.
+inline constexpr int kParticipantNone = 0;
+/// Their microphone is off, by their own hand or an administrator's.
+inline constexpr int kParticipantMuted = 1 << 0;
+/// Their voice is coming through right now.
+inline constexpr int kParticipantSpeaking = 1 << 1;
+/// Their audio track is up, whether or not anything is being said on it.
+inline constexpr int kParticipantAudioActive = 1 << 2;
+/// Their screen is what everybody is watching.
+inline constexpr int kParticipantSharing = 1 << 3;
+/// And what their machine is playing comes with it, which is why their volume
+/// slider is now also the volume of a film. See docs/09-screen-audio.md.
+inline constexpr int kParticipantSharingWithSound = 1 << 4;
 
 /// The roles a participant row carries. The identifier is the one every
 /// context menu and slider acts on; the name is what they say; the state and

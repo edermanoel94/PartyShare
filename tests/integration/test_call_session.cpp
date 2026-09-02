@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -572,7 +573,10 @@ class CallSessionTest : public ::testing::Test {
   /// A client pointed at a port nothing listens on: what the login screen
   /// looks like when the server is down.
   Client& add_without_a_server(const std::string& username) {
-    clients_.push_back(std::make_unique<Client>(1, username));
+    // Typed as the port it is: make_unique forwards a plain 1 as an int, and
+    // the narrowing to the constructor's uint16_t is an error on MSVC with
+    // warnings as errors.
+    clients_.push_back(std::make_unique<Client>(static_cast<std::uint16_t>(1), username));
     return *clients_.back();
   }
 

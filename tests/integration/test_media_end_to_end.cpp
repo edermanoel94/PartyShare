@@ -18,13 +18,101 @@
 // assertion is that audio flows, so skipping it when audio does not flow would
 // leave a test that cannot fail.
 
+#ifdef __APPLE__
+#include <CoreAudio/CoreAudio.h>
+#endif
+
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "media_test_client.hpp"
 #include "store/memory_store.hpp"
 #include "tone_player.hpp"
 
 namespace {
+
+/// Whether a capture device is attached to this machine, or woken over a link
+/// to another one.
+///
+/// This is the difference between measuring the program and measuring the
+/// hardware, and only one of the two is worth asserting on. Switching to a
+/// Continuity microphone asks macOS to wake an iPhone over the network; on the
+/// machine this was written on that took 1808 ms, against 172 to 192 ms for
+/// every device physically attached to it. None of that 1808 ms is spent in
+/// code this repository owns.
+///
+/// Everything is local where the question cannot be asked, so Linux and
+/// Windows keep exactly the behaviour they had.
+[[nodiscard]] bool device_is_local([[maybe_unused]] const std::string& name) {
+#ifndef __APPLE__
+  return true;
+#else
+  // libwebrtc names the platform default "default (Something)" and every other
+  // entry by the device's own name, so the inner name is what CoreAudio will
+  // answer to. Unwrapping it is what makes the default entry classifiable at
+  // all: without this, a machine whose default microphone is a Continuity one
+  // would read as local and the measurement would be the phone again.
+  constexpr std::string_view kDefaultPrefix = "default (";
+  std::string wanted = name;
+  if (wanted.starts_with(kDefaultPrefix) && wanted.ends_with(')')) {
+    wanted = wanted.substr(kDefaultPrefix.size(), wanted.size() - kDefaultPrefix.size() - 1);
+  }
+
+  AudioObjectPropertyAddress address{.mSelector = kAudioHardwarePropertyDevices,
+                                     .mScope = kAudioObjectPropertyScopeGlobal,
+                                     .mElement = kAudioObjectPropertyElementMain};
+  UInt32 size = 0;
+  if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, nullptr, &size) !=
+      noErr) {
+    return true;
+  }
+
+  std::vector<AudioObjectID> devices(size / sizeof(AudioObjectID));
+  if (devices.empty() || AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr,
+                                                    &size, devices.data()) != noErr) {
+    return true;
+  }
+
+  for (const AudioObjectID device : devices) {
+    address.mSelector = kAudioObjectPropertyName;
+    CFStringRef device_name = nullptr;
+    size = sizeof(device_name);
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &device_name) != noErr ||
+        device_name == nullptr) {
+      continue;
+    }
+    char buffer[512] = {};
+    const bool converted =
+        CFStringGetCString(device_name, buffer, sizeof(buffer), kCFStringEncodingUTF8);
+    CFRelease(device_name);
+    if (!converted || wanted != buffer) {
+      continue;
+    }
+
+    address.mSelector = kAudioDevicePropertyTransportType;
+    UInt32 transport = 0;
+    size = sizeof(transport);
+    if (AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &transport) != noErr) {
+      return true;
+    }
+    // The two current Continuity spellings, and not Bluetooth: a headset that
+    // is already paired and streaming switches as fast as a built-in
+    // microphone, and excluding it would throw away a device worth measuring.
+    //
+    // The older `kAudioDeviceTransportTypeContinuityCapture` is not listed.
+    // macOS 13 both introduced and deprecated it in favour of these two, and
+    // 13 is this project's floor, so naming it would buy nothing and cost a
+    // deprecation warning.
+    return transport != kAudioDeviceTransportTypeContinuityCaptureWired &&
+           transport != kAudioDeviceTransportTypeContinuityCaptureWireless;
+  }
+
+  // A name CoreAudio does not answer to. Nothing is known, so nothing is
+  // excluded.
+  return true;
+#endif
+}
 
 TEST_F(MediaEndToEndTest, ALibwebrtcClientNegotiatesWithTheLibdatachannelSfu) {
   Client& ana = add("ana");
@@ -239,6 +327,17 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
     GTEST_SKIP() << "this machine has no capture device";
   }
 
+  std::vector<media::AudioDevice> local;
+  for (const media::AudioDevice& device : inputs.value()) {
+    if (device_is_local(device.name)) {
+      local.push_back(device);
+    }
+  }
+  if (local.empty()) {
+    GTEST_SKIP() << "every capture device here is woken over a link to another machine, so the "
+                    "only switch available would time that link and not this code";
+  }
+
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());
   const std::string room = ana.create_room();
@@ -254,11 +353,14 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
   auto* router = server_->media_router();
   ASSERT_TRUE(wait_until([&] { return router->audio_packets_received() > 0; }));
 
-  // The second device when there is one, otherwise the same device again:
-  // either way the capture is stopped and started, which is what has to stay
-  // quick. Section 9 of SPEC.md allows 500 ms.
-  const media::AudioDevice& target =
-      inputs.value().size() > 1 ? inputs.value()[1] : inputs.value()[0];
+  // The second local device when there is one, otherwise the same device
+  // again: either way the capture is stopped and started, which is what has to
+  // stay quick. Section 9 of SPEC.md allows 500 ms.
+  //
+  // Local, and not simply the second entry of the list. See `device_is_local`:
+  // the entry that happens to sit at index 1 can be a microphone on another
+  // machine, and the wait for that one to wake is not a property of this code.
+  const media::AudioDevice& target = local.size() > 1 ? local[1] : local[0];
 
   const auto switched_at = std::chrono::steady_clock::now();
   ASSERT_TRUE(ana.session().set_input_device(target.id).ok()) << "could not select " << target.name;
@@ -269,20 +371,29 @@ TEST_F(MediaEndToEndTest, SwitchingMicrophoneDoesNotInterruptTheCallForLong) {
   ASSERT_TRUE(wait_until([&] { return router->audio_packets_received() > before + 5; }, 3000ms))
       << "audio never came back after the switch";
 
-  // Known to fail on a GitHub runner: 2056 ms against this 500 ms, on the
-  // first run where the media job ever reached its tests at all. Left as it
-  // is, and written down rather than loosened, because nobody yet knows which
-  // of two things it is.
+  // The second data point this comment used to ask for, measured on 2026-09-01
+  // on macOS arm64 with real devices, switching to each of the four in turn:
   //
-  // It is a wall clock budget measured on shared hardware through a PulseAudio
-  // null sink, which is the shape of an assertion that reports the machine
-  // instead of the program. It is also exactly the number a person notices
-  // when they change microphone mid-call, so raising it to make the job green
+  //   default (MacBook Air Microphone)    188 ms
+  //   Eder's iPhone Microphone           1808 ms   <- Continuity
+  //   MacBook Air Microphone              192 ms
+  //   Microsoft Teams Audio               172 ms
+  //
+  // So the path itself costs around 190 ms and the budget is not tight. What
+  // used to fail here was the device selection: this test took the second
+  // entry of the list, which on that machine was the phone, and then reported
+  // the time macOS spends waking a phone. `device_is_local` is what stopped it
+  // doing that.
+  //
+  // The GitHub runner is not explained by any of the above and is left open.
+  // It failed at 2056 ms through a PulseAudio null sink, which is local by
+  // every definition here, so this change does not address it: shared hardware
+  // remains the likeliest reading, and a run that fails there is still worth
+  // looking at rather than assuming.
+  //
+  // The 500 ms is kept either way. It is exactly the number a person notices
+  // when they change microphone mid-call, so raising it to make a job green
   // would trade the only thing this test is for.
-  //
-  // Deciding needs a second data point, and there is no baseline: every
-  // earlier run of this job stopped before the tests, so this has possibly
-  // never run in CI until now.
   const auto gap = std::chrono::steady_clock::now() - switched_at;
   EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(gap).count(), 500)
       << "switching the microphone silenced the call for too long";

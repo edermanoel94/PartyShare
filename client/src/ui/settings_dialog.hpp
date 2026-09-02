@@ -243,6 +243,12 @@ class SettingsDialog : public QDialog {
   std::vector<config::IniSetting> pending_;
 
  public:
+  /// Puts `id` in the monitor box, for a dialog opened while a choice made
+  /// elsewhere - the share button's menu, or an earlier visit here - is in
+  /// force. An empty or unknown id leaves the primary monitor selected, which
+  /// is what an empty id means to the capturer as well.
+  void select_monitor(const QString& id);
+
   /// The monitor the user picked, for whoever starts the share.
   [[nodiscard]] QString selected_monitor() const;
 

@@ -221,6 +221,12 @@ Result<std::monostate> CallSession::leave() {
     room = room_id_;
     room_id_.clear();
     participants_.clear();
+    // The mute belongs to the stay in the room, not to the account. The server
+    // forgets it the moment we leave - the next join builds a participant that
+    // is not muted - so keeping it here would put the button and the room in
+    // disagreement: a microphone that says "Unmute" to its owner and looks open
+    // to everybody else, and nobody hearing a word.
+    muted_ = false;
     session.swap(audio_);
   }
   if (room.empty()) {
@@ -243,6 +249,12 @@ Result<std::monostate> CallSession::set_muted(bool muted) {
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
+    if (room_id_.empty()) {
+      // A room is always entered with the microphone open: see leave(). A mute
+      // set out here would have nobody to be announced to and would be thrown
+      // away at the door, so refusing it is more honest than keeping it.
+      return Result<std::monostate>::failure("not_in_room", "there is no room to be muted in");
+    }
     user_id = local_user_.id;
     room = room_id_;
     muted_ = muted;
@@ -251,10 +263,6 @@ Result<std::monostate> CallSession::set_muted(bool muted) {
 
   if (session) {
     session->set_microphone_muted(muted);
-  }
-  if (room.empty()) {
-    // Muted before joining. The state is kept and announced on the way in.
-    return std::monostate{};
   }
 
   // The server confirms by broadcasting it back, and only then does the
@@ -969,11 +977,13 @@ void CallSession::handle_signal(protocol::Message message) {
     std::string rejoin_room;
     std::string rejoin_name;
     std::string user_id;
+    bool rejoin_muted = false;
     std::shared_ptr<media::MediaSession> stale;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       local_user_ = authenticated->user;
       user_id = authenticated->user.id;
+      rejoin_muted = muted_;
       // The password stays. It is the only credential the protocol has, and
       // reconnecting after the server restarts means authenticating again
       // without asking the user to type it a second time. A resume token
@@ -1014,6 +1024,18 @@ void CallSession::handle_signal(protocol::Message message) {
               .room_id = rejoin_room, .user_id = user_id, .display_name = rejoin_name});
           !sent) {
         report(sent.error());
+      } else if (rejoin_muted) {
+        // The server builds the rejoined participant from scratch, microphone
+        // open, and nothing in the join says otherwise. Somebody who muted
+        // before the drop has not changed their mind about it, so the mute is
+        // said again, behind the join on the same socket: the server reads
+        // them in order, and the echo lands after our own user_joined, which
+        // is what marks the participant list as complete.
+        if (auto muted =
+                signaling_.send(protocol::Mute{.room_id = rejoin_room, .user_id = user_id});
+            !muted) {
+          report(muted.error());
+        }
       }
     }
     return;
@@ -1199,6 +1221,7 @@ void CallSession::handle_signal(protocol::Message message) {
         display_name_.clear();
         participants_.clear();
         screen_sharer_.clear();
+        muted_ = false;
         session.swap(audio_);
       }
     }
@@ -1543,8 +1566,10 @@ Result<std::monostate> CallSession::ensure_media_session() {
     muted = muted_;
   }
 
-  // A participant who muted before joining stays muted, and so do the volumes
-  // and devices chosen before the call.
+  // A room is entered with the microphone open - leave() clears the mute - so
+  // this is only ever true for a session rebuilt after a reconnection, where
+  // the mute from before the drop is kept and announced again. The volumes and
+  // devices chosen before the call carry over the same way.
   session->set_microphone_muted(muted);
 
   std::unordered_map<std::string, double> volumes;

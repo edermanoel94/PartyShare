@@ -305,6 +305,14 @@ class CallSession {
                                             const std::string& display_name);
   [[nodiscard]] Result<std::monostate> leave();
 
+  /// Mutes or unmutes this participant's microphone, and tells the room.
+  ///
+  /// Only inside a room: it fails with `not_in_room` outside one. The mute
+  /// belongs to the stay in the room, not to the account - leaving, or being
+  /// removed, clears it, and every room is entered with the microphone open.
+  /// That is also what the server assumes, so the two never disagree about
+  /// who can be heard. A reconnection in the middle of a call is the one
+  /// exception: the mute from before the drop is kept and announced again.
   [[nodiscard]] Result<std::monostate> set_muted(bool muted);
   [[nodiscard]] bool muted() const;
 

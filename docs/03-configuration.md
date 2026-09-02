@@ -66,7 +66,10 @@ microphone, the output device, the screen resolution and frame rate, both ends o
 the bitrate range, the share sound mode and its volume, noise suppression, the
 room chime, and whether it checks for new versions. The monitor is the one thing
 on that screen that is not saved, because it is which screen to share next
-rather than a setting.
+rather than a setting. With more than one monitor the **Share screen** button
+asks the same question in a menu each time a share starts, and the box in
+Settings follows whatever was last chosen either way. Left alone, the primary
+monitor is shared - one screen, never every screen stitched side by side.
 
 **Check GitHub for new versions** sits in the Connection group rather than beside
 the room chime, though both are `[ui]` settings. The question it answers is not

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -829,16 +830,56 @@ TEST_F(CallSessionTest, MuteIsConfirmedByTheServerBeforeItShows) {
   }));
 }
 
-TEST_F(CallSessionTest, MutingBeforeJoiningSurvivesTheJoin) {
+TEST_F(CallSessionTest, MutingOutsideARoomIsRefused) {
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());
-  ASSERT_TRUE(ana.session().set_muted(true).ok());
 
+  // A room is always entered with the microphone open, so a mute out here
+  // would be thrown away at the door. Saying no beats promising it.
+  const auto refused = ana.session().set_muted(true);
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "not_in_room");
+  EXPECT_FALSE(ana.session().muted());
+}
+
+TEST_F(CallSessionTest, LeavingTheRoomClearsTheMute) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
   const std::string room = ana.create_room();
   ASSERT_FALSE(room.empty());
   ASSERT_TRUE(ana.join(room));
 
-  EXPECT_TRUE(wait_until([&] { return ana.audio().muted.load(); }));
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(wait_until([&] { return bruno.participants().size() == 2; }));
+
+  const auto ana_as_bruno_sees_her = [&]() -> std::optional<bool> {
+    for (const Participant& participant : bruno.participants()) {
+      if (participant.user.id == ana.session().local_user().id) {
+        return participant.muted;
+      }
+    }
+    return std::nullopt;
+  };
+
+  ASSERT_TRUE(ana.session().set_muted(true).ok());
+  ASSERT_TRUE(wait_until([&] { return ana_as_bruno_sees_her() == true; }));
+
+  ASSERT_TRUE(ana.session().leave().ok());
+  EXPECT_FALSE(ana.session().muted());
+  ASSERT_TRUE(wait_until([&] { return bruno.participants().size() == 1; }));
+
+  // Back in with the microphone open on every side of the wire: what this
+  // client's button reads, the media session it rebuilds, and what the other
+  // participant is told. Before this, the first was "muted", the third was
+  // "not", and nobody could hear her.
+  const std::size_t offers_before = ana.audio().offer_count();
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(wait_until([&] { return ana.audio().offer_count() > offers_before; }));
+  EXPECT_FALSE(ana.session().muted());
+  EXPECT_FALSE(ana.audio().muted.load());
+  ASSERT_TRUE(wait_until([&] { return ana_as_bruno_sees_her() == false; }));
 }
 
 TEST_F(CallSessionTest, RemoteAudioMarksTheParticipant) {

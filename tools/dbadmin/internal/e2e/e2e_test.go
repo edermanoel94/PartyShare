@@ -189,10 +189,10 @@ func TestAnAdministratorIsCreatedAndRecorded(t *testing.T) {
 			entry.ActorUsername)
 	}
 
-	// And the screen shows it, from the database and not from memory. 3 rather
-	// than tab: the rooms screen sits between the two now, and this test is
-	// about the log rather than about how you get to it.
-	screen.press("3")
+	// And the screen shows it, from the database and not from memory. 4 rather
+	// than tab: the rooms and sessions screens sit between the two now, and
+	// this test is about the log rather than about how you get to it.
+	screen.press("4")
 	screen.awaits(t, "create_user")
 	screen.awaits(t, "username=ana role=admin")
 }

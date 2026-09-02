@@ -794,6 +794,29 @@ Result<std::monostate> CallSession::restrict_user(const protocol::RestrictUser& 
   return signaling_.send(change);
 }
 
+Result<std::monostate> CallSession::send_notice(const std::string& user_id,
+                                                const std::string& text) {
+  if (user_id.empty()) {
+    return Result<std::monostate>::failure("invalid_value", "a notice needs somebody to go to");
+  }
+  // Refused here as well as by the server, for the reason send_chat checks its
+  // own text: a box with nothing in it is not worth a round trip, and the
+  // person typing it deserves to be told before they wait for an answer.
+  if (!models::is_valid_notice_text(text)) {
+    return Result<std::monostate>::failure(
+        "invalid_value", "a notice must not be empty and must fit in " +
+                             std::to_string(models::kMaxNoticeTextBytes) + " bytes");
+  }
+  return signaling_.send(protocol::SendNotice{.user_id = user_id, .text = text});
+}
+
+Result<std::monostate> CallSession::acknowledge_notice(const std::string& notice_id) {
+  if (notice_id.empty()) {
+    return Result<std::monostate>::failure("invalid_value", "a notice has to be named");
+  }
+  return signaling_.send(protocol::AcknowledgeNotice{.notice_id = notice_id});
+}
+
 Result<std::monostate> CallSession::list_users() {
   return signaling_.send(protocol::ListUsers{});
 }
@@ -1015,6 +1038,30 @@ void CallSession::handle_signal(protocol::Message message) {
                                        restricted->by_user_id, restricted->reason);
     }
     publish_participants();
+    return;
+  }
+
+  if (const auto* notice = std::get_if<protocol::Notice>(&message)) {
+    Callbacks handlers;
+    bool for_us = false;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      // The one field that decides which of the two this is. The server sends
+      // the same row to the recipient and to the administrator who wrote it,
+      // and only the recipient is being told something: for anybody else it is
+      // the receipt for what they just sent. An administrator writing to
+      // themselves gets one copy, and it is the first case.
+      for_us = notice->notice.user_id == local_user_.id;
+      handlers = callbacks_;
+    }
+
+    if (for_us) {
+      if (handlers.on_notice) {
+        handlers.on_notice(notice->notice);
+      }
+    } else if (handlers.on_notice_sent) {
+      handlers.on_notice_sent(notice->notice);
+    }
     return;
   }
 

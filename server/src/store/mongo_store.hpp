@@ -7,7 +7,9 @@
 
 #include "store/audit_log.hpp"
 #include "store/chat_store.hpp"
+#include "store/notice_store.hpp"
 #include "store/room_store.hpp"
+#include "store/session_store.hpp"
 #include "store/user_store.hpp"
 
 namespace dv::server::store {
@@ -21,10 +23,12 @@ namespace dv::server::store {
 ///
 /// Collections, all in the database named in the configuration:
 ///
-///   users    one document per account, unique index on `username`
-///   rooms    one document per persistent room, unique index on `id`
-///   chat     one document per message, index on `room_id` and time
-///   audit    one document per administrative action, index on `timestamp`
+///   users     one document per account, unique index on `username`
+///   rooms     one document per persistent room, unique index on `id`
+///   chat      one document per message, index on `room_id` and time
+///   notices   one document per administrator's message to one account
+///   sessions  one document per connected session, open and closed alike
+///   audit     one document per administrative action, index on `timestamp`
 ///
 /// Every call is synchronous and happens with the server's lock held. That is
 /// affordable because none of them is on the path of a media packet: an
@@ -54,6 +58,8 @@ class MongoStores {
   [[nodiscard]] UserStore& users() noexcept;
   [[nodiscard]] RoomStore& rooms() noexcept;
   [[nodiscard]] ChatStore& chat() noexcept;
+  [[nodiscard]] NoticeStore& notices() noexcept;
+  [[nodiscard]] SessionStore& sessions() noexcept;
   [[nodiscard]] AuditLog& audit() noexcept;
 
  private:

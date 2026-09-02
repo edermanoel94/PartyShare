@@ -32,9 +32,15 @@ Hub::Hub(Options options)
       owned_users_(options.users == nullptr ? std::make_unique<store::MemoryUserStore>() : nullptr),
       owned_rooms_(options.rooms == nullptr ? std::make_unique<store::MemoryRoomStore>() : nullptr),
       owned_chat_(options.chat == nullptr ? std::make_unique<store::MemoryChatStore>() : nullptr),
+      owned_notices_(options.notices == nullptr ? std::make_unique<store::MemoryNoticeStore>()
+                                                : nullptr),
+      owned_sessions_(options.sessions == nullptr ? std::make_unique<store::MemorySessionStore>()
+                                                  : nullptr),
       owned_audit_(options.audit == nullptr ? std::make_unique<store::MemoryAuditLog>() : nullptr),
       users_(options.users != nullptr ? options.users : owned_users_.get()),
       chat_(options.chat != nullptr ? options.chat : owned_chat_.get()),
+      notices_(options.notices != nullptr ? options.notices : owned_notices_.get()),
+      sessions_(options.sessions != nullptr ? options.sessions : owned_sessions_.get()),
       audit_(options.audit != nullptr ? options.audit : owned_audit_.get()),
       owned_restrictions_(options.restrictions == nullptr
                               ? std::make_unique<StoreRestrictionSource>(*users_)
@@ -50,6 +56,14 @@ Hub::Hub(Options options)
   // Rooms somebody wrote down have to still exist after a restart.
   if (const std::size_t loaded = rooms_.load_rooms(); loaded > 0) {
     DV_LOG_INFO("Loaded {} room(s) from the store", loaded);
+  }
+
+  // Sessions from a run that was killed rather than stopped. Nobody else will
+  // ever close them, and left open they are people this server would report as
+  // connected for as long as the database exists. See SessionStore::close_open,
+  // which stamps each with when it was last heard from rather than with now.
+  if (const std::size_t recovered = sessions_->close_open(); recovered > 0) {
+    DV_LOG_WARN("Closed {} session(s) left open by a previous run", recovered);
   }
 }
 
@@ -129,13 +143,51 @@ void Hub::record(const models::User& actor, std::string action, std::string targ
   }
 }
 
-void Hub::on_connect(ConnectionId connection, Clock::time_point now) {
+void Hub::on_connect(ConnectionId connection, std::string remote_address, Clock::time_point now) {
   Connection state;
   state.id = connection;
+  state.remote_address = std::move(remote_address);
   state.last_seen = now;
   state.last_ping = now;
   connections_.insert_or_assign(connection, std::move(state));
   DV_LOG_DEBUG("Connection {} opened", connection);
+}
+
+void Hub::open_session(Connection& connection) {
+  if (!connection.user.has_value()) {
+    return;
+  }
+
+  auto opened = sessions_->open(
+      store::SessionRecord{.user_id = connection.user->id, .ip = connection.remote_address});
+  if (!opened) {
+    // Warning and not error, which is the difference between this and the
+    // audit log. An administrative action that was not recorded is the hole an
+    // audit log exists to close; a session that was not recorded is a row
+    // missing from a presence report, and the person is in the room either
+    // way. See store::SessionStore.
+    DV_LOG_WARN(
+        "Session for {} on connection {} was not recorded: {}",
+        models::user_label(connection.user->id, connection.user->display_name, connection.username),
+        connection.id, opened.error().message);
+    return;
+  }
+  connection.session_id = std::move(opened).take().id;
+}
+
+void Hub::close_session(Connection& connection) {
+  if (connection.session_id.empty()) {
+    return;
+  }
+  // Cleared before the write, and unconditionally: whether or not the store
+  // could be reached, this connection is done with that row, and a second
+  // attempt from another of the three ways a session ends would be a second
+  // failure to log about the same thing.
+  const std::string session_id = std::exchange(connection.session_id, std::string{});
+  if (auto failure = sessions_->close(session_id)) {
+    DV_LOG_WARN("Session {} on connection {} was not closed: {}", session_id, connection.id,
+                failure->message);
+  }
 }
 
 Hub::Connection* Hub::find_connection(ConnectionId connection) {
@@ -301,6 +353,12 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else if constexpr (std::is_same_v<T, protocol::ListChat>) {
           handle_list_chat(out, *state, value);
 
+        } else if constexpr (std::is_same_v<T, protocol::SendNotice>) {
+          handle_send_notice(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::AcknowledgeNotice>) {
+          handle_acknowledge_notice(out, *state, value);
+
         } else if constexpr (std::is_same_v<T, protocol::Ping>) {
           out.push_back(Outgoing{.connection = state->id, .message = protocol::Pong{value.nonce}});
 
@@ -368,6 +426,12 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
   if (const auto previous = connection_of_user(value.user.id);
       previous.has_value() && *previous != connection.id) {
     if (Connection* stale = find_connection(*previous)) {
+      // Before the identity goes, because closing the row needs neither - it
+      // needs the identifier this connection is holding - but the order is
+      // what makes the presence collection agree with `user_to_connection_`:
+      // one account, one open session, at the same instant both stop being
+      // true of the old socket.
+      close_session(*stale);
       stale->user.reset();
       stale->room_id.reset();
       stale->username.clear();
@@ -388,6 +452,28 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
                .message = protocol::Authenticated{.user = value.user,
                                                   .token = value.token,
                                                   .expires_in_seconds = value.expires_in_seconds}});
+
+  open_session(connection);
+  // After `authenticated`, and that order is the contract: a client is not
+  // expected to make sense of a message about its account before it has been
+  // told which account it is.
+  deliver_pending_notices(out, connection);
+}
+
+void Hub::deliver_pending_notices(std::vector<Outgoing>& out, const Connection& connection) {
+  if (!connection.user.has_value()) {
+    return;
+  }
+
+  const std::vector<models::Notice> pending = notices_->pending_for(connection.user->id);
+  for (const models::Notice& notice : pending) {
+    out.push_back(Outgoing{.connection = connection.id, .message = protocol::Notice{notice}});
+  }
+  if (!pending.empty()) {
+    DV_LOG_INFO("Delivered {} outstanding notice(s) to {}", pending.size(),
+                models::user_label(connection.user->id, connection.user->display_name,
+                                   connection.username));
+  }
 }
 
 models::User* Hub::authenticated(std::vector<Outgoing>& out, Connection& connection) {
@@ -885,6 +971,110 @@ void Hub::handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
                          .message = chat_history(message.room_id, message.limit)});
 }
 
+void Hub::handle_send_notice(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::SendNotice& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  if (!models::is_valid_notice_text(message.text)) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_value",
+                      .message = "a notice must not be empty and must fit in " +
+                                 std::to_string(models::kMaxNoticeTextBytes) + " bytes"});
+    return;
+  }
+
+  // The account has to exist. Not a formality: a notice to an identifier
+  // nobody answers to is a row that will never be delivered and never be
+  // acknowledged, and the administrator who mistyped it would be waiting on an
+  // answer from nobody.
+  const auto target = users_->find_by_id(message.user_id);
+  if (!target.has_value()) {
+    reply_error(out, connection.id,
+                Error{.code = "user_not_found", .message = "no account with that identifier"});
+    return;
+  }
+
+  auto written =
+      notices_->append(models::Notice{.user_id = target->user.id,
+                                      .from_user_id = actor->id,
+                                      // The name they hold now, kept with the notice. The
+                                      // recipient may read it a week later, by which time the
+                                      // administrator may have renamed themselves or gone.
+                                      .from_display_name = actor->display_name,
+                                      .text = models::trim_notice_text(message.text)});
+  if (!written) {
+    // Refused rather than delivered anyway, which is the opposite of what an
+    // audit failure does and the same as what a chat failure does. The store
+    // is the notice: an unwritten one has no identifier, so nobody could
+    // acknowledge it, and an administrator would be told it was sent while
+    // nothing was.
+    reply_error(out, connection.id, written.error());
+    return;
+  }
+
+  const models::Notice notice = std::move(written).take();
+  const protocol::Notice delivered{notice};
+
+  // To the recipient if they are here, and to the administrator either way.
+  // The administrator's copy is the confirmation - it carries the identifier
+  // and the moment the store assigned - and a client tells the two apart by
+  // whether the notice names it as the recipient.
+  //
+  // Once and not twice when an administrator writes to their own account,
+  // which is allowed and is a reasonable way to leave oneself a note. Two
+  // copies of one row would be two boxes to dismiss and only one of them
+  // acknowledgeable.
+  const std::optional<ConnectionId> target_connection = connection_of_user(notice.user_id);
+  if (target_connection.has_value()) {
+    out.push_back(Outgoing{.connection = *target_connection, .message = delivered});
+  }
+  if (target_connection != connection.id) {
+    out.push_back(Outgoing{.connection = connection.id, .message = delivered});
+  }
+
+  DV_LOG_INFO("{} sent a notice to {}", user_label(actor->id), user_label(notice.user_id));
+  record(*actor, "send_notice", notice.user_id, {}, "notice=" + notice.id + " " + notice.text);
+}
+
+void Hub::handle_acknowledge_notice(std::vector<Outgoing>& out, Connection& connection,
+                                    const protocol::AcknowledgeNotice& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  // The account is the connection's own and is not a field of the message, so
+  // there is nothing here anybody could aim somewhere else. Same argument as
+  // protocol::ChangePassword.
+  auto acknowledged = notices_->acknowledge(message.notice_id, actor->id);
+  if (!acknowledged) {
+    reply_error(out, connection.id, acknowledged.error());
+    return;
+  }
+
+  const models::Notice notice = std::move(acknowledged).take();
+  DV_LOG_INFO("{} acknowledged the notice {} sent them", user_label(actor->id),
+              user_label(notice.from_user_id));
+
+  // The audit log is where this lands and the only place it does. Nothing goes
+  // back to the administrator on the wire, on purpose: they may well not be
+  // connected - a notice exists precisely because the two of them need not be
+  // here at the same time - and a receipt that only arrives when they happen
+  // to be online is a receipt nobody can rely on. The entry is there whether
+  // they read it a minute or a month later.
+  //
+  // The actor is the person acknowledging, which makes this the one entry in
+  // the log written by somebody who is not an administrator. It belongs there
+  // all the same: it is the second half of an administrative action, and an
+  // action whose outcome is recorded somewhere else is one nobody can follow
+  // through.
+  record(*actor, "acknowledge_notice", actor->id, {},
+         "notice=" + notice.id + " from=" + user_label(notice.from_user_id));
+}
+
 std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_point /*now*/) {
   std::vector<Outgoing> out;
 
@@ -892,6 +1082,10 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
   if (it == connections_.end()) {
     return out;
   }
+  // Before the copy and the erase, because it writes to the connection: the
+  // row it closes is the one this socket opened, and after the erase there is
+  // nowhere to record that it has been dealt with.
+  close_session(it->second);
   const Connection state = it->second;
   connections_.erase(it);
 
@@ -940,15 +1134,31 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
 std::vector<Outgoing> Hub::tick(Clock::time_point now, std::vector<ConnectionId>& timed_out) {
   std::vector<Outgoing> out;
 
+  // Collected in the same pass that pings, and written in one call below. A
+  // connection this pass has given up on is left out: it is about to be closed
+  // by the caller, and saying it was seen just now is the one thing that would
+  // keep it looking present in a presence report for another interval.
+  std::vector<std::string> alive;
+  alive.reserve(connections_.size());
+
   for (auto& [id, state] : connections_) {
     if (now - state.last_seen >= options_.heartbeat_timeout) {
       timed_out.push_back(id);
       continue;
     }
+    if (!state.session_id.empty()) {
+      alive.push_back(state.session_id);
+    }
     if (now - state.last_ping >= options_.heartbeat_interval) {
       state.last_ping = now;
       out.push_back(Outgoing{.connection = id, .message = protocol::Ping{}});
     }
+  }
+
+  // One write for every open session at once, which is what keeps a database
+  // out of the per connection cost of a heartbeat. See SessionStore::touch.
+  if (auto failure = sessions_->touch(alive)) {
+    DV_LOG_WARN("Could not refresh {} session(s): {}", alive.size(), failure->message);
   }
 
   authenticator_.expire_tokens(now);
@@ -1264,6 +1474,13 @@ void Hub::end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
 
   if (const auto target = connection_of_user(user_id)) {
     if (Connection* state = find_connection(*target)) {
+      // The presence row goes with the identity, and for the same reason: from
+      // here the socket is nobody, so an open session naming this account
+      // would be a report that somebody banned two minutes ago is still on the
+      // platform. The socket itself stays open - see the note above this
+      // function - and if they log in again that is a new session and a new
+      // row, which is exactly what it is.
+      close_session(*state);
       state->user.reset();
       state->room_id.reset();
       state->username.clear();
@@ -1435,25 +1652,26 @@ void Hub::handle_change_password(std::vector<Outgoing>& out, Connection& connect
               models::user_label(account.id, account.display_name, connection.username));
   record(account, "change_password", account.id, {}, "password");
 
-  // Out of any room first. What follows stops this connection from being
-  // answered, and a participant list still holding somebody whose session has
-  // ended is a room with a ghost in it. The interface only offers the change
-  // from the home screen, so this is the defensive path rather than the usual
-  // one - but "the client would not do that" is not a property the server can
-  // rely on.
-  if (const auto room_id = rooms_.room_of(account.id)) {
-    evict(out, *room_id, account.id, "the password was changed");
-  }
-
-  // Every session of the account, this one included. A password is most often
-  // changed because the old one is believed to be loose, and a change that
-  // leaves the tokens the old one minted alive for another eight hours has not
-  // closed the door it was opened to close. The cost is one sign-in, paid by
-  // somebody who has just proved they know the new password.
-  authenticator_.revoke_tokens_of(account.id);
-  user_to_connection_.erase(account.id);
-  connection.user.reset();
-  connection.room_id.reset();
+  // Every session of the account, this one included: out of any room, tokens
+  // revoked, the identity dropped and the presence row closed. A password is
+  // most often changed because the old one is believed to be loose, and a
+  // change that leaves the tokens the old one minted alive for another eight
+  // hours has not closed the door it was opened to close. The cost is one
+  // sign-in, paid by somebody who has just proved they know the new password.
+  //
+  // Through `end_session_of` and not written out here, which it used to be.
+  // That function says why in its own comment: the same four steps
+  // transcribed in several places is how two of them quietly stop doing one of
+  // them, and this copy had already stopped doing the fourth - it left the
+  // session record open, so a database somebody else was reading went on
+  // reporting this account as connected.
+  //
+  // The room is left first either way, because `evict` reads the participant
+  // before announcing them gone. The interface only offers this change from
+  // the home screen, so a caller in a room is the defensive path rather than
+  // the usual one - but "the client would not do that" is not a property the
+  // server can rely on.
+  end_session_of(out, account.id, "the password was changed");
 
   // Sent after the session is gone, and it is the only thing that makes the
   // change visible to the client: nothing else about this connection changes
@@ -1586,6 +1804,17 @@ void Hub::handle_delete_user(std::vector<Outgoing>& out, Connection& connection,
   if (auto failure = users_->remove(message.user_id)) {
     reply_error(out, connection.id, *failure);
     return;
+  }
+
+  // After the account has gone, and not allowed to fail the deletion. These
+  // are messages written to a named person, so leaving them behind would be a
+  // row addressed to an identifier nothing answers to - but the account is
+  // already removed by this point, and refusing now would leave the two
+  // collections disagreeing in the worse direction.
+  if (auto failure = notices_->clear_for(message.user_id)) {
+    DV_LOG_ERROR("Notices for the deleted account {} were not removed: {}",
+                 models::user_label(message.user_id, account->user.display_name, account->username),
+                 failure->message);
   }
 
   DV_LOG_INFO("{} deleted account {}",

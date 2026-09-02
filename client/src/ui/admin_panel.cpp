@@ -12,7 +12,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -59,12 +61,19 @@ QWidget* AdminPanel::build_users_tab() {
   auto* controls = new QHBoxLayout();
   create_user_ = new QPushButton(QStringLiteral("New account"), page);
   create_user_->setProperty("accent", true);
+  send_notice_ = new QPushButton(QStringLiteral("Message"), page);
   change_role_ = new QPushButton(QStringLiteral("Change role"), page);
   reset_password_ = new QPushButton(QStringLiteral("Reset password"), page);
   restrict_user_ = new QPushButton(QStringLiteral("Restrictions"), page);
   delete_user_ = new QPushButton(QStringLiteral("Delete"), page);
   delete_user_->setProperty("danger", true);
   controls->addWidget(create_user_);
+  // Next to the account controls and not among the restrictions, which is
+  // where it looks like it belongs. Telling somebody something is the one
+  // thing on this row that takes nothing away from them, and an administrator
+  // reaching for it after a warning rather than before one is the order this
+  // feature exists to make possible.
+  controls->addWidget(send_notice_);
   controls->addWidget(change_role_);
   controls->addWidget(reset_password_);
   controls->addWidget(restrict_user_);
@@ -73,6 +82,7 @@ QWidget* AdminPanel::build_users_tab() {
   column->addLayout(controls);
 
   connect(create_user_, &QPushButton::clicked, this, &AdminPanel::on_create_user);
+  connect(send_notice_, &QPushButton::clicked, this, &AdminPanel::on_send_notice);
   connect(change_role_, &QPushButton::clicked, this, &AdminPanel::on_change_role);
   connect(reset_password_, &QPushButton::clicked, this, &AdminPanel::on_reset_password);
   connect(restrict_user_, &QPushButton::clicked, this, &AdminPanel::on_restrict_user);
@@ -121,7 +131,11 @@ QWidget* AdminPanel::build_audit_tab() {
   column->addWidget(audit_, 1);
 
   auto* note = new QLabel(
-      QStringLiteral("Newest first. Only administrative actions are recorded here."), page);
+      // "And their answers": acknowledge_notice is written by the person who
+      // read a notice, not by an administrator, and a footer that said only
+      // administrators appear here would be contradicted by the row above it.
+      QStringLiteral("Newest first. Administrative actions and their answers are recorded here."),
+      page);
   note->setProperty("hint", true);
   column->addWidget(note);
   return page;
@@ -179,6 +193,7 @@ void AdminPanel::apply_users(const QStringList& rows) {
     };
     accounts_.insert(id, Account{
                              .username = fields.value(1),
+                             .display_name = fields.value(2),
                              .role = models::role_from_string(fields.value(3).toStdString()),
                              .restrictions = models::Restrictions{.banned = flag(0),
                                                                   .muted = flag(1),
@@ -272,6 +287,101 @@ void AdminPanel::on_reset_password() {
   change.user_id = user_id.toStdString();
   change.password = password.toStdString();
   (void)send(session_.update_user(change));
+}
+
+QString AdminPanel::label_for(const QString& user_id) const {
+  const auto account = accounts_.constFind(user_id);
+  if (account == accounts_.constEnd()) {
+    return user_id;
+  }
+  return QString::fromStdString(models::user_label(
+      user_id.toStdString(), account->display_name.toStdString(), account->username.toStdString()));
+}
+
+void AdminPanel::on_send_notice() {
+  const QString user_id = selected_id(users_);
+  if (user_id.isEmpty()) {
+    return;
+  }
+  const auto account = accounts_.constFind(user_id);
+  if (account == accounts_.constEnd()) {
+    return;
+  }
+  const QString username = account->username;
+
+  QDialog dialog(this);
+  dialog.setWindowTitle(QStringLiteral("Message %1").arg(username));
+  auto* column = new QVBoxLayout(&dialog);
+
+  auto* intro = new QLabel(
+      QStringLiteral("%1 sees this in a box they have to dismiss. If they are not signed in, "
+                     "it waits for them and arrives the next time they are.")
+          .arg(username),
+      &dialog);
+  // Wrapped, or the sentence sets the width of the dialog: a QLabel with one
+  // long line asks for all of it, and the box comes up wider than the window
+  // it was opened from.
+  intro->setWordWrap(true);
+  column->addWidget(intro);
+  dialog.setMinimumWidth(420);
+
+  auto* text = new QPlainTextEdit(&dialog);
+  text->setPlaceholderText(QStringLiteral("What %1 should read").arg(username));
+  // Four lines of room. Enough to see the whole of what fits, which is the
+  // point of the limit below: a notice longer than this wants the room's chat.
+  text->setFixedHeight(text->fontMetrics().lineSpacing() * 5);
+  column->addWidget(text);
+
+  auto* remaining = new QLabel(&dialog);
+  // Quiet until it is not. `error` sits after `hint` in the stylesheet, so the
+  // two carry equal specificity and the later one wins when both are set,
+  // which is what lets the counter change colour by gaining one property
+  // rather than by swapping two.
+  remaining->setProperty("hint", true);
+  column->addWidget(remaining);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Send"));
+  column->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  // The same rule the server applies, applied as the person types. It is the
+  // one field of this dialog that can be wrong, and being told at the moment
+  // it goes wrong is worth more than being refused after pressing Send.
+  //
+  // Bytes and not characters, because the limit is in bytes and an emoji is
+  // four of them: a counter that promised 500 characters would refuse a
+  // message it had just said was fine.
+  const auto update = [text, remaining, buttons] {
+    const std::string typed = text->toPlainText().toStdString();
+    const std::string trimmed = models::trim_notice_text(typed);
+    const auto limit = static_cast<qsizetype>(models::kMaxNoticeTextBytes);
+    const auto used = static_cast<qsizetype>(trimmed.size());
+
+    remaining->setText(QStringLiteral("%1 of %2 bytes").arg(used).arg(limit));
+    remaining->setProperty("error", used > limit);
+    // Qt applies a stylesheet at the moment a widget is polished, so a
+    // property changed afterwards does nothing until the widget is asked to
+    // look at itself again.
+    remaining->style()->unpolish(remaining);
+    remaining->style()->polish(remaining);
+
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(models::is_valid_notice_text(typed));
+  };
+  connect(text, &QPlainTextEdit::textChanged, &dialog, update);
+  update();
+
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+
+  // Nothing is shown here on the way out. The confirmation is the server
+  // saying it wrote the notice down, which arrives as the notice itself and
+  // reaches the status line through MainWindow::apply_notice_sent - and a
+  // dialog that congratulated itself on having sent a message would be
+  // claiming something it cannot know yet.
+  (void)send(session_.send_notice(user_id.toStdString(), text->toPlainText().toStdString()));
 }
 
 void AdminPanel::on_restrict_user() {

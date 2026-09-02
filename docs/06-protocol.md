@@ -308,6 +308,10 @@ Promoting or demoting somebody therefore takes effect on their next action rathe
 | `list_rooms` | | |
 | `delete_room` | `room_id` | |
 | `list_audit` | | `limit`, `actor_id` |
+| `send_notice` | `user_id`, `text` | |
+
+`send_notice` is described on its own in section 4.9, with the two messages that answer it.
+It is listed here because the gate is the same one: telling an account something reaches a person who is in no room and, if they are not connected, a person who is not there at all, and that reach is what makes it administration rather than a message.
 
 **Server to client.**
 
@@ -473,17 +477,85 @@ That is deliberate, and it is the reason the change is worth making at all: a pa
 The audit log records `change_password` with the account as both actor and target.
 Neither password appears in the entry, in any form.
 
-### 4.9 Who may send what
+### 4.9 Notices
+
+One administrator, one account, one message, one button.
+
+| Type | Direction | Mandatory fields | Optional fields |
+| --- | --- | --- | --- |
+| `send_notice` | client to server | `user_id`, `text` | |
+| `notice` | server to client | `notice` | |
+| `acknowledge_notice` | client to server | `notice_id` | |
+
+`notice` is an object of this shape:
+
+```json
+{
+  "id": "6890f2...",
+  "user_id": "user123",
+  "from_user_id": "admin456",
+  "from_display_name": "Ana",
+  "text": "your microphone is picking up the room, please use a headset",
+  "created_at": 1755676800,
+  "acknowledged_at": 0
+}
+```
+
+A notice is deliberately not a chat message, and every difference is the design.
+A chat line belongs to a room, is shown to everybody in it, and needs no answer.
+A notice belongs to an account, is shown to nobody else, and exists to be answered — the answer being one button that says the person saw it.
+It also takes no `room_id`: it is about the account and not about where they happen to be, which is what lets it be sent to somebody who is not connected at all.
+
+Only `send_notice` is administration, and it is the one of the three that appears in the table of section 4.7.
+Being told something is not a power over anybody, and neither is saying you were told, so `notice` and `acknowledge_notice` are open to any authenticated connection.
+An ordinary user who could not acknowledge would be an ordinary user with a box on their screen that never goes away.
+
+`text` is between one and 500 bytes once the whitespace around it has been removed, and the server stores it trimmed.
+A quarter of what a chat line may be, and the smaller limit is the point: this is an instruction aimed at one person, delivered as a box they have to dismiss, and anything that does not fit in a few lines is a conversation that wants the room's chat instead.
+Anything outside the range is answered `invalid_value`, and a `user_id` no account answers to is answered `user_not_found`.
+
+The server writes the notice before it delivers it, and a store that refuses it stops the notice.
+That is the same rule `chat_message` follows in section 4.5 and it is stronger here: the store *is* the notice.
+An unwritten one has no `id`, so nobody could acknowledge it — and if the recipient was offline, an administrator would have been told a message was sent while nothing was.
+
+What comes back to the administrator is the `notice` itself, carrying the `id` and the `created_at` the store assigned.
+That is the confirmation, and it is the same message the recipient gets rather than a type of its own: both of them want the row that now exists.
+A client tells the two apart by `user_id`, which names the recipient.
+An administrator who writes to their own account gets one copy, and it is a notice to be read.
+
+**Delivery.**
+The recipient is sent the `notice` at once if they are connected, and again at the start of every session that still owes an answer, immediately after `authenticated`.
+A client that was closed when it was written is told the next time it opens; one that was shown a notice and did not answer is shown it again.
+A sign-in hands over at most twenty outstanding notices, oldest first, and the rest arrive at the next one as those are acknowledged.
+Nothing is dropped: what the cap buys is that somebody who was away for a month signs in to a screen they can get through.
+
+**Acknowledging.**
+`acknowledge_notice` names a notice and nothing else.
+What an administrator wanted to know is that it was seen and by whom, and the server already knows both from the notice and from whose connection the message arrived on — a field for anything else would be a field a client could put something untrue in.
+
+The server accepts it only for a notice addressed to the account the connection resolves to.
+An identifier belonging to somebody else is answered `notice_not_found`, exactly as an identifier belonging to nobody is, so being refused says nothing about whether the notice exists.
+Acknowledging one that is already acknowledged is not an error: a client that reconnected and was handed the same notice twice is doing the only correct thing with it.
+
+Nothing goes back to the administrator on the wire.
+The acknowledgement is recorded in the audit log as `acknowledge_notice`, with the person who read it as the actor, and that is where it is read.
+A receipt that only arrived while the administrator happened to be connected would be a receipt nobody could rely on — and the two of them needing not to be online at the same time is the whole reason a notice exists.
+
+Deleting an account removes every notice ever sent to it.
+These are messages written to a named person, and a record with a subject and no owner is not one worth keeping.
+
+### 4.10 Who may send what
 
 | Role | May send |
 | --- | --- |
-| `user` | `authenticate`, `change_password`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `ping`, `pong` |
-| `admin` | everything above, plus every message in section 4.7 |
+| `user` | `authenticate`, `change_password`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `acknowledge_notice`, `ping`, `pong` |
+| `admin` | everything above, plus every message in section 4.7 and `send_notice` |
 
 This table says what a role may send, not who they may send it about.
 Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
+`acknowledge_notice` is the same shape of rule: anybody may send one, and the server accepts it only for a notice addressed to them.
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `user_list`, `room_list`, `audit_list` and `error`.
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
@@ -511,6 +583,7 @@ The message alongside them is for humans only and may change.
 | `invalid_target` | The action cannot be aimed at that user, such as an administrator kicking or deleting themselves |
 | `last_administrator` | The action would leave the system with no administrator |
 | `invalid_password` | The `current_password` sent with `change_password` is not the account's password |
+| `notice_not_found` | No notice with that `notice_id` is addressed to this account, which covers one that does not exist and one belonging to somebody else |
 | `invalid_value` | A field is present and of the right type, but its value is not usable |
 | `database_error` | The persistence layer could not carry out the operation |
 

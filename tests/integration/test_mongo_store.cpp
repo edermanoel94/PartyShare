@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <dv/models/chat.hpp>
+#include <dv/models/notice.hpp>
 #include <dv/models/user.hpp>
 
 #include "signaling/authenticator.hpp"
@@ -84,6 +85,15 @@ class MongoStoreTest : public ::testing::Test {
     for (const char* room_id : {"8F42A1", "B00B00"}) {
       (void)stores_->chat().clear(room_id);
     }
+    // The same reasoning for the notices: the store is asked about one account
+    // at a time, and these are the accounts the tests below write to.
+    for (const char* user_id : {"id-ana", "id-bruno", "id-carla"}) {
+      (void)stores_->notices().clear_for(user_id);
+    }
+    // The sessions have no clear at all, on purpose - a presence history an
+    // administrator can erase is not a history. Closing them is enough: every
+    // question this collection answers is about the rows that are still open.
+    (void)stores_->sessions().close_open();
   }
 
   static dv::models::ChatMessage chat_message(const std::string& room_id, const std::string& text,
@@ -94,6 +104,25 @@ class MongoStoreTest : public ::testing::Test {
     value.display_name = "Ana";
     value.text = text;
     value.timestamp_seconds = when;
+    return value;
+  }
+
+  static dv::models::Notice notice(const std::string& user_id, const std::string& text) {
+    dv::models::Notice value;
+    value.user_id = user_id;
+    value.from_user_id = "id-ana";
+    value.from_display_name = "Ana";
+    value.text = text;
+    return value;
+  }
+
+  static dv::server::store::SessionRecord session(const std::string& user_id, const std::string& ip,
+                                                  std::int64_t when = 0) {
+    dv::server::store::SessionRecord value;
+    value.user_id = user_id;
+    value.ip = ip;
+    value.connected_at = when;
+    value.last_seen_at = when;
     return value;
   }
 
@@ -399,6 +428,146 @@ TEST_F(MongoStoreTest, EveryRoomIsWrittenAsItIsCreated) {
   EXPECT_EQ(record->owner_id, "id-ana");
   EXPECT_EQ(stores_->rooms().list().size(), 1U);
 }
+
+// --- notices -----------------------------------------------------------------
+//
+// The same contract MemoryNoticeStore is held to in the unit tests. Both
+// implementations answer the same questions, and a client cannot see which one
+// is behind the server, so a difference between them is a bug either way round.
+
+TEST_F(MongoStoreTest, ANoticeIsWrittenAndComesBackPending) {
+  const auto written = stores_->notices().append(notice("id-bruno", "the meeting moved"));
+  ASSERT_TRUE(written.ok()) << written.error().message;
+  EXPECT_FALSE(written.value().id.empty());
+  EXPECT_GT(written.value().created_at, 0);
+
+  const auto pending = stores_->notices().pending_for("id-bruno");
+  ASSERT_EQ(pending.size(), 1U);
+  // The identifier the caller was handed is the identifier of the row, or the
+  // recipient would be acknowledging something nothing answers to.
+  EXPECT_EQ(pending.front().id, written.value().id);
+  EXPECT_EQ(pending.front().text, "the meeting moved");
+  EXPECT_EQ(pending.front().from_display_name, "Ana");
+  EXPECT_FALSE(pending.front().acknowledged());
+}
+
+TEST_F(MongoStoreTest, PendingIsPerAccountAndOldestFirst) {
+  ASSERT_TRUE(stores_->notices().append(notice("id-bruno", "one")).ok());
+  ASSERT_TRUE(stores_->notices().append(notice("id-carla", "not yours")).ok());
+  ASSERT_TRUE(stores_->notices().append(notice("id-bruno", "two")).ok());
+
+  const auto pending = stores_->notices().pending_for("id-bruno");
+  ASSERT_EQ(pending.size(), 2U);
+  EXPECT_EQ(pending[0].text, "one");
+  EXPECT_EQ(pending[1].text, "two");
+}
+
+TEST_F(MongoStoreTest, AcknowledgingTakesItOutOfPending) {
+  const auto written = stores_->notices().append(notice("id-bruno", "read this"));
+  ASSERT_TRUE(written.ok());
+
+  const auto acknowledged = stores_->notices().acknowledge(written.value().id, "id-bruno");
+  ASSERT_TRUE(acknowledged.ok()) << acknowledged.error().message;
+  EXPECT_TRUE(acknowledged.value().acknowledged());
+  EXPECT_EQ(acknowledged.value().text, "read this");
+  EXPECT_TRUE(stores_->notices().pending_for("id-bruno").empty());
+
+  // And twice is not a failure, which is what a client that reconnected and
+  // was handed the same notice again will do.
+  const auto again = stores_->notices().acknowledge(written.value().id, "id-bruno");
+  ASSERT_TRUE(again.ok()) << again.error().message;
+}
+
+TEST_F(MongoStoreTest, ANoticeIsAcknowledgedOnlyByWhoItWasWrittenTo) {
+  const auto written = stores_->notices().append(notice("id-bruno", "for bruno"));
+  ASSERT_TRUE(written.ok());
+
+  const auto stolen = stores_->notices().acknowledge(written.value().id, "id-carla");
+  ASSERT_FALSE(stolen.ok());
+  EXPECT_EQ(stolen.error().code, "notice_not_found");
+  // Nonsense that is not even an identifier answers the same way, so being
+  // refused says nothing about whether the notice exists.
+  EXPECT_EQ(stores_->notices().acknowledge("not-an-oid", "id-carla").error().code,
+            "notice_not_found");
+
+  EXPECT_EQ(stores_->notices().pending_for("id-bruno").size(), 1U);
+}
+
+TEST_F(MongoStoreTest, ClearingTakesOneAccountsNotices) {
+  ASSERT_TRUE(stores_->notices().append(notice("id-bruno", "one")).ok());
+  ASSERT_TRUE(stores_->notices().append(notice("id-carla", "two")).ok());
+
+  ASSERT_FALSE(stores_->notices().clear_for("id-bruno").has_value());
+  EXPECT_TRUE(stores_->notices().pending_for("id-bruno").empty());
+  EXPECT_EQ(stores_->notices().pending_for("id-carla").size(), 1U);
+}
+
+// --- sessions ----------------------------------------------------------------
+
+TEST_F(MongoStoreTest, ASessionIsOpenedAndClosed) {
+  const auto opened = stores_->sessions().open(session("id-ana", "203.0.113.7"));
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  EXPECT_FALSE(opened.value().id.empty());
+  EXPECT_GT(opened.value().connected_at, 0);
+  EXPECT_TRUE(opened.value().open());
+
+  auto open = stores_->sessions().list_open();
+  ASSERT_EQ(open.size(), 1U);
+  EXPECT_EQ(open.front().user_id, "id-ana");
+  EXPECT_EQ(open.front().ip, "203.0.113.7");
+
+  ASSERT_FALSE(stores_->sessions().close(opened.value().id).has_value());
+  EXPECT_TRUE(stores_->sessions().list_open().empty());
+}
+
+TEST_F(MongoStoreTest, TouchingMovesTheHeartbeatAndNothingElse) {
+  const auto opened = stores_->sessions().open(session("id-ana", "203.0.113.7", 1000));
+  ASSERT_TRUE(opened.ok());
+
+  ASSERT_FALSE(stores_->sessions().touch({opened.value().id}).has_value());
+
+  const auto open = stores_->sessions().list_open();
+  ASSERT_EQ(open.size(), 1U);
+  EXPECT_GT(open.front().last_seen_at, 1000);
+  EXPECT_EQ(open.front().connected_at, 1000);
+}
+
+TEST_F(MongoStoreTest, TouchingAnIdentifierNothingAnswersToIsNotAFailure) {
+  // A row somebody removed by hand, and a client's invention that is not even
+  // an object identifier. Neither is a reason to fail the heartbeat of
+  // everybody else on the server.
+  EXPECT_FALSE(stores_->sessions().touch({"64b7f0c2a1e4d3b2c1a09876"}).has_value());
+  EXPECT_FALSE(stores_->sessions().touch({"not-an-oid"}).has_value());
+  EXPECT_FALSE(stores_->sessions().touch({}).has_value());
+  EXPECT_FALSE(stores_->sessions().close("not-an-oid").has_value());
+}
+
+TEST_F(MongoStoreTest, ClosingTwiceKeepsTheFirstTime) {
+  const auto opened = stores_->sessions().open(session("id-ana", "203.0.113.7", 1000));
+  ASSERT_TRUE(opened.ok());
+
+  ASSERT_FALSE(stores_->sessions().close(opened.value().id).has_value());
+  ASSERT_FALSE(stores_->sessions().close(opened.value().id).has_value());
+  EXPECT_TRUE(stores_->sessions().list_open().empty());
+}
+
+TEST_F(MongoStoreTest, RecoveryClosesWhatAKilledServerLeftOpen) {
+  ASSERT_TRUE(stores_->sessions().open(session("id-ana", "203.0.113.7", 1000)).ok());
+  ASSERT_TRUE(stores_->sessions().open(session("id-bruno", "203.0.113.8", 1000)).ok());
+
+  EXPECT_EQ(stores_->sessions().close_open(), 2U);
+  EXPECT_TRUE(stores_->sessions().list_open().empty());
+  // Nothing left to recover, which is what a second start finds.
+  EXPECT_EQ(stores_->sessions().close_open(), 0U);
+}
+
+// What a recovered row is stamped with - the moment it was last seen, not the
+// moment of recovery - has no test here, and deliberately no method to give it
+// one. SessionStore answers about open sessions, because that is the only
+// question the server has; the closed ones are read by tools/dbadmin, and
+// TestSessionsAreReadNewestFirst there is where that timestamp is checked.
+// Widening this interface to reach a field no server ever reads would be
+// paying for a test with an API somebody later has to implement twice.
 
 TEST_F(MongoStoreTest, ARefusedConnectionFailsRatherThanFallingBackToMemory) {
   // Port 1 has nothing listening on it. What matters is that this returns a

@@ -47,9 +47,13 @@ class HubAdminTest : public ::testing::Test {
     hub_.set_media_signals(&media_);
   }
 
+  /// One address per connection, from the documentation range, so that a test
+  /// about presence can tell which socket a session record came from.
+  static std::string address_of(ConnectionId id) { return "203.0.113." + std::to_string(id); }
+
   ConnectionId connect() {
     const ConnectionId id = next_connection_++;
-    hub_.on_connect(id, now_);
+    hub_.on_connect(id, address_of(id), now_);
     return id;
   }
 

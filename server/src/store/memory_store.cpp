@@ -162,6 +162,154 @@ std::optional<Error> MemoryChatStore::clear(const std::string& room_id) {
   return std::nullopt;
 }
 
+// --- notices -----------------------------------------------------------------
+
+Result<models::Notice> MemoryNoticeStore::append(models::Notice notice) {
+  notice.id = std::to_string(next_id_++);
+  if (notice.created_at == 0) {
+    notice.created_at = unix_seconds_now();
+  }
+  notices_.push_back(notice);
+
+  // Over capacity, the receipts go before the messages. Walked oldest first,
+  // taking the acknowledged ones, and only then falling back to dropping
+  // whatever is oldest: losing a notice somebody has read costs a record that
+  // they read it, and losing one they have not costs the thing itself.
+  std::size_t excess = notices_.size() > kCapacity ? notices_.size() - kCapacity : 0;
+  for (auto it = notices_.begin(); excess > 0 && it != notices_.end();) {
+    if (it->acknowledged()) {
+      it = notices_.erase(it);
+      --excess;
+    } else {
+      ++it;
+    }
+  }
+  if (excess > 0) {
+    notices_.erase(notices_.begin(), notices_.begin() + static_cast<std::ptrdiff_t>(excess));
+  }
+  return notice;
+}
+
+std::vector<models::Notice> MemoryNoticeStore::pending_for(const std::string& user_id) const {
+  std::vector<models::Notice> pending;
+  for (const models::Notice& notice : notices_) {
+    if (notice.user_id != user_id || notice.acknowledged()) {
+      continue;
+    }
+    pending.push_back(notice);
+    if (pending.size() >= static_cast<std::size_t>(NoticeStore::kMaxPendingPerDelivery)) {
+      break;
+    }
+  }
+  return pending;
+}
+
+Result<models::Notice> MemoryNoticeStore::acknowledge(const std::string& notice_id,
+                                                      const std::string& user_id) {
+  for (models::Notice& notice : notices_) {
+    if (notice.id != notice_id || notice.user_id != user_id) {
+      continue;
+    }
+    // Already acknowledged is left where it was rather than restamped. The
+    // first time somebody said they read it is the fact worth keeping.
+    if (!notice.acknowledged()) {
+      notice.acknowledged_at = unix_seconds_now();
+    }
+    return notice;
+  }
+  return Result<models::Notice>::failure(not_found("notice"));
+}
+
+std::optional<Error> MemoryNoticeStore::clear_for(const std::string& user_id) {
+  const auto removed = std::ranges::remove_if(
+      notices_, [&](const models::Notice& notice) { return notice.user_id == user_id; });
+  notices_.erase(removed.begin(), removed.end());
+  return std::nullopt;
+}
+
+// --- sessions ----------------------------------------------------------------
+
+Result<SessionRecord> MemorySessionStore::open(SessionRecord record) {
+  record.id = std::to_string(next_id_++);
+  const std::int64_t now = unix_seconds_now();
+  if (record.connected_at == 0) {
+    record.connected_at = now;
+  }
+  if (record.last_seen_at == 0) {
+    record.last_seen_at = record.connected_at;
+  }
+  sessions_.push_back(record);
+
+  // Only the ended ones are ever dropped, oldest first. A store whose rows are
+  // all open goes over its capacity and stays there, which is the right way to
+  // be wrong: there is one open row per connection this process is holding, so
+  // the number that can be there at once is bounded by the sockets and not by
+  // how long the server has been up.
+  std::size_t excess = sessions_.size() > kCapacity ? sessions_.size() - kCapacity : 0;
+  for (auto it = sessions_.begin(); excess > 0 && it != sessions_.end();) {
+    if (it->open()) {
+      ++it;
+    } else {
+      it = sessions_.erase(it);
+      --excess;
+    }
+  }
+  return record;
+}
+
+std::optional<Error> MemorySessionStore::touch(const std::vector<std::string>& ids) {
+  const std::int64_t now = unix_seconds_now();
+  for (SessionRecord& session : sessions_) {
+    if (!session.open()) {
+      continue;
+    }
+    if (std::ranges::find(ids, session.id) != ids.end()) {
+      session.last_seen_at = now;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<Error> MemorySessionStore::close(const std::string& id) {
+  for (SessionRecord& session : sessions_) {
+    if (session.id == id && session.open()) {
+      session.ended_at = unix_seconds_now();
+      break;
+    }
+  }
+  return std::nullopt;
+}
+
+std::size_t MemorySessionStore::close_open() {
+  // At startup, which is the only place the server calls this, the answer is
+  // always zero: the store was created empty a moment ago by the process
+  // asking, so a session left open by a previous run is not a state it can be
+  // in. The Mongo implementation is where the recovery has anything to
+  // recover. The loop is here anyway because the contract is about the rows,
+  // not about when it happens to be called, and a method that only works
+  // before anybody has used the store is a method with a footnote.
+  std::size_t closed = 0;
+  for (SessionRecord& session : sessions_) {
+    if (session.open()) {
+      session.ended_at = session.last_seen_at;
+      ++closed;
+    }
+  }
+  return closed;
+}
+
+std::vector<SessionRecord> MemorySessionStore::list_open() const {
+  std::vector<SessionRecord> open;
+  // Backwards, because the contract is newest first and the vector is oldest
+  // first.
+  for (auto it = sessions_.rbegin(); it != sessions_.rend(); ++it) {
+    if (it->open()) {
+      open.push_back(*it);
+    }
+  }
+  return open;
+}
+
 // --- audit -------------------------------------------------------------------
 
 std::optional<Error> MemoryAuditLog::append(models::AuditEntry entry) {

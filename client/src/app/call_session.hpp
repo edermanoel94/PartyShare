@@ -16,6 +16,7 @@
 
 #include <dv/core/result.hpp>
 #include <dv/models/chat.hpp>
+#include <dv/models/notice.hpp>
 #include <dv/models/user.hpp>
 #include <dv/protocol/message.hpp>
 
@@ -189,6 +190,24 @@ class CallSession {
     /// looking at a login screen.
     std::function<void()> on_password_changed;
 
+    /// An administrator told this account something, and is waiting to be told
+    /// it was read.
+    ///
+    /// Arrives when they send it, and again at the start of every session that
+    /// still owes an answer, so a client that was closed at the time is told
+    /// the next time it opens. The interface has to show it and, when the
+    /// person says they have read it, call `acknowledge_notice` with
+    /// `notice.id` - until then the server goes on delivering it.
+    std::function<void(models::Notice notice)> on_notice;
+
+    /// A notice this session sent somebody else was written down.
+    ///
+    /// The confirmation of `send_notice`, carrying the row that now exists.
+    /// Only ever called on an administrator's session, and never for a notice
+    /// this account is itself the recipient of - that one is `on_notice`,
+    /// because it is a message to be read rather than a receipt.
+    std::function<void(models::Notice notice)> on_notice_sent;
+
     // --- administration ---
     //
     // Only ever called on a session that authenticated as an administrator,
@@ -277,6 +296,18 @@ class CallSession {
   ///
   /// Not needed to see the conversation on joining, which arrives on its own.
   [[nodiscard]] Result<std::monostate> list_chat(int limit = 0);
+
+  /// Says that the notice `notice_id` has been read.
+  ///
+  /// Not administration: it names a notice rather than a person, and the
+  /// server accepts it only for one addressed to this account. Until it is
+  /// sent, the same notice arrives again at every sign-in, which is the point
+  /// - an administrator who wrote something down is entitled to know it was
+  /// not simply missed.
+  ///
+  /// Fails locally with `invalid_value` for an empty identifier, so a
+  /// mis-wired button is not a round trip.
+  [[nodiscard]] Result<std::monostate> acknowledge_notice(const std::string& notice_id);
 
   /// Starts sharing `monitor_id`, or the primary monitor when empty.
   ///
@@ -467,6 +498,23 @@ class CallSession {
   /// and can be applied from the administration panel to somebody who is not
   /// connected at all.
   [[nodiscard]] Result<std::monostate> restrict_user(const protocol::RestrictUser& change);
+
+  /// Tells one account something, in a box only they see and only their own
+  /// answer takes away.
+  ///
+  /// Like `restrict_user` and unlike `kick`, it needs no room: the notice is
+  /// about the account, so it can be sent to somebody who is not connected at
+  /// all and is delivered when they next sign in.
+  ///
+  /// Answered through `on_notice_sent` once the server has written it down.
+  /// Nothing comes back when the person reads it - that lands in the audit
+  /// log, where it can be read whether or not this session is still open. See
+  /// docs/05-administration.md.
+  ///
+  /// Fails locally for text the server would refuse anyway, so an empty box is
+  /// not a round trip.
+  [[nodiscard]] Result<std::monostate> send_notice(const std::string& user_id,
+                                                   const std::string& text);
 
   [[nodiscard]] Result<std::monostate> list_users();
   [[nodiscard]] Result<std::monostate> create_user(const std::string& username,

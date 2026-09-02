@@ -29,6 +29,12 @@ const (
 	columnRoomName
 	columnRoomOwner
 	columnRoomCreated
+
+	columnSessionUser
+	columnSessionIP
+	columnSessionState
+	columnSessionConnected
+	columnSessionLastSeen
 )
 
 // columnSpec is one column before it knows how wide it will be.

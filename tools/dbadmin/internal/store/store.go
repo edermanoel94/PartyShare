@@ -59,6 +59,30 @@ func ClampAuditLimit(requested int) int {
 	return requested
 }
 
+// How many sessions a query reads.
+//
+// The same numbers as the audit log, and for the same reason: this collection
+// only grows too, one row per connection, and reading history is most of what
+// this program is for. The ordering below is what makes a small limit still
+// answer the question everybody actually has - every open session comes first,
+// so "who is online" is at the top of the first page however long the history
+// behind it is.
+const (
+	DefaultSessionLimit = 200
+	MaxSessionLimit     = 2000
+)
+
+// ClampSessionLimit puts a requested limit into the range above.
+func ClampSessionLimit(requested int) int {
+	if requested <= 0 {
+		return DefaultSessionLimit
+	}
+	if requested > MaxSessionLimit {
+		return MaxSessionLimit
+	}
+	return requested
+}
+
 // Config is what Open needs to reach a database.
 type Config struct {
 	URI      string
@@ -86,6 +110,7 @@ type Store struct {
 	client   *mongo.Client
 	users    *mongo.Collection
 	rooms    *mongo.Collection
+	sessions *mongo.Collection
 	audit    *mongo.Collection
 	actor    Actor
 	timeout  time.Duration
@@ -129,6 +154,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 		client:   client,
 		users:    database.Collection("users"),
 		rooms:    database.Collection("rooms"),
+		sessions: database.Collection("sessions"),
 		audit:    database.Collection("audit"),
 		actor:    config.Actor,
 		timeout:  config.Timeout,
@@ -224,7 +250,79 @@ func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	if err != nil {
 		return Summary{}, fmt.Errorf("could not count the audit entries: %w", err)
 	}
-	return Summary{Users: users, Admins: admins, Rooms: rooms, AuditEntries: entries}, nil
+	sessions, err := s.sessions.CountDocuments(scopedContext, bson.D{})
+	if err != nil {
+		return Summary{}, fmt.Errorf("could not count the sessions: %w", err)
+	}
+	return Summary{
+		Users:        users,
+		Admins:       admins,
+		Rooms:        rooms,
+		AuditEntries: entries,
+		Sessions:     sessions,
+	}, nil
+}
+
+// Sessions is the sessions that have not finished, newest heartbeat first,
+// followed by the ones that have, most recently finished first, up to `limit`
+// rows in total.
+//
+// The order is the whole design of this, because a limit is only useful if the
+// rows somebody opened the screen for are inside it. A session open since this
+// morning is older than every visit that came and went since, so an order
+// built on time alone would answer "who is online" on page four.
+//
+// **Two queries and not one, and that is the fix rather than the shortcut.**
+// The obvious single query sorts by `{ended_at: 1, last_seen_at: -1}`, which
+// looks like "open first, then by heartbeat" and is not: `ended_at` is a
+// timestamp, so among the finished rows it orders by *when they finished,
+// oldest first*, and the second key never gets a say because no two of them
+// ended in the same second. The open rows do come first, since zero sorts
+// below every timestamp, but everything after them comes out backwards.
+// MongoDB has no "sort by whether this field is zero" without an aggregation
+// stage, and two indexed finds cost less than a pipeline that cannot use the
+// index at all.
+//
+// Both halves are exactly the index server/src/store/mongo_store.cpp creates
+// for this collection, which is not a coincidence: the server writes the index
+// for the reader, because the reader is this.
+func (s *Store) Sessions(ctx context.Context, limit int) ([]Session, error) {
+	scopedContext, cancel := s.scoped(ctx)
+	defer cancel()
+
+	wanted := ClampSessionLimit(limit)
+
+	open, err := s.findSessions(scopedContext, bson.D{{Key: "ended_at", Value: 0}},
+		bson.D{{Key: "last_seen_at", Value: -1}}, wanted)
+	if err != nil {
+		return nil, err
+	}
+	if len(open) >= wanted {
+		return open[:wanted], nil
+	}
+
+	// Ordered by when they ended rather than by the last heartbeat, which for
+	// a finished session is the same moment give or take one interval, and
+	// reads as what it is: most recently here, first.
+	ended, err := s.findSessions(scopedContext, bson.D{{Key: "ended_at", Value: bson.D{{Key: "$ne", Value: 0}}}},
+		bson.D{{Key: "ended_at", Value: -1}}, wanted-len(open))
+	if err != nil {
+		return nil, err
+	}
+	return append(open, ended...), nil
+}
+
+func (s *Store) findSessions(ctx context.Context, filter, sort bson.D, limit int) ([]Session, error) {
+	cursor, err := s.sessions.Find(ctx, filter, options.Find().SetSort(sort).SetLimit(int64(limit)))
+	if err != nil {
+		return nil, fmt.Errorf("could not read the sessions: %w", err)
+	}
+
+	var sessions []Session
+	if err := cursor.All(ctx, &sessions); err != nil {
+		return nil, fmt.Errorf("could not read the sessions: %w", err)
+	}
+	return sessions, nil
 }
 
 // countAdmins is the guard behind ErrLastAdmin.

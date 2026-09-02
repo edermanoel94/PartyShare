@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type fakeDatabase struct {
 	mutex    sync.Mutex
 	accounts []store.Account
 	rooms    []store.Room
+	sessions []store.Session
 	entries  []store.AuditEntry
 
 	// Set by a test to make the next change fail. Its own field rather than a
@@ -40,6 +42,9 @@ type fakeDatabase struct {
 	// matching on the shape of an identifier.
 	deletedRooms []string
 	queries      []store.AuditQuery
+	// The limits the sessions screen asked for, so that a test can say the l
+	// key changed the query rather than only the help line.
+	sessionLimits []int
 }
 
 // restrictionCall is one SetRestrictions, kept whole so that a test can say
@@ -66,6 +71,7 @@ func (f *fakeDatabase) Summary(context.Context) (store.Summary, error) {
 		Users:        int64(len(f.accounts)),
 		Rooms:        int64(len(f.rooms)),
 		AuditEntries: int64(len(f.entries)),
+		Sessions:     int64(len(f.sessions)),
 	}
 	for _, account := range f.accounts {
 		if account.IsAdmin() {
@@ -73,6 +79,31 @@ func (f *fakeDatabase) Summary(context.Context) (store.Summary, error) {
 		}
 	}
 	return summary, nil
+}
+
+// Sessions answers the rows in the order the real store's query produces them:
+// everything still open first, newest heartbeat first within each group. The
+// screen leans on that order - "who is online" has to be at the top of the
+// first page - so a fake that handed them back in insertion order would be
+// testing a screen nobody ships.
+func (f *fakeDatabase) Sessions(_ context.Context, limit int) ([]store.Session, error) {
+	defer f.lock()()
+	if f.failure != nil {
+		return nil, f.failure
+	}
+	f.sessionLimits = append(f.sessionLimits, limit)
+
+	sessions := append([]store.Session(nil), f.sessions...)
+	sort.SliceStable(sessions, func(i, j int) bool {
+		if sessions[i].Open() != sessions[j].Open() {
+			return sessions[i].Open()
+		}
+		return sessions[i].LastSeenAt > sessions[j].LastSeenAt
+	})
+	if clamped := store.ClampSessionLimit(limit); len(sessions) > clamped {
+		sessions = sessions[:clamped]
+	}
+	return sessions, nil
 }
 
 func (f *fakeDatabase) Audit(_ context.Context, query store.AuditQuery) ([]store.AuditEntry, error) {
@@ -247,6 +278,40 @@ func roomsAndAccounts() *fakeDatabase {
 		{
 			ID: "9FF0D8", Name: "retro", OwnerID: "id-nobody",
 			Persistent: true, CreatedAt: now - 120,
+		},
+	}
+	return database
+}
+
+// sessionsAndAccounts is the three states a session can be in, over the two
+// accounts twoAccounts creates plus one whose account is gone.
+//
+// All three, because the screen exists to tell them apart: one person here,
+// one row a killed server left behind, and one visit that finished. A fixture
+// with only the first would let the difference between "open" and "online"
+// disappear without a test noticing.
+func sessionsAndAccounts() *fakeDatabase {
+	database := twoAccounts()
+	now := time.Now()
+	database.sessions = []store.Session{
+		{
+			UserID:      "id-ana",
+			IP:          "203.0.113.7",
+			ConnectedAt: now.Add(-time.Hour).Unix(),
+			LastSeenAt:  now.Add(-2 * time.Second).Unix(),
+		},
+		{
+			UserID:      "id-bruno",
+			IP:          "203.0.113.8",
+			ConnectedAt: now.Add(-3 * time.Hour).Unix(),
+			LastSeenAt:  now.Add(-2 * time.Hour).Unix(),
+		},
+		{
+			UserID:      "id-nobody",
+			IP:          "198.51.100.4",
+			ConnectedAt: now.Add(-5 * time.Hour).Unix(),
+			LastSeenAt:  now.Add(-4 * time.Hour).Unix(),
+			EndedAt:     now.Add(-4 * time.Hour).Unix(),
 		},
 	}
 	return database

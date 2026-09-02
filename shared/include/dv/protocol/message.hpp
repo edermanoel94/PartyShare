@@ -10,6 +10,7 @@
 #include <dv/core/result.hpp>
 #include <dv/models/audit.hpp>
 #include <dv/models/chat.hpp>
+#include <dv/models/notice.hpp>
 #include <dv/models/user.hpp>
 
 /// Signaling protocol, section 13 of SPEC.md.
@@ -60,6 +61,14 @@ enum class MessageType : std::uint8_t {
   ChatMessage,
   ListChat,
   ChatHistory,
+  // An administrator's notice to one account, and that account saying it read
+  // it, section 4.9 of docs/06-protocol.md. `SendNotice` is administration and
+  // is refused for anybody else by the table below; the other two are not,
+  // because being told something and answering that you were told is not a
+  // power over anybody.
+  SendNotice,
+  Notice,
+  AcknowledgeNotice,
   Error,
   Ping,
   Pong,
@@ -319,6 +328,63 @@ struct ChatHistory {
   friend bool operator==(const ChatHistory&, const ChatHistory&) = default;
 };
 
+// --- notices -----------------------------------------------------------------
+//
+// One administrator, one account, one message, one button. Section 4.9 of
+// docs/06-protocol.md.
+//
+// Only the first of the three is administration. Being told something is not a
+// power, and neither is saying you were told, so `notice` and
+// `acknowledge_notice` are open to any authenticated connection - an ordinary
+// user who could not acknowledge would be an ordinary user with a box on their
+// screen that never goes away.
+
+/// Sends one account a message. Administrators only.
+///
+/// It takes no room. A notice is about the account and not about where they
+/// happen to be, which is what lets it be sent to somebody who is not
+/// connected at all: the server writes it down and delivers it the next time
+/// they sign in. That is also why there is no failure for "they are not here".
+///
+/// There is no reply. What comes back is `acknowledge_notice`, which carries
+/// no text: this is a thing said to somebody, not a conversation with them,
+/// and a conversation belongs in a room's chat where everybody can see it.
+struct SendNotice {
+  std::string user_id;
+  std::string text;
+
+  friend bool operator==(const SendNotice&, const SendNotice&) = default;
+};
+
+/// One notice, on its way to the account it is for.
+///
+/// Sent when it is written if they are connected, and again at the start of
+/// every session that has one outstanding, until they acknowledge it. A client
+/// that was told twice is a client that shows one box twice; one that was
+/// never told is an administrator who believes they warned somebody.
+///
+/// The payload is a nested object rather than flat fields, for the reason
+/// `chat_message` nests its own: a notice arriving live and one arriving at
+/// login are the same object, and a client needs one reader for both.
+struct Notice {
+  models::Notice notice;
+
+  friend bool operator==(const Notice&, const Notice&) = default;
+};
+
+/// The account saying it read one. Any authenticated connection may send it,
+/// and the server accepts it only for a notice addressed to that account.
+///
+/// Nothing but the identifier. What an administrator wanted to know is that it
+/// was seen, and by whom - and both of those the server already knows from the
+/// notice and from whose connection this arrived on. A field for anything else
+/// would be a field a client could put something untrue in.
+struct AcknowledgeNotice {
+  std::string notice_id;
+
+  friend bool operator==(const AcknowledgeNotice&, const AcknowledgeNotice&) = default;
+};
+
 // --- administration ----------------------------------------------------------
 //
 // Everything below is refused unless the connection authenticated as an
@@ -534,9 +600,10 @@ using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
                  ScreenShareStopped, Mute, Unmute, ChangePassword, PasswordChanged, ChatMessage,
-                 ListChat, ChatHistory, ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute,
-                 RestrictUser, UserRestricted, ListUsers, UserList, CreateUser, UpdateUser,
-                 DeleteUser, ListRooms, RoomList, DeleteRoom, ListAudit, AuditList>;
+                 ListChat, ChatHistory, SendNotice, Notice, AcknowledgeNotice, ErrorMessage, Ping,
+                 Pong, KickUser, UserKicked, ForceMute, RestrictUser, UserRestricted, ListUsers,
+                 UserList, CreateUser, UpdateUser, DeleteUser, ListRooms, RoomList, DeleteRoom,
+                 ListAudit, AuditList>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

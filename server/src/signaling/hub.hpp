@@ -17,7 +17,9 @@
 #include "signaling/restriction_source.hpp"
 #include "store/audit_log.hpp"
 #include "store/chat_store.hpp"
+#include "store/notice_store.hpp"
 #include "store/room_store.hpp"
+#include "store/session_store.hpp"
 #include "store/user_store.hpp"
 
 namespace dv::server {
@@ -81,12 +83,14 @@ class Hub {
     /// Fixing this makes room identifiers reproducible in tests.
     std::optional<std::uint32_t> room_id_seed;
 
-    /// Persistence. All four are null by default, and the Hub then creates
+    /// Persistence. All six are null by default, and the Hub then creates
     /// in-memory ones and owns them, which is the server without a database.
     /// A caller that provides one has to keep it alive longer than the Hub.
     store::UserStore* users = nullptr;
     store::RoomStore* rooms = nullptr;
     store::ChatStore* chat = nullptr;
+    store::NoticeStore* notices = nullptr;
+    store::SessionStore* sessions = nullptr;
     store::AuditLog* audit = nullptr;
 
     /// Where a restriction written by something other than this server is
@@ -116,7 +120,12 @@ class Hub {
   [[nodiscard]] store::ChatStore& chat() noexcept { return *chat_; }
   [[nodiscard]] store::AuditLog& audit() noexcept { return *audit_; }
 
-  void on_connect(ConnectionId connection, Clock::time_point now);
+  /// `remote_address` is where the socket came from, as the transport reports
+  /// it, and is remembered rather than used: nothing is decided by it here.
+  /// It is written into the session record once the connection says who it is,
+  /// which is the only reason the Hub is told at all - see
+  /// store::SessionStore. An empty one is fine and travels through as empty.
+  void on_connect(ConnectionId connection, std::string remote_address, Clock::time_point now);
 
   /// Handles one received frame. Never throws on malformed input: it answers
   /// with an `error` message instead.
@@ -149,6 +158,19 @@ class Hub {
     /// into a room.
     std::string username;
     std::optional<std::string> room_id;
+    /// Where the socket came from, kept from `on_connect` so that it is still
+    /// there when the connection authenticates, which is when there is an
+    /// account to attach it to.
+    std::string remote_address;
+    /// The row in the session store, empty until this connection has an
+    /// identity and again once it has lost one.
+    ///
+    /// Held here and not looked up, because the two moments that need it -
+    /// the heartbeat and the socket closing - are both moments where the
+    /// alternative is a query per connection. It is also what makes closing
+    /// exact: the row this connection opened is closed, and not "the open row
+    /// for this account", which after a second login would be somebody else's.
+    std::string session_id;
     Clock::time_point last_seen;
     Clock::time_point last_ping;
   };
@@ -255,6 +277,48 @@ class Hub {
   void handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
                         const protocol::ListChat& message);
 
+  /// Writes one administrator's message to one account, and delivers it if
+  /// they are here.
+  ///
+  /// Administration, and the only one of the three notice handlers that is:
+  /// see the table in permissions.hpp. The store is written first and the
+  /// delivery follows, never the other way round - a notice somebody was shown
+  /// and that was never written down is one they cannot acknowledge and one
+  /// nobody can find afterwards.
+  ///
+  /// What is written goes back to the administrator as well, carrying the
+  /// identifier and the time the store assigned. That is the confirmation, and
+  /// the reason it is the same message rather than a new type: the panel and
+  /// the recipient both want the row that now exists, and it is the recipient
+  /// field that says which of the two a client is looking at.
+  void handle_send_notice(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::SendNotice& message);
+
+  /// One account saying it read one notice. Open to anybody: see
+  /// permissions.hpp for why being told something is not a power.
+  void handle_acknowledge_notice(std::vector<Outgoing>& out, Connection& connection,
+                                 const protocol::AcknowledgeNotice& message);
+
+  /// Hands a connection whatever its account has not answered yet.
+  ///
+  /// Called at the end of a successful login and nowhere else. A notice
+  /// written while somebody was away has no other moment to arrive in, and a
+  /// notice they were shown and did not acknowledge arrives again next time,
+  /// which is the whole reason the store keeps a timestamp rather than
+  /// deleting the row.
+  void deliver_pending_notices(std::vector<Outgoing>& out, const Connection& connection);
+
+  /// Records that this connection's account is present, and from where.
+  ///
+  /// Best effort: a session that could not be written is logged and the person
+  /// is let in anyway. See store::SessionStore for why this one is not the
+  /// audit log's trade.
+  void open_session(Connection& connection);
+
+  /// Ends the session row this connection opened, if it opened one. Safe to
+  /// call twice and safe to call for a connection that never authenticated.
+  void close_session(Connection& connection);
+
   /// What was said in `room_id`, as the message that carries it.
   [[nodiscard]] protocol::ChatHistory chat_history(const std::string& room_id, int limit) const;
 
@@ -285,10 +349,12 @@ class Hub {
   /// Takes an account's session away: out of its room, tokens revoked, and the
   /// identity dropped from the connection holding it.
   ///
-  /// One copy because there are three callers and they have to agree. Deleting
-  /// an account, banning one, and finding that somebody else deleted one all
-  /// end the same way, and three transcriptions of the same four steps is how
-  /// two of them quietly stop revoking tokens.
+  /// One copy because there are four callers and they have to agree. Deleting
+  /// an account, banning one, changing one's own password, and finding that
+  /// somebody else deleted one all end the same way, and four transcriptions of
+  /// the same steps is how two of them quietly stop revoking tokens. The
+  /// password handler was written out by hand for a while and is the evidence:
+  /// it had stopped closing the session record.
   ///
   /// The socket is left open on purpose. The connection stops being anybody --
   /// its next message is refused for want of a login -- but a client that is
@@ -348,9 +414,13 @@ class Hub {
   std::unique_ptr<store::UserStore> owned_users_;
   std::unique_ptr<store::RoomStore> owned_rooms_;
   std::unique_ptr<store::ChatStore> owned_chat_;
+  std::unique_ptr<store::NoticeStore> owned_notices_;
+  std::unique_ptr<store::SessionStore> owned_sessions_;
   std::unique_ptr<store::AuditLog> owned_audit_;
   store::UserStore* users_;
   store::ChatStore* chat_;
+  store::NoticeStore* notices_;
+  store::SessionStore* sessions_;
   store::AuditLog* audit_;
 
   // Same arrangement as the stores above, and declared after `users_` because

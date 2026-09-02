@@ -75,17 +75,44 @@ reads one. `--create-admin` against a database is what replaces it.
 
 ## What the database holds
 
-One document per account, one per persistent room, one per chat message and one
-per administrative action. None of them carries media, so a deployment with a
-hundred accounts and a year of history is measured in megabytes: the database is
-not what sizes the machine, the outbound media is.
+One document per account, one per persistent room, one per chat message, one per
+administrator's notice, one per session and one per administrative action. None
+of them carries media, so a deployment with a hundred accounts and a year of
+history is measured in megabytes: the database is not what sizes the machine,
+the outbound media is.
 
 | Collection | Written by |
 | --- | --- |
 | `users` | The server, and [tools/dbadmin](../tools/dbadmin/README.md) |
 | `rooms` | The server only |
 | Chat | The server only, and deleted with its room |
+| Notices | The server only, and deleted with the account they were sent to |
+| Sessions | The server only. Read by `dbadmin`, written by nothing else |
 | Audit | The server, and `dbadmin`, in the same vocabulary |
+
+The sessions collection is the one here that exists for a reader rather than for
+the server. The server is holding the sockets and never has to ask who is
+connected; `dbadmin` talks to MongoDB and to nothing else, so "who is online" is
+a question only the database can answer, and only because the server writes the
+answer into it. One row per session: the account, the address the connection
+came from, when it started, when it was last heard from on the heartbeat, and
+when it ended.
+
+A server that is stopped closes its rows on the way out. One that is **killed**
+does not, and nothing else ever will, so the next server to start against that
+database closes every row it finds open — stamped with when each was last heard
+from rather than with the moment of recovery, because a server killed on Friday
+and started on Monday did not have anybody connected over the weekend. Until
+that happens, a reader tells the difference by the heartbeat: a row that is open
+and has not been touched for six heartbeats is a server that is gone, not a
+person who is there.
+
+It is also the one collection that grows one row per connection rather than one
+per decision. Nothing here prunes it, as nothing prunes the chat or the audit
+log, and for the same reason: what to keep is an operator's policy and not the
+server's. A busy deployment that wants a year and not five will want a periodic
+`db.sessions.deleteMany({ended_at: {$lt: …}})` in whatever already runs its
+backups.
 
 Session tokens are deliberately **not** persisted. A token is worth one process
 lifetime, and persisting them would mean a stolen database hands over live

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -65,6 +66,21 @@ type usersModel struct {
 	// visible is accounts after the filter, and is what the table rows are
 	// built from. The table hands back a cursor, and the cursor indexes this.
 	visible []store.Account
+	// The open session of each account that has one, from whatever the
+	// sessions screen last read. It is what lets the detail card say whether
+	// the person whose account is on screen is on the platform right now, and
+	// from where - the one question about an account this collection can
+	// answer and the users collection cannot.
+	//
+	// Only the card uses it. The table stays as it is: a column that changes
+	// on its own between two refreshes is a column that makes every other
+	// column look unreliable.
+	sessions map[string]store.Session
+	// now is the clock the presence line is measured against, a field for the
+	// reason the sessions screen keeps one: it is what lets a test say what
+	// time it is.
+	now func() time.Time
+
 	// kinds is which value each column of the table is showing, which depends
 	// on how many of them fitted the window.
 	kinds     []columnKind
@@ -86,7 +102,12 @@ func newUsersModel(accounts Database) *usersModel {
 	filter.Placeholder = "username or display name"
 	filter.CharLimit = 64
 
-	created := &usersModel{store: accounts, filter: filter}
+	created := &usersModel{
+		store:    accounts,
+		filter:   filter,
+		sessions: map[string]store.Session{},
+		now:      time.Now,
+	}
 	columns, kinds := created.columns(80)
 	created.kinds = kinds
 	created.table = table.New(table.WithFocused(true), table.WithColumns(columns))
@@ -162,6 +183,27 @@ func (m *usersModel) setAccounts(accounts []store.Account) {
 	m.accounts = accounts
 	m.loaded = true
 	m.applyFilter(selected)
+}
+
+// setSessions is how the detail card learns whether an account is connected,
+// from whatever the sessions screen last read. Both screens are filled from
+// the same refresh and neither owns the other's data, exactly as the rooms
+// screen learns its owners.
+//
+// The first open row for each account wins, and the query hands them back with
+// the newest heartbeat first, so an account that somehow has two is described
+// by the one that answered most recently.
+func (m *usersModel) setSessions(sessions []store.Session) {
+	open := make(map[string]store.Session, len(sessions))
+	for _, session := range sessions {
+		if !session.Open() {
+			continue
+		}
+		if _, seen := open[session.UserID]; !seen {
+			open[session.UserID] = session
+		}
+	}
+	m.sessions = open
 }
 
 // focusOn puts the cursor on one account by identifier, which is how a change
@@ -678,6 +720,33 @@ func (m *usersModel) deleteView() string {
 	return dangerCard().Width(cardWidth(m.width)).Render(strings.Join(lines, "\n"))
 }
 
+// presenceLabel is what the card says about whether this account is connected.
+//
+// Three answers, the same three the sessions screen draws, because they are
+// three different states and only one of them means the person is there. "Not
+// connected" covers both an account with no open session and one this program
+// has not read the sessions for - which is not a distinction worth a fourth
+// answer, since both mean "there is nobody to point at".
+func (m *usersModel) presenceLabel(userID string) string {
+	session, open := m.sessions[userID]
+	if !open {
+		return metaStyle.Render("not connected")
+	}
+
+	where := session.IP
+	if where == "" {
+		where = "an address the server did not record"
+	}
+	if session.Online(m.now()) {
+		return successStyle.Render("online") + metaStyle.Render(" from "+where)
+	}
+	// Open and not answering: the row a server that was killed left behind.
+	// Saying "online" here would be repeating a claim the database is only
+	// making because nobody closed the row.
+	return warningStyle.Render("stale") +
+		metaStyle.Render(" · last seen "+timeLabel(session.LastSeenAt)+" from "+where)
+}
+
 func (m *usersModel) detailView() string {
 	content := cardContent(m.width)
 	created := "unknown"
@@ -696,6 +765,11 @@ func (m *usersModel) detailView() string {
 		cardLabelStyle.Render("Identifier   ") + cardValueStyle.Render(m.target.UserID),
 		cardLabelStyle.Render("Avatar       ") + avatar,
 		cardLabelStyle.Render("Created      ") + cardValueStyle.Render(created),
+		// The one line on this card that does not come from the account
+		// document. It is here because it is what somebody looking at an
+		// account most often wants next, and the sessions screen is the only
+		// other place in this program that can say it.
+		cardLabelStyle.Render("Presence     ") + m.presenceLabel(m.target.UserID),
 		// The wire names in full, where there is room for them, so that this
 		// card and the client's own panel say the same words.
 		cardLabelStyle.Render("Restricted   ") + restrictionsLabel(m.target.Restrictions),

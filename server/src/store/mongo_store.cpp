@@ -17,6 +17,7 @@
 #include <mongocxx/client.hpp>
 #include <mongocxx/exception/exception.hpp>
 #include <mongocxx/instance.hpp>
+#include <mongocxx/pipeline.hpp>
 #include <mongocxx/pool.hpp>
 #include <mongocxx/uri.hpp>
 
@@ -191,6 +192,66 @@ models::ChatMessage chat_from(const bsoncxx::document::view& document) {
   message.text = string_field(document, "text");
   message.timestamp_seconds = int_field(document, "timestamp_seconds");
   return message;
+}
+
+models::Notice notice_from(const bsoncxx::document::view& document) {
+  models::Notice notice;
+  const auto id = document["_id"];
+  if (id && id.type() == bsoncxx::type::k_oid) {
+    notice.id = id.get_oid().value.to_string();
+  }
+  notice.user_id = string_field(document, "user_id");
+  notice.from_user_id = string_field(document, "from_user_id");
+  notice.from_display_name = string_field(document, "from_display_name");
+  notice.text = string_field(document, "text");
+  notice.created_at = int_field(document, "created_at");
+  notice.acknowledged_at = int_field(document, "acknowledged_at");
+  return notice;
+}
+
+SessionRecord session_from(const bsoncxx::document::view& document) {
+  SessionRecord session;
+  const auto id = document["_id"];
+  if (id && id.type() == bsoncxx::type::k_oid) {
+    session.id = id.get_oid().value.to_string();
+  }
+  session.user_id = string_field(document, "user_id");
+  session.ip = string_field(document, "ip");
+  session.connected_at = int_field(document, "connected_at");
+  session.last_seen_at = int_field(document, "last_seen_at");
+  session.ended_at = int_field(document, "ended_at");
+  return session;
+}
+
+/// An identifier from one of the collections above, back as the object
+/// identifier it names.
+///
+/// Empty when the text is not one. Every identifier this file hands out is the
+/// string form of an OID, twenty four hexadecimal characters, so anything else
+/// arrived from a client that made it up. Checked here rather than left to the
+/// driver, which answers a malformed one by throwing: a query that fails is
+/// not the same answer as a row that is not there, and the caller wants the
+/// second one.
+std::optional<bsoncxx::oid> object_id(const std::string& text) {
+  constexpr std::size_t kOidLength = 24;
+  const auto is_hex = [](char character) {
+    return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') ||
+           (character >= 'A' && character <= 'F');
+  };
+  if (text.size() != kOidLength || !std::ranges::all_of(text, is_hex)) {
+    return std::nullopt;
+  }
+  return bsoncxx::oid{text};
+}
+
+/// The refusal a notice identifier that names nothing gets.
+///
+/// Written out rather than reaching for the memory store's helper, and worded
+/// identically to it on purpose: which implementation is behind the server is
+/// not something a client can see, so it must not be something a client can
+/// tell from an error.
+Error no_such_notice() {
+  return Error{.code = "notice_not_found", .message = "no such record"};
 }
 
 models::AuditEntry audit_from(const bsoncxx::document::view& document) {
@@ -548,6 +609,283 @@ class MongoChatStore final : public ChatStore {
   Session& session_;
 };
 
+/// What administrators told individual accounts. See NoticeStore.
+class MongoNoticeStore final : public NoticeStore {
+ public:
+  explicit MongoNoticeStore(Session& session) : session_(session) {}
+
+  [[nodiscard]] std::optional<Error> ensure_indexes() {
+    try {
+      // Compound, and in this order, because the only read of this collection
+      // is "what does one account still owe an answer to, oldest first". The
+      // account narrows it, the flag drops what has been answered, and the
+      // time orders what is left, which is one index scan rather than a sort
+      // over everything anybody was ever told.
+      auto client = session_.pool.acquire();
+      (*client)[session_.database]["notices"].create_index(
+          make_document(kvp("user_id", 1), kvp("acknowledged_at", 1), kvp("created_at", 1)));
+      return std::nullopt;
+    } catch (const mongocxx::exception& error) {
+      return failure("could not create the notice indexes", error.what());
+    }
+  }
+
+  [[nodiscard]] Result<models::Notice> append(models::Notice notice) override {
+    if (notice.created_at == 0) {
+      notice.created_at = unix_seconds_now();
+    }
+    try {
+      auto client = session_.pool.acquire();
+      const auto result = (*client)[session_.database]["notices"].insert_one(
+          make_document(kvp("user_id", notice.user_id), kvp("from_user_id", notice.from_user_id),
+                        kvp("from_display_name", notice.from_display_name),
+                        kvp("text", notice.text), kvp("created_at", notice.created_at),
+                        kvp("acknowledged_at", notice.acknowledged_at))
+              .view());
+      // The identifier the database generated. It is what the recipient will
+      // send back, so a notice delivered under any other one is a notice
+      // nobody can acknowledge.
+      if (!result) {
+        return Result<models::Notice>::failure(
+            failure("could not write the notice", "the insert was not acknowledged"));
+      }
+      const auto inserted = result->inserted_id();
+      if (inserted.type() != bsoncxx::type::k_oid) {
+        return Result<models::Notice>::failure(
+            failure("could not write the notice", "the insert returned no identifier"));
+      }
+      notice.id = inserted.get_oid().value.to_string();
+      return notice;
+    } catch (const mongocxx::exception& error) {
+      return Result<models::Notice>::failure(failure("could not write the notice", error.what()));
+    }
+  }
+
+  [[nodiscard]] std::vector<models::Notice> pending_for(const std::string& user_id) const override {
+    std::vector<models::Notice> pending;
+    try {
+      auto client = session_.pool.acquire();
+      auto options = mongocxx::options::find{}
+                         .sort(make_document(kvp("created_at", 1), kvp("_id", 1)))
+                         .limit(NoticeStore::kMaxPendingPerDelivery);
+      // Zero and not "absent": every document this file writes carries the
+      // field, and one written by a version that did not is one nobody has
+      // acknowledged either, so matching zero alone would hide it forever.
+      auto cursor = (*client)[session_.database]["notices"].find(
+          make_document(
+              kvp("user_id", user_id),
+              kvp("acknowledged_at",
+                  make_document(kvp("$in", bsoncxx::builder::basic::make_array(
+                                               std::int64_t{0}, bsoncxx::types::b_null{})))))
+              .view(),
+          options);
+      for (const auto& document : cursor) {
+        pending.push_back(notice_from(document));
+      }
+    } catch (const mongocxx::exception& error) {
+      DV_LOG_ERROR("Could not read the notices for {}: {}", user_id, error.what());
+    }
+    return pending;
+  }
+
+  [[nodiscard]] Result<models::Notice> acknowledge(const std::string& notice_id,
+                                                   const std::string& user_id) override {
+    const auto oid = object_id(notice_id);
+    if (!oid.has_value()) {
+      return Result<models::Notice>::failure(no_such_notice());
+    }
+    try {
+      auto client = session_.pool.acquire();
+      // find_one_and_update rather than an update followed by a read: the
+      // answer has to be the row as it now is, and two calls would be two
+      // chances for a second session of the same account to change it in
+      // between.
+      //
+      // The filter names the account as well as the notice, which is the whole
+      // access check. Somebody else's identifier matches nothing and comes
+      // back as `notice_not_found`, exactly as an identifier belonging to
+      // nobody does, so a client cannot learn that a notice exists by being
+      // refused differently.
+      auto options = mongocxx::options::find_one_and_update{}.return_document(
+          mongocxx::options::return_document::k_after);
+      const auto updated = (*client)[session_.database]["notices"].find_one_and_update(
+          make_document(kvp("_id", *oid), kvp("user_id", user_id)).view(),
+          // Only when it is still outstanding. The first time somebody said
+          // they had read it is the fact worth keeping, so a second
+          // acknowledgement leaves the stamp where it was rather than moving
+          // it to now.
+          make_document(kvp("$set", make_document(kvp("acknowledged_at", unix_seconds_now()))))
+              .view(),
+          options);
+      if (!updated) {
+        return Result<models::Notice>::failure(no_such_notice());
+      }
+      return notice_from(updated->view());
+    } catch (const mongocxx::exception& error) {
+      return Result<models::Notice>::failure(
+          failure("could not acknowledge the notice", error.what()));
+    }
+  }
+
+  [[nodiscard]] std::optional<Error> clear_for(const std::string& user_id) override {
+    try {
+      auto client = session_.pool.acquire();
+      // delete_many and no check on the count, for ChatStore::clear's reason:
+      // an account nobody ever wrote to has nothing to forget, and that is the
+      // outcome asked for rather than a failure.
+      (*client)[session_.database]["notices"].delete_many(make_document(kvp("user_id", user_id)));
+      return std::nullopt;
+    } catch (const mongocxx::exception& error) {
+      return failure("could not clear the notices", error.what());
+    }
+  }
+
+ private:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  Session& session_;
+};
+
+/// Who is connected, and from where. See SessionStore.
+class MongoSessionStore final : public SessionStore {
+ public:
+  explicit MongoSessionStore(Session& session) : session_(session) {}
+
+  [[nodiscard]] std::optional<Error> ensure_indexes() {
+    try {
+      auto client = session_.pool.acquire();
+      // Two, because the two readers of this collection ask different
+      // questions. tools/dbadmin asks "who is here", which is every open row
+      // newest first; somebody looking at one account asks for its history,
+      // which is that account's rows in time order.
+      auto sessions = (*client)[session_.database]["sessions"];
+      sessions.create_index(make_document(kvp("ended_at", 1), kvp("last_seen_at", -1)));
+      sessions.create_index(make_document(kvp("user_id", 1), kvp("connected_at", -1)));
+      return std::nullopt;
+    } catch (const mongocxx::exception& error) {
+      return failure("could not create the session indexes", error.what());
+    }
+  }
+
+  [[nodiscard]] Result<SessionRecord> open(SessionRecord record) override {
+    const std::int64_t now = unix_seconds_now();
+    if (record.connected_at == 0) {
+      record.connected_at = now;
+    }
+    if (record.last_seen_at == 0) {
+      record.last_seen_at = record.connected_at;
+    }
+    try {
+      auto client = session_.pool.acquire();
+      const auto result = (*client)[session_.database]["sessions"].insert_one(
+          make_document(kvp("user_id", record.user_id), kvp("ip", record.ip),
+                        kvp("connected_at", record.connected_at),
+                        kvp("last_seen_at", record.last_seen_at), kvp("ended_at", record.ended_at))
+              .view());
+      if (!result) {
+        return Result<SessionRecord>::failure(
+            failure("could not record the session", "the insert was not acknowledged"));
+      }
+      const auto inserted = result->inserted_id();
+      if (inserted.type() != bsoncxx::type::k_oid) {
+        return Result<SessionRecord>::failure(
+            failure("could not record the session", "the insert returned no identifier"));
+      }
+      record.id = inserted.get_oid().value.to_string();
+      return record;
+    } catch (const mongocxx::exception& error) {
+      return Result<SessionRecord>::failure(failure("could not record the session", error.what()));
+    }
+  }
+
+  [[nodiscard]] std::optional<Error> touch(const std::vector<std::string>& ids) override {
+    if (ids.empty()) {
+      return std::nullopt;
+    }
+    try {
+      bsoncxx::builder::basic::array wanted;
+      for (const std::string& id : ids) {
+        if (const auto oid = object_id(id)) {
+          wanted.append(*oid);
+        }
+      }
+
+      auto client = session_.pool.acquire();
+      // One update for the whole set. Called once per heartbeat with the
+      // server's own lock held, so the difference between this and a write per
+      // session is the difference between one round trip every five seconds
+      // and one per connected person.
+      //
+      // Restricted to rows that are still open, so a session closed a
+      // millisecond ago by the socket dropping is not reopened in spirit by a
+      // heartbeat that had already collected its identifier.
+      (*client)[session_.database]["sessions"].update_many(
+          make_document(kvp("_id", make_document(kvp("$in", wanted))), kvp("ended_at", 0)).view(),
+          make_document(kvp("$set", make_document(kvp("last_seen_at", unix_seconds_now()))))
+              .view());
+      return std::nullopt;
+    } catch (const mongocxx::exception& error) {
+      return failure("could not refresh the sessions", error.what());
+    }
+  }
+
+  [[nodiscard]] std::optional<Error> close(const std::string& id) override {
+    const auto oid = object_id(id);
+    if (!oid.has_value()) {
+      return std::nullopt;
+    }
+    try {
+      auto client = session_.pool.acquire();
+      // `ended_at: 0` in the filter is what makes closing twice harmless: the
+      // second call matches nothing and the first one's timestamp, which is
+      // the one that knew when the person actually left, stays.
+      (*client)[session_.database]["sessions"].update_one(
+          make_document(kvp("_id", *oid), kvp("ended_at", 0)).view(),
+          make_document(kvp("$set", make_document(kvp("ended_at", unix_seconds_now())))).view());
+      return std::nullopt;
+    } catch (const mongocxx::exception& error) {
+      return failure("could not close the session", error.what());
+    }
+  }
+
+  [[nodiscard]] std::size_t close_open() override {
+    try {
+      auto client = session_.pool.acquire();
+      // An aggregation pipeline as the update, so that each row is stamped
+      // with its own `last_seen_at` rather than all of them with the moment of
+      // recovery. A server that was killed on Friday and started on Monday did
+      // not have anybody connected over the weekend, and a plain $set of "now"
+      // is exactly that claim.
+      const auto result = (*client)[session_.database]["sessions"].update_many(
+          make_document(kvp("ended_at", 0)).view(),
+          mongocxx::pipeline{}.add_fields(make_document(kvp("ended_at", "$last_seen_at"))));
+      return result ? static_cast<std::size_t>(result->modified_count()) : 0;
+    } catch (const mongocxx::exception& error) {
+      DV_LOG_ERROR("Could not close the sessions left open by a previous run: {}", error.what());
+      return 0;
+    }
+  }
+
+  [[nodiscard]] std::vector<SessionRecord> list_open() const override {
+    std::vector<SessionRecord> open;
+    try {
+      auto client = session_.pool.acquire();
+      auto options = mongocxx::options::find{}.sort(make_document(kvp("last_seen_at", -1)));
+      auto cursor = (*client)[session_.database]["sessions"].find(
+          make_document(kvp("ended_at", 0)).view(), options);
+      for (const auto& document : cursor) {
+        open.push_back(session_from(document));
+      }
+    } catch (const mongocxx::exception& error) {
+      DV_LOG_ERROR("Could not read the open sessions: {}", error.what());
+    }
+    return open;
+  }
+
+ private:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  Session& session_;
+};
+
 /// The administrative record. See AuditLog.
 class MongoAuditLog final : public AuditLog {
  public:
@@ -621,6 +959,8 @@ class MongoStores::Impl {
         users_(session_),
         rooms_(session_),
         chat_(session_),
+        notices_(session_),
+        sessions_(session_),
         audit_(session_) {}
 
   [[nodiscard]] std::optional<Error> ensure_indexes() {
@@ -633,12 +973,20 @@ class MongoStores::Impl {
     if (auto failed = chat_.ensure_indexes()) {
       return failed;
     }
+    if (auto failed = notices_.ensure_indexes()) {
+      return failed;
+    }
+    if (auto failed = sessions_.ensure_indexes()) {
+      return failed;
+    }
     return audit_.ensure_indexes();
   }
 
   [[nodiscard]] UserStore& users() noexcept { return users_; }
   [[nodiscard]] RoomStore& rooms() noexcept { return rooms_; }
   [[nodiscard]] ChatStore& chat() noexcept { return chat_; }
+  [[nodiscard]] NoticeStore& notices() noexcept { return notices_; }
+  [[nodiscard]] SessionStore& sessions() noexcept { return sessions_; }
   [[nodiscard]] AuditLog& audit() noexcept { return audit_; }
 
  private:
@@ -646,6 +994,8 @@ class MongoStores::Impl {
   MongoUserStore users_;
   MongoRoomStore rooms_;
   MongoChatStore chat_;
+  MongoNoticeStore notices_;
+  MongoSessionStore sessions_;
   MongoAuditLog audit_;
 };
 
@@ -685,6 +1035,14 @@ RoomStore& MongoStores::rooms() noexcept {
 
 ChatStore& MongoStores::chat() noexcept {
   return impl_->chat();
+}
+
+NoticeStore& MongoStores::notices() noexcept {
+  return impl_->notices();
+}
+
+SessionStore& MongoStores::sessions() noexcept {
+  return impl_->sessions();
 }
 
 AuditLog& MongoStores::audit() noexcept {

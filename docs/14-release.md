@@ -47,22 +47,25 @@ to be.
 
 ## What the tag produces
 
-**Three files and a checksum list.** That is the whole answer today, and it is
-worth stating before the table, because two of the five jobs this repository
+**Four files and a checksum list.** That is the whole answer today, and it is
+worth stating before the table, because two of the six jobs this repository
 carries do not run:
 
 ```text
 partyshare-x.y.z-macos-arm64.dmg
 partyshare-x.y.z-windows-x64.msi
 partyshare-x.y.z-windows-x64.zip
+partyshare-server-x.y.z-linux-x64.tar.gz
 SHA256SUMS
 ```
 
-Verified against every release from v0.1.31 to v0.1.34: each one carries exactly
-those four assets and nothing else.
+The first three were verified against every release from v0.1.31 to v0.1.34,
+each of which carried exactly those and nothing else. The server tarball arrived
+later, and the first tag to carry it is the one that proves the job.
 
 | Job | Runs on a tag? | Produces | State |
 | --- | --- | --- | --- |
+| Linux x64 server | **yes** | `partyshare-server-…-linux-x64.tar.gz` | Built with MongoDB on Ubuntu 22.04, smoke tested; what `scripts/install_server.sh` downloads |
 | Windows x64 installer | **yes** | `.msi` and `.zip` | Built, installed and run |
 | macOS arm64 | **yes** | `.dmg` | Built and installed. Ships a client that **cannot make a call** |
 | Linux x64 AppImage | **no** — skipped | nothing | Off behind `RELEASE_LINUX`, below |
@@ -237,9 +240,11 @@ binary as it is loaded.
 
 Ordered by what it costs the person downloading a release.
 
-- **No Linux artifact at all.** Blocked on the depot_tools CIPD bootstrap getting
-  a 403 on a runner. Until that is solved, a Linux user has to build from source,
-  and [INSTALL.md](../INSTALL.md) is the path.
+- **No Linux client artifact.** Blocked on the depot_tools CIPD bootstrap getting
+  a 403 on a runner. Until that is solved, a Linux user has to build the client
+  from source, and [INSTALL.md](../INSTALL.md) is the path. The server is not
+  affected: it needs no libwebrtc, and its tarball is built and published on
+  every tag by the `linux-server` job.
 - **The macOS `.dmg` ships a client that cannot make a call.** Blocked on
   publishing the macOS libwebrtc tree as a release asset and recording its URL and
   checksum in `cmake/Findlibwebrtc.cmake`, the way `_dv_url_windows_x64_md`

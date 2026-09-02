@@ -31,6 +31,11 @@ and quietly did not is one whose accounts disappear at the next restart.
 
 ## Starting it
 
+On Debian 12 or Ubuntu 24.04, `sudo scripts/install_server.sh --admin=ana` does
+all of this and leaves the server running as a systemd service, with MongoDB
+installed from its apt repository beside it; [INSTALL.md](../INSTALL.md) section
+1.0 has the options. By hand:
+
 ```sh
 docker run -d -p 27017:27017 --name partyshare-mongo mongo:7
 

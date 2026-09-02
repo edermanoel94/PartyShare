@@ -26,6 +26,7 @@
 
 #include "audio/screen_audio_mixer.hpp"
 #include "ui/chimes.hpp"
+#include "ui/update_checker.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::ui {
@@ -86,8 +87,9 @@ void restyle_for_property(QWidget* widget) {
 
 }  // namespace
 
-SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* parent)
-    : QDialog(parent), session_(session) {
+SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker& updates,
+                               QWidget* parent)
+    : QDialog(parent), session_(session), updates_(updates) {
   setWindowTitle(QStringLiteral("Settings"));
   setMinimumWidth(520);
 
@@ -104,8 +106,20 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   signaling_hint_ = new QLabel(QString{}, connection);
   signaling_hint_->setWordWrap(true);
   signaling_hint_->setProperty("hint", true);
+  // Its state comes from the checker itself and not from the configuration
+  // read at startup, for the reason the room chime's box gives below: main()
+  // has already put one into the other, and asking the thing that actually
+  // decides means the box cannot disagree with what will happen next.
+  update_checks_ = new QCheckBox(QStringLiteral("Check GitHub for new versions"), connection);
+  update_checks_->setChecked(updates_.enabled());
+  update_checks_->setToolTip(
+      QStringLiteral("One request to github.com, shortly after this window opens and every few "
+                     "hours after that. Nothing is downloaded and nothing is installed: a newer "
+                     "release becomes a link beside the version in the status bar."));
+
   connection_form->addRow(QStringLiteral("Server"), signaling_url_);
   connection_form->addRow(signaling_hint_);
+  connection_form->addRow(QStringLiteral("Updates"), update_checks_);
 
   auto* audio = new QGroupBox(QStringLiteral("Audio"), this);
   auto* audio_form = new QFormLayout(audio);
@@ -327,6 +341,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // and each one replaces the last rather than queueing behind it.
   connect(screen_volume_, &QSlider::valueChanged, this, &SettingsDialog::on_screen_volume_changed);
   connect(room_sounds_, &QCheckBox::toggled, this, &SettingsDialog::on_room_sounds_changed);
+  connect(update_checks_, &QCheckBox::toggled, this, &SettingsDialog::on_update_checks_changed);
 }
 
 void SettingsDialog::show_signaling_hint(const QString& refusal) {
@@ -805,6 +820,18 @@ void SettingsDialog::on_room_sounds_changed(bool on) {
   // somebody reaches for because a sound just went off.
   set_chimes_enabled(on);
   stage({{.section = "ui", .key = "room_sounds", .value = on ? "true" : "false"}});
+}
+
+void SettingsDialog::on_update_checks_changed(bool on) {
+  // Applied before it is staged, like the chime above. Unticking this is
+  // somebody saying "stop talking to the internet", and the honest answer to
+  // that is to stop now rather than at the next launch - which is also why
+  // UpdateChecker drops an answer that lands after the switch has moved.
+  //
+  // Ticking it schedules a check a few seconds out, so the box is not a switch
+  // whose effect cannot be observed for six hours.
+  updates_.set_enabled(on);
+  stage({{.section = "ui", .key = "check_for_updates", .value = on ? "true" : "false"}});
 }
 
 void SettingsDialog::on_auto_bitrate_changed(bool automatic) {

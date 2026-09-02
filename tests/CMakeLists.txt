@@ -52,6 +52,7 @@ endif()
 # configure instead of failing on a target that was never defined.
 set(dv_unit_sources
   unit/test_result.cpp
+  unit/test_version.cpp
   unit/test_logging.cpp
   unit/test_config.cpp
   unit/test_crash_reporter.cpp

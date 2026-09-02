@@ -1,0 +1,40 @@
+# The PartyShare server as a systemd service. Installed by
+# scripts/install_server.sh, which is also where /opt/partyshare,
+# /etc/partyshare/server.ini and the partyshare account come from.
+#
+# Everything the server is told lives in server.ini: the port, the ICE range,
+# the database. This file only says how to run it, so changing a setting is an
+# edit to the INI and a restart, never an edit here.
+
+[Unit]
+Description=PartyShare signaling server and SFU
+Documentation=https://github.com/edermanoel94/PartyShare/blob/master/INSTALL.md
+After=network-online.target mongod.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=partyshare
+Group=partyshare
+WorkingDirectory=/var/lib/partyshare
+ExecStart=/opt/partyshare/bin/partyshare-server --config=/etc/partyshare/server.ini
+# SIGTERM is what the server shuts down cleanly on; a restart after a crash
+# waits a few seconds so a database that is still coming up at boot is given
+# the time to.
+Restart=on-failure
+RestartSec=5
+
+# The server needs to write in two places, its state directory and its log
+# directory, and nowhere else. Everything below is what stops a bug in it from
+# reaching the rest of the machine.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/partyshare /var/log/partyshare
+
+[Install]
+WantedBy=multi-user.target

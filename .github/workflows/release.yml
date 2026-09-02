@@ -147,6 +147,112 @@ jobs:
             build/appimage/partyshare-*.AppImage.zsync
           retention-days: 7
 
+  # The server for Linux, on its own and with persistence, which is the one
+  # Linux artefact this repository can build without libwebrtc: the server has
+  # no media stack of its own to bundle. It is what scripts/install_server.sh
+  # downloads, so that installing a server is a download and not a half hour
+  # of compiling the MongoDB driver on the machine that will run it.
+  #
+  # Built on the oldest Ubuntu the runners offer, for the same reason the
+  # AppImage is: the binary carries everything but glibc, and runs on any
+  # distribution whose glibc is at least as new as the builder's. 22.04 is
+  # glibc 2.35, which covers Debian 12 and every Ubuntu from 22.04 on. Its
+  # default compiler is GCC 11, which does not know enough C++20, so GCC 12 is
+  # installed beside it and named explicitly.
+  linux-server:
+    name: Linux x64 server
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-12
+      CXX: g++-12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install GCC 12
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-12 g++-12
+
+      # Its own key: this is the only release job whose vcpkg tree holds the
+      # MongoDB driver, and the driver is the long build.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-server-ubuntu-22.04-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-server-ubuntu-22.04-
+
+      - name: Prepare vcpkg
+        run: scripts/ci_vcpkg.sh
+
+      # The same configure as INSTALL.md section 1.4 and the CI's MongoDB job:
+      # no client, no tests, persistence on. The C++ runtime is linked in so
+      # that a target machine with an older libstdc++ than the builder's still
+      # runs it; glibc cannot be, and is the one thing the target has to have.
+      - name: Configure
+        run: >
+          cmake -S . -B build/server -G Ninja
+          -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
+          -DCMAKE_BUILD_TYPE=Release
+          -DDV_ENABLE_MONGO=ON
+          -DVCPKG_MANIFEST_FEATURES=mongo
+          -DDV_BUILD_CLIENT=OFF
+          -DDV_BUILD_TESTS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+
+      - name: Build
+        run: cmake --build build/server --target dv_server
+
+      # What the tarball is: the binary, the unit and the installer, in a
+      # directory named after the version, so that an unpacked tarball is
+      # enough to install from without the repository. The installer looks for
+      # bin/partyshare-server beside itself and uses it when it is there.
+      - name: Stage the tarball
+        run: |
+          version="$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)"
+          name="partyshare-server-${version}-linux-x64"
+          stage="build/stage/${name}"
+          cmake --install build/server --prefix "${stage}" --strip
+          cp deploy/linux/partyshare.service scripts/install_server.sh "${stage}/"
+          cp INSTALL.md "${stage}/"
+          tar -C build/stage -czf "build/${name}.tar.gz" "${name}"
+          ls -la "build/${name}.tar.gz"
+          echo "DV_SERVER_TARBALL=build/${name}.tar.gz" >> "$GITHUB_ENV"
+
+      # Runs, links against nothing but glibc, and knows the database: the
+      # three things a downloaded server has to be true of. The database check
+      # is the startup refusal from server/src/main.cpp - a build without the
+      # driver says so and exits 1 when persistence is asked for, and this
+      # asks for it against an address nothing answers on, which a build with
+      # the driver refuses differently.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          bin="$(tar -tzf "$DV_SERVER_TARBALL" | grep '/bin/partyshare-server$')"
+          mkdir -p build/smoke
+          tar -xzf "$DV_SERVER_TARBALL" -C build/smoke "$bin"
+          server="build/smoke/${bin}"
+          "$server" --help | head -3
+          ldd "$server"
+          if ldd "$server" | grep -E 'mongo|datachannel|ssl|crypto|stdc\+\+'; then
+            echo "::error::the server links against libraries the tarball does not carry"
+            exit 1
+          fi
+          if "$server" '--database-uri=mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=500' 2>&1 | tee smoke.log; then
+            echo "::error::the server started against a database that is not there"
+            exit 1
+          fi
+          grep -q 'Could not open the database' smoke.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-server-x64
+          path: build/partyshare-server-*.tar.gz
+          retention-days: 7
+
   # The Windows and macOS artefacts, tasks 1, 3 and 4. Both jobs are written and
   # neither has ever run: this repository is developed on Linux, and the two
   # were derived from the platform tooling's documentation rather than from a
@@ -668,8 +774,8 @@ jobs:
     # Only the platforms that produced something. A macOS job that fails must
     # not hold back a Windows artefact that is already built and installed:
     # partial is a worse release than complete and a much better one than none.
-    needs: [windows, macos]
-    # always(), because a plain needs: skips this job when either of the two
+    needs: [windows, macos, linux-server]
+    # always(), because a plain needs: skips this job when any of the three
     # fails, which is the opposite of what the paragraph above asks for. The
     # floor used to be the Linux result, on the grounds that it is the only
     # artefact this repository can verify end to end; with that job off, the
@@ -678,7 +784,7 @@ jobs:
     # On one line and without ${{ }}: an if: is already an expression, and a
     # folded block leaves a trailing newline that makes the whole thing a
     # non-empty string, which is true. That version published on every push.
-    if: always() && startsWith(github.ref, 'refs/tags/v') && (needs.windows.result == 'success' || needs.macos.result == 'success')
+    if: always() && startsWith(github.ref, 'refs/tags/v') && (needs.windows.result == 'success' || needs.macos.result == 'success' || needs.linux-server.result == 'success')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

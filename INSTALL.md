@@ -12,6 +12,12 @@ There are two machines in the normal case, and they need different things built:
 In a hurry, or testing alone, [section 3](#3-everything-on-one-machine) puts both
 on one machine in about five minutes.
 
+**The server in one command.** On Debian or Ubuntu,
+[section 1.0](#10-the-one-command-install) installs MongoDB, downloads the server
+from the release and leaves it running as a systemd service. The rest of section 1
+is what that command does, for a machine it does not know, or for doing it by
+hand.
+
 Nothing has to be installed system-wide to try any of it. Binaries land in
 `<build tree>/bin/`.
 
@@ -24,6 +30,65 @@ falling back to memory.
 ---
 
 ## 1. The server
+
+### 1.0 The one-command install
+
+```sh
+git clone https://github.com/edermanoel94/PartyShare.git
+cd PartyShare
+sudo scripts/install_server.sh --admin=ana
+```
+
+That is the whole of sections 1.1 to 1.9 on Debian or Ubuntu: it installs
+MongoDB from its apt repository, downloads the server tarball of this checkout's
+version from the GitHub release and checks it against `SHA256SUMS`, installs it
+under `/opt/partyshare`, creates a `partyshare` system account, writes
+`/etc/partyshare/server.ini`, installs the systemd unit from
+`deploy/linux/partyshare.service`, asks for the administrator's password, opens
+the two ports in ufw when ufw is active, and starts the service. It ends by
+printing the address to put in the client's settings. A few minutes, most of it
+apt.
+
+The release tarball is also enough on its own: unpack
+`partyshare-server-x.y.z-linux-x64.tar.gz` and run the `install_server.sh` inside
+it, and it installs the server beside it without a checkout.
+
+When no release carries the version - a checkout ahead of the last tag, or an
+arm64 machine - the installer builds the server from the checkout instead, and
+`--build` asks for that outright. The build is the long part: vcpkg compiles
+libdatachannel and the MongoDB driver from source the first time, ten to thirty
+minutes depending on the machine. It needs GCC 12 and CMake 3.25, which is why
+Ubuntu 22.04 is refused up front rather than an hour in; the downloaded server
+has no such need and runs there.
+
+| Option | |
+| --- | --- |
+| `--admin=NAME` | The first administrator. Password from `PARTYSHARE_ADMIN_PASSWORD`, or asked for |
+| `--port=PORT` | Signaling port, default 8080 |
+| `--ice-port-range=A-B` | Media range, default 50000-50100; one UDP port per participant |
+| `--database-uri=URI` | A MongoDB that already exists, here or elsewhere; none is installed |
+| `--mongo-version=X.Y` | Default 8.0 |
+| `--prefix=DIR` | Default `/opt/partyshare` |
+| `--build` | Build from the checkout even when a release carries the version |
+| `--uninstall` | Stops and removes the service and the binary; keeps the database, the configuration and the logs |
+
+`PARTYSHARE_RELEASE_URL` in the environment replaces the GitHub releases address,
+for a mirror.
+
+Running it again is the upgrade: `git pull` and run, and the service comes back on
+the new build with the configuration it had. `server.ini` is written only when it
+does not exist yet, so an edit survives.
+
+Everything the service reads is in `/etc/partyshare/server.ini`, mode 0640,
+readable by root and the service account and nobody else, which is where a
+database URI carrying a password belongs. The unit itself only says how to run the
+binary, and confines it: it may write in `/var/lib/partyshare` and
+`/var/log/partyshare` and nowhere else. The log is the journal:
+
+```sh
+journalctl -u partyshare -f
+sudo systemctl restart partyshare      # after editing server.ini
+```
 
 ### 1.1 What it needs
 
@@ -186,6 +251,11 @@ The server logs the range it ended up with on startup, or warns that the ports
 are ephemeral when none was set.
 
 ### 1.8 Keeping it running
+
+`deploy/linux/partyshare.service` is the unit the installer of section 1.0 puts
+in place; it reads everything from `/etc/partyshare/server.ini` and confines the
+process to its two writable directories. The shorter unit below is the same
+thing with the settings on the command line, for a server installed by hand:
 
 ```ini
 # /etc/systemd/system/partyshare.service

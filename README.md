@@ -21,6 +21,13 @@ Binaries land in `build/<preset>/bin/`. [INSTALL.md](INSTALL.md) is the full
 path — a MongoDB-backed server on one machine, a client on another, and two
 people in a room.
 
+For the server alone, on Debian or Ubuntu, one command installs MongoDB, downloads
+the server from the release and leaves it running as a service:
+
+```sh
+sudo scripts/install_server.sh --admin=ana
+```
+
 ## The pieces
 
 | | |

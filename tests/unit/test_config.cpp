@@ -512,6 +512,25 @@ TEST(ConfigIni, ReadsWhetherTheRoomChimeIsOn) {
   EXPECT_TRUE(on.value().ui.room_sounds);
 }
 
+TEST(ConfigIni, ReadsWhetherTheClientMayAskAboutNewReleases) {
+  // On by default, so that somebody running a version behind everybody else in
+  // the room finds out. Off has to work and has to mean it: on a LAN with no
+  // route out, every check is a timeout, and there are networks whose
+  // administrator decides what talks to the outside.
+  EXPECT_TRUE(Config{}.ui.check_for_updates);
+
+  const auto off = dv::config::parse_ini("[ui]\ncheck_for_updates = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().ui.check_for_updates);
+  // The two keys of the section are independent, which is what stops turning
+  // one off from quietly turning the other off with it.
+  EXPECT_TRUE(off.value().ui.room_sounds);
+
+  const auto on = dv::config::parse_json(R"({"ui": {"check_for_updates": false}})", Config{});
+  ASSERT_TRUE(on.ok()) << on.error().message;
+  EXPECT_FALSE(on.value().ui.check_for_updates);
+}
+
 TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {
   const auto parsed = dv::config::parse_ini("[screen_audio]\nmode = process\n", Config{});
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;

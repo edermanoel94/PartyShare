@@ -61,6 +61,7 @@
 #include "ui/settings_dialog.hpp"
 #include "ui/table.hpp"
 #include "ui/theme.hpp"
+#include "ui/update_checker.hpp"
 
 namespace dv::ui {
 namespace {
@@ -288,9 +289,10 @@ constexpr int kLevelFrameMs = 16;
 
 }  // namespace
 
-MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
+MainWindow::MainWindow(client::app::CallSession& session, UpdateChecker& updates, QWidget* parent)
     : QMainWindow(parent),
       session_(session),
+      updates_(updates),
       pages_(new QStackedWidget(this)),
       level_timer_(new QTimer(this)) {
   setWindowTitle(QStringLiteral("PartyShare"));
@@ -1514,7 +1516,7 @@ bool MainWindow::choose_monitor() {
 }
 
 void MainWindow::on_open_settings() {
-  SettingsDialog dialog(session_, this);
+  SettingsDialog dialog(session_, updates_, this);
   // Otherwise every visit to Settings, for whatever reason, would quietly put
   // the monitor back to the first in the list.
   dialog.select_monitor(monitor_id_);
@@ -1683,6 +1685,32 @@ void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
                                  ? QString()
                                  : QStringLiteral("You already have a room. An administrator has "
                                                   "to close it before you can make another."));
+}
+
+void MainWindow::announce_update(const QString& version, const QUrl& page) {
+  // The whole line is rebuilt rather than appended to, so that a second and
+  // newer release arriving while this window is open replaces the first rather
+  // than queueing behind it.
+  //
+  // Escaped, both halves. Neither can carry a bracket today - one is three
+  // numbers this build itself parsed, the other a URL already refused unless it
+  // is https on github.com - but both came off the network, and the place to
+  // apply that rule is where the string becomes markup, not four functions
+  // upstream where somebody can later stop applying it.
+  version_->setTextFormat(Qt::RichText);
+  version_->setText(
+      QStringLiteral("PartyShare " DV_VERSION " &middot; <a href=\"%1\">%2 available</a>")
+          .arg(page.toString().toHtmlEscaped(), version.toHtmlEscaped()));
+  // Clickable *and* still selectable. Dropping the second flag would take away
+  // the reason the version is written here at all: a bug report with the number
+  // copied rather than retyped.
+  version_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
+  // Qt opens it with QDesktopServices, which is the platform's own "open this"
+  // and lands in the browser the person already uses. Nothing is downloaded
+  // here and nothing is run: this is a link, and the decision stays theirs.
+  version_->setOpenExternalLinks(true);
+  version_->setToolTip(QStringLiteral("Running PartyShare %1. Version %2 has been published: %3")
+                           .arg(QStringLiteral(DV_VERSION), version, page.toString()));
 }
 
 void MainWindow::apply_participants(const QStringList& names) {

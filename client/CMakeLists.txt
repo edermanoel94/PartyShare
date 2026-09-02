@@ -194,7 +194,12 @@ if(NOT DV_BUILD_CLIENT_UI)
   return()
 endif()
 
-find_package(Qt6 6.5 QUIET COMPONENTS Widgets)
+# Network is here for one request: ui::UpdateChecker asking GitHub whether a
+# release newer than this build exists. It costs Qt6Network.dll and, because
+# the address is https, the TLS backend plugin beside it - both of which
+# windeployqt finds on its own from the executable's imports, so the release
+# job needs no change for them. See client/src/ui/update_checker.hpp.
+find_package(Qt6 6.5 QUIET COMPONENTS Network Widgets)
 
 if(NOT Qt6_FOUND)
   message(FATAL_ERROR
@@ -254,6 +259,8 @@ qt_add_executable(dv_client
   src/ui/table.hpp
   src/ui/theme.cpp
   src/ui/theme.hpp
+  src/ui/update_checker.cpp
+  src/ui/update_checker.hpp
 )
 
 # The application icon, at the sizes a notification area and a window title bar
@@ -296,6 +303,7 @@ qt_add_resources(dv_client "dv_client_assets"
 
 target_link_libraries(dv_client PRIVATE
   dv::client_core
+  Qt6::Network
   Qt6::Widgets
 )
 

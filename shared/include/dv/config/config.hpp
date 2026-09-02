@@ -179,6 +179,22 @@ struct UiConfig {
   /// a cue nobody knows exists is to find. Somebody who takes calls in an open
   /// office is who this switch is for.
   bool room_sounds = true;
+
+  /// Whether the client asks GitHub, now and then, whether a release newer
+  /// than itself has been published.
+  ///
+  /// On by default, because the alternative is a room where three people run
+  /// three versions and nobody knows it. It is one request to one address,
+  /// carrying nothing but the version already written on the window, and the
+  /// answer only ever changes a line in the status bar - nothing is downloaded
+  /// and nothing is installed.
+  ///
+  /// The switch exists because "the client talks to the internet on its own"
+  /// is a real objection in the two places this program is meant to run: a LAN
+  /// with no route out, where every check is a timeout, and a network whose
+  /// administrator decides what reaches the outside. Off, no request is made
+  /// at all.
+  bool check_for_updates = true;
 };
 
 struct Config {

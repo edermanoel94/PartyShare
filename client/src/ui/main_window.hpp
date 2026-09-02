@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QString>
+#include <QUrl>
 
 #include "app/call_session.hpp"
 #include "app/network_quality.hpp"
@@ -32,6 +33,7 @@ class AdminPanel;
 class ChatView;
 class MetricsDialog;
 class ScreenView;
+class UpdateChecker;
 
 /// The interface of section 19 of SPEC.md: three screens and a settings
 /// dialog, over the core built in M2 to M6.
@@ -57,7 +59,11 @@ class MainWindow : public QMainWindow {
   Q_OBJECT
 
  public:
-  explicit MainWindow(client::app::CallSession& session, QWidget* parent = nullptr);
+  /// `updates` has to outlive this window. It is not started here and not read
+  /// here: the window passes it to the settings dialog, which is where it can
+  /// be switched on and off, and hears about a new release through the
+  /// announce_update slot below.
+  MainWindow(client::app::CallSession& session, UpdateChecker& updates, QWidget* parent = nullptr);
   ~MainWindow() override;
 
  public slots:
@@ -69,6 +75,18 @@ class MainWindow : public QMainWindow {
   /// one room, and the button that would be refused is disabled rather than
   /// left to fail on the click.
   void apply_room_list(const QStringList& rows, bool may_create);
+
+  /// A release newer than this build has been published.
+  ///
+  /// Turns the version already in the status bar into the sentence "0.1.41 -
+  /// 0.1.42 available", where the second half is a link to the download page.
+  /// Nothing is interrupted and nothing has to be dismissed: this arrives while
+  /// somebody may be in a call, and a call is not the moment to be handed a
+  /// modal window about housekeeping.
+  ///
+  /// Idempotent. ui::UpdateChecker raises this once per version, but calling it
+  /// twice with the same one leaves the same label.
+  void announce_update(const QString& version, const QUrl& page);
 
  private slots:
   void on_connect();
@@ -233,6 +251,10 @@ class MainWindow : public QMainWindow {
   void refresh_room_title();
 
   client::app::CallSession& session_;
+  /// Held only to hand to the settings dialog, which is where the switch for
+  /// it lives. This window neither starts it nor asks it anything; what it
+  /// hears from it arrives through announce_update.
+  UpdateChecker& updates_;
 
   QStackedWidget* pages_ = nullptr;
 
@@ -345,12 +367,15 @@ class MainWindow : public QMainWindow {
   QLabel* metrics_ = nullptr;
   /// Which build this is, at the right hand end of the status bar.
   ///
-  /// Written once in the constructor and never touched again: the version is
-  /// decided when the binary is compiled, not while it runs. It is on the
-  /// window rather than behind an About dialog because the question it answers
-  /// - "is the person I am in a room with running the same build as me" - is
-  /// asked while looking at the window, and an answer two clicks away gets
-  /// guessed at instead of looked up.
+  /// Written in the constructor from a number decided when the binary was
+  /// compiled. It is on the window rather than behind an About dialog because
+  /// the question it answers - "is the person I am in a room with running the
+  /// same build as me" - is asked while looking at the window, and an answer
+  /// two clicks away gets guessed at instead of looked up.
+  ///
+  /// announce_update is the one thing that changes it afterwards, and it is the
+  /// same question from the other side: a version is only interesting next to
+  /// the version it should be.
   QLabel* version_ = nullptr;
 
   client::app::CallSession::State state_ = client::app::CallSession::State::Idle;

@@ -337,6 +337,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
   } else if (section == "ui") {
     if (key == "room_sounds") {
       understood = as_bool(config.ui.room_sounds);
+    } else if (key == "check_for_updates") {
+      understood = as_bool(config.ui.check_for_updates);
     } else {
       known = false;
     }
@@ -670,6 +672,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
     if (root.contains("ui")) {
       const json& ui = root.at("ui");
       read_field(ui, "room_sounds", base.ui.room_sounds);
+      read_field(ui, "check_for_updates", base.ui.check_for_updates);
     }
     if (root.contains("database")) {
       const json& database = root.at("database");
@@ -1102,7 +1105,9 @@ std::string to_json(const Config& config) {
                       {{"level", config.logging.level},
                        {"file_path", config.logging.file_path},
                        {"log_to_console", config.logging.log_to_console}}},
-                     {"ui", {{"room_sounds", config.ui.room_sounds}}},
+                     {"ui",
+                      {{"room_sounds", config.ui.room_sounds},
+                       {"check_for_updates", config.ui.check_for_updates}}},
                      {"server",
                       {{"bind_address", config.server.bind_address},
                        {"port", config.server.port},

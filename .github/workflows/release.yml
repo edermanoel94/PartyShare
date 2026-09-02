@@ -516,6 +516,19 @@ jobs:
             throw 'windeployqt output did not reach the installer'
           }
 
+          # The TLS backend, which windeployqt stages because the client links
+          # Qt6Network. Checked separately from the platform plugin because its
+          # absence fails differently and much more quietly: the program starts,
+          # the window appears, and the only thing that stops working is the
+          # update check in client/src/ui/update_checker.cpp - which is designed
+          # to say nothing when it cannot reach GitHub, and so would say nothing
+          # about this either. A feature that is dead in the published installer
+          # and alive in every development build is exactly what a release check
+          # is for.
+          if (-not (Test-Path "$root\bin\tls\qschannelbackend.dll")) {
+            throw 'the Qt TLS backend is missing, so the client cannot reach an https address'
+          }
+
           # And the libraries that are neither Qt nor ours. windeployqt does not
           # know about them and, until the install rule in client/CMakeLists.txt
           # learned to carry a runtime dependency set, nothing did: the first MSI

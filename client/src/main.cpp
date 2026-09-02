@@ -22,6 +22,7 @@
 #include "ui/chimes.hpp"
 #include "ui/main_window.hpp"
 #include "ui/theme.hpp"
+#include "ui/update_checker.hpp"
 #include "video/screen_quality.hpp"
 
 namespace {
@@ -346,8 +347,34 @@ int run(int argc, char* argv[]) {
   // session first and leave the window's destructor talking to nothing.
   dv::client::app::CallSession session(session_options);
 
-  dv::ui::MainWindow window(session);
+  // Before the window, because the window is handed a reference to it: the
+  // settings dialog carries the switch for it, and a dialog cannot be given
+  // something that does not exist yet. It is therefore destroyed after the
+  // window, which is safe in both directions - Qt severs a connection when
+  // either end is destroyed, and nothing in here touches a widget on the way
+  // out.
+  //
+  // Idle as constructed. Nothing reaches the network until it is switched on
+  // below.
+  dv::ui::UpdateChecker updates;
+
+  dv::ui::MainWindow window(session, updates);
   window.show();
+
+  QObject::connect(&updates, &dv::ui::UpdateChecker::update_available, &window,
+                   &dv::ui::MainWindow::announce_update);
+  // After show(), and on purpose: nothing about asking GitHub a question may
+  // come between starting the program and seeing it. The first request is on a
+  // delay of its own besides, and the answer, if there is one, only ever
+  // rewrites a line in the status bar.
+  if (config.ui.check_for_updates) {
+    updates.set_enabled(true);
+  } else {
+    // Named here rather than left to UpdateChecker, which has no idea why it
+    // was not switched on. Said out loud because the silence is otherwise
+    // indistinguishable from a check that is running and finding nothing.
+    DV_LOG_INFO("Update check: off, [ui] check_for_updates is false");
+  }
 
   const auto startup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - started_at);

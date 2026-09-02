@@ -63,9 +63,18 @@ configuration error [invalid_ini]: line 2: no such setting as [network] signalli
 
 The client saves what you pick in **Settings** into this user's `config.ini`: the
 microphone, the output device, the screen resolution and frame rate, both ends of
-the bitrate range, the share sound mode and its volume, noise suppression, and
-the room chime. The monitor is the one thing on that screen that is not saved,
-because it is which screen to share next rather than a setting.
+the bitrate range, the share sound mode and its volume, noise suppression, the
+room chime, and whether it checks for new versions. The monitor is the one thing
+on that screen that is not saved, because it is which screen to share next
+rather than a setting.
+
+**Check GitHub for new versions** sits in the Connection group rather than beside
+the room chime, though both are `[ui]` settings. The question it answers is not
+"do I want to be told" but "may this program talk to the internet on its own",
+which is the same question the server address above it asks. Unticking it stops
+the check immediately — an answer already on its way is dropped rather than
+shown — and ticking it schedules one a few seconds out, so it is not a switch
+whose effect cannot be seen for six hours.
 
 **Resolution and frame rate** are `video.width`, `video.height` and `video.fps`,
 and the dialog offers 720p and 1080p at 30 or 60 fps. Both take effect at once,
@@ -161,6 +170,14 @@ understood is the one unacceptable answer.
 | Key | Default | |
 | --- | --- | --- |
 | `room_sounds` | true | The chime when somebody joins or leaves. [Chapter 10](10-join-leave-alerts.md) |
+| `check_for_updates` | true | Ask GitHub whether a newer release exists. The **Updates** box in Settings writes this. [Chapter 14](14-release.md#how-anybody-finds-out-there-is-a-new-version) |
+
+`check_for_updates` is one HTTPS request to one address, five seconds after the
+window opens and every six hours after that. It carries nothing but the version
+already written in the status bar, downloads nothing and installs nothing: the
+whole result is that line becoming `0.1.41 · 0.1.42 available`, with a link to
+the release page. Off, no request is made at all — which is the right setting
+for a machine with no route out, where every check is a timeout.
 
 ### `[logging]`
 

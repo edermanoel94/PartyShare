@@ -45,6 +45,75 @@ and both have to move together.
 everything and publishes nothing, because a release without a tag has no version
 to be.
 
+## How anybody finds out there is a new version
+
+Everything above ends with a tag and four files on a page. Nothing in it reaches
+the machine of somebody who installed 0.1.30 in March, and that is the failure
+this section is about: three people in one room running three versions, which is
+invisible from inside, because the protocol has no version negotiation and what
+an old client does with a message it does not know is nothing at all.
+
+So the client asks. Five seconds after the window opens, and every six hours
+after that, it makes one HTTPS request:
+
+```text
+GET https://api.github.com/repos/edermanoel94/PartyShare/releases/latest
+```
+
+It reads `tag_name` out of the answer, drops the `v`, and compares the three
+numbers against its own `DV_VERSION`. Those are the same three numbers by
+construction — `tag.yml` writes the version into `CMakeLists.txt` and then names
+the tag after it — so this is a comparison between a released version and a
+running one, not between two conventions that could drift.
+
+If the published one is **strictly** greater, the version in the status bar
+becomes a sentence:
+
+```text
+PartyShare 0.1.41 · 0.1.42 available
+```
+
+The second half is a link to the release page. That is the entire feature.
+**Nothing is downloaded, nothing is executed, and nothing is written to disk.**
+A program that replaces its own signed binary is a different thing to build and
+a different thing to trust, and this one does not.
+
+What it deliberately does not do, and why:
+
+- **It never interrupts.** No dialog, no toast, nothing to dismiss. The news can
+  arrive in the middle of a call, and a call is not the moment to hand somebody
+  a modal window about housekeeping.
+- **It says nothing to a build that is ahead of the newest release** — every
+  build from `master` after a tag, and every build from a pull request. The
+  alternative, treating "different" as "out of date", offers an older version to
+  exactly the people working on the newer one.
+- **It fails silently — to the person, not to the log.** No route to the
+  internet, a proxy that refuses, a Qt with no TLS backend, GitHub answering 403
+  because the address ran out of anonymous requests: each of those is a check
+  that did not happen, and none of them is worth interrupting anybody over. The
+  first outcome of each run is written at `info` whatever it was, so
+  `Update check: 0.1.41 is the newest release, and this is 0.1.41` in the log
+  answers "is this even switched on". The ones after it are at `debug`, which
+  the preprocessor removes from every build that is not `Debug` — which is why
+  the first one cannot be.
+- **It refuses a link that is not `https` on `github.com`.** The URL arrives
+  inside a JSON document from the network and ends as an argument to the
+  platform's "open this", so it is checked where it becomes a link; anything
+  else falls back to the releases page.
+
+**Check GitHub for new versions**, in the Connection group of the Settings
+dialog, turns it off, and then no request is made at all. It writes
+`[ui] check_for_updates` into this user's `config.ini`, which is also editable
+by hand and is what an administrator sets machine-wide. Off is the right setting
+on a LAN with no route out, where every check is a timeout, and on a network
+whose administrator decides what talks to the outside.
+
+The comparison lives in `shared/include/dv/core/version.hpp` and is tested in
+`tests/unit/test_version.cpp`; the request lives in
+`client/src/ui/update_checker.cpp`. The repository name is written out in both
+that file and `tag.yml` — a fork that publishes its own releases changes those
+two lines.
+
 ## What the tag produces
 
 **Four files and a checksum list.** That is the whole answer today, and it is

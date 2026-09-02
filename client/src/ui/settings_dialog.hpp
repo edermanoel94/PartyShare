@@ -19,6 +19,8 @@ class QSpinBox;
 
 namespace dv::ui {
 
+class UpdateChecker;
+
 /// Devices, monitor and bitrate, in one place.
 ///
 /// Section 19 of SPEC.md keeps the room screen down to what is needed during a
@@ -56,7 +58,11 @@ class SettingsDialog : public QDialog {
   Q_OBJECT
 
  public:
-  explicit SettingsDialog(client::app::CallSession& session, QWidget* parent = nullptr);
+  /// `updates` is the process's one release check, which this dialog owns the
+  /// switch for. It has to outlive the dialog, which it does: MainWindow holds
+  /// the same reference and this is opened from it.
+  SettingsDialog(client::app::CallSession& session, UpdateChecker& updates,
+                 QWidget* parent = nullptr);
 
  protected:
   /// The one door out of a QDialog: the Close button, the window's own close
@@ -75,6 +81,7 @@ class SettingsDialog : public QDialog {
   void on_noise_suppression_changed(bool on);
   void on_screen_volume_changed(int percent);
   void on_room_sounds_changed(bool on);
+  void on_update_checks_changed(bool on);
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -168,12 +175,20 @@ class SettingsDialog : public QDialog {
   void show_signaling_hint(const QString& refusal = {});
 
   client::app::CallSession& session_;
+  UpdateChecker& updates_;
 
   /// Where the next sign-in connects. A line edit and not a box of choices,
   /// because the address of a server nobody has connected to yet cannot be
   /// offered as one.
   QLineEdit* signaling_url_ = nullptr;
   QLabel* signaling_hint_ = nullptr;
+  /// Whether the client may ask GitHub about newer releases.
+  ///
+  /// In the connection group and not beside the room chime, though both are
+  /// `[ui]` settings, because the question somebody is answering here is not
+  /// "do I want to be told" but "may this program talk to the internet on its
+  /// own" - which is the same question the server address above it asks.
+  QCheckBox* update_checks_ = nullptr;
 
   QComboBox* input_ = nullptr;
   QComboBox* output_ = nullptr;

@@ -19,6 +19,9 @@
 
 #include <psapi.h>
 // clang-format on
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/resource.h>
 #endif
 
 #include <array>
@@ -52,6 +55,12 @@ constexpr std::size_t kParticipants = 5;
 // test observed. Windows has no /proc, and the Linux implementation does not
 // fail there so much as answer zero, which is worse: the assertion at the end
 // would report a benchmark that measured nothing as one that found nothing.
+//
+// macOS has no /proc either, and used to reach the Linux branch through the
+// `#else` and print zeroes for half a minute of a real call. It is spelled out
+// as its own case for that reason: the guard here is a list of the systems that
+// have been thought about, not a Windows exception with everything else assumed
+// to be Linux.
 #ifdef _WIN32
 /// Resident memory of this process, in mebibytes.
 [[nodiscard]] double resident_mib() {
@@ -81,6 +90,36 @@ constexpr std::size_t kParticipants = 5;
     return static_cast<double>(value.QuadPart) / 1e7;
   };
   return to_seconds(kernel) + to_seconds(user);
+}
+#elif defined(__APPLE__)
+/// Resident memory of this process, in mebibytes.
+[[nodiscard]] double resident_mib() {
+  // MACH_TASK_BASIC_INFO rather than TASK_BASIC_INFO: the older flavour holds
+  // its sizes in a natural_t, which is 32 bits, and a client of five holding a
+  // room is comfortably able to pass what that can count.
+  mach_task_basic_info_data_t info{};
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info),
+                &count) != KERN_SUCCESS) {
+    return 0;
+  }
+  return static_cast<double>(info.resident_size) / (1024.0 * 1024.0);
+}
+
+/// CPU seconds this process has used, user plus system.
+[[nodiscard]] double cpu_seconds() {
+  // getrusage rather than task_info: the task flavours report the threads that
+  // are still alive, and half a minute of a call is half a minute of encoder
+  // and network threads being created and joined. Their time is exactly the
+  // time this benchmark exists to count.
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return 0;
+  }
+  const auto to_seconds = [](const timeval& time) {
+    return static_cast<double>(time.tv_sec) + static_cast<double>(time.tv_usec) / 1e6;
+  };
+  return to_seconds(usage.ru_utime) + to_seconds(usage.ru_stime);
 }
 #else
 /// Resident memory of this process, in mebibytes.

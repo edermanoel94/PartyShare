@@ -1,5 +1,7 @@
 #include "ui/admin_panel.hpp"
 
+#include <dv/models/room.hpp>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -100,7 +102,7 @@ QWidget* AdminPanel::build_rooms_tab() {
   rooms_ =
       make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, page);
   // The slack goes to Name, for the reason it does on the home page: a name is
-  // as long as somebody made it, and People is one digit.
+  // as long as somebody made it, and People is "3/10" at its widest.
   rooms_->horizontalHeader()->setStretchLastSection(false);
   rooms_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   rooms_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -492,10 +494,21 @@ void AdminPanel::on_create_room() {
   if (!accepted) {
     return;
   }
+  // A second question rather than a form, because this panel asks for one
+  // thing at a time everywhere else and a room is two answers, not ten. The
+  // range is the protocol's; the server may allow less and answers with the
+  // range it does allow.
+  const int capacity = QInputDialog::getInt(this, QStringLiteral("New room"),
+                                            QStringLiteral("How many people the room holds"),
+                                            models::kDefaultRoomCapacity, models::kMinRoomCapacity,
+                                            models::kMaxRoomCapacity, 1, &accepted);
+  if (!accepted) {
+    return;
+  }
   // The identifier arrives through room_created, and the panel is refreshed
   // from there rather than here: asking for the list now would race the
   // creation and show the state from before it.
-  (void)send(session_.create_room(name.toStdString(), true));
+  (void)send(session_.create_room(name.toStdString(), true, capacity));
 }
 
 void AdminPanel::on_close_room() {

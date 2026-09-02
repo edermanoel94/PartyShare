@@ -179,7 +179,7 @@ Read by the server only, and covered in [chapter 4](04-server-and-database.md).
 | --- | --- | --- |
 | `server.bind_address` | `0.0.0.0` | |
 | `server.port` | 8080 | |
-| `server.max_participants_per_room` | 5 | |
+| `server.max_participants_per_room` | 20 | The largest room anybody may create, 2 to 50. A room's own size is chosen when it is created, up to this |
 | `server.heartbeat_interval_ms` | 5000 | Also how long a restriction written straight into the database takes to bite |
 | `server.heartbeat_timeout_ms` | 15000 | |
 | `server.users_file` | empty | Development account list, plain text passwords |
@@ -243,7 +243,7 @@ line, so it passes anything it does not recognise on to Qt.
 | `--config=PATH` | — | Configuration file, read before anything else |
 | `--bind-address=ADDRESS` | 0.0.0.0 | |
 | `--port=PORT` | 8080 | 1 to 65535 |
-| `--max-participants=N` | 5 | Participants per room |
+| `--max-participants=N` | 20 | Largest room anybody may create, 2 to 50 |
 | `--ice-port-range=A-B` | — | UDP range the SFU binds media in, as `50000-50100` |
 | `--users-file=PATH` | — | Development account list |
 | `--database-uri=URI` | — | MongoDB. **Giving one turns the database on** |

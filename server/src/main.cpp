@@ -125,7 +125,7 @@ void print_usage() {
              "  --config=PATH            Configuration file to read before anything else\n"
              "  --bind-address=ADDRESS   Address to listen on (default 0.0.0.0)\n"
              "  --port=PORT              Port to listen on, 1 to 65535 (default 8080)\n"
-             "  --max-participants=N     Participants allowed per room (default 5)\n"
+             "  --max-participants=N     Largest room anybody may create, 2 to 50 (default 20)\n"
              "  --ice-port-range=A-B     UDP range the SFU binds media in, as 50000-50100.\n"
              "                           Unset, the system picks an ephemeral port per\n"
              "                           participant and the firewall has to allow the\n"
@@ -379,7 +379,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGTERM, handle_signal);
 
     server.start();
-    DV_LOG_INFO("Max participants per room: {}", config.server.max_participants_per_room);
+    DV_LOG_INFO("Largest room allowed: {} people", config.server.max_participants_per_room);
     DV_LOG_INFO("Media routing: {}, {} ICE server(s)", options.enable_sfu ? "on" : "off",
                 options.sfu.ice_servers.size());
     if (options.sfu.port_range_begin != 0) {

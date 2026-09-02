@@ -177,6 +177,9 @@ RoomRecord room_from(const bsoncxx::document::view& document) {
   record.owner_id = string_field(document, "owner_id");
   record.persistent = bool_field(document, "persistent");
   record.created_at = int_field(document, "created_at");
+  // Zero for a document written before rooms had a size of their own; the
+  // RoomManager gives those the default. See RoomRecord::capacity.
+  record.capacity = static_cast<int>(int_field(document, "capacity"));
   return record;
 }
 
@@ -453,7 +456,8 @@ class MongoRoomStore final : public RoomStore {
           make_document(kvp("id", record.id)),
           make_document(
               kvp("$set", make_document(kvp("name", record.name), kvp("owner_id", record.owner_id),
-                                        kvp("persistent", record.persistent))),
+                                        kvp("persistent", record.persistent),
+                                        kvp("capacity", record.capacity))),
               // Only on insert, so that rewriting a room does not restate when
               // it was created.
               kvp("$setOnInsert", make_document(kvp("created_at", record.created_at)))),

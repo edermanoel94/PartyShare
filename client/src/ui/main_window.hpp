@@ -21,6 +21,7 @@ class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class QSpinBox;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
@@ -101,12 +102,14 @@ class MainWindow : public QMainWindow {
   void apply_participants(const QStringList& names);
   void apply_metrics(const QString& summary, int quality);
   /// The round trip to the signaling server in milliseconds, or -1 when there
-  /// is no current measurement.
+  /// is no current measurement, and whether the socket is open at all.
   ///
   /// This is what keeps the network indicator alive outside a call, which is
   /// where it was blank before: the call metrics stop when the call does, and
-  /// "is my connection any good" is asked hardest on the lobby screen.
-  void apply_link(int round_trip_ms);
+  /// "is my connection any good" is asked hardest on the lobby screen. Before
+  /// that it is asked on the login screen as "is the server there", which is
+  /// what `connected` answers.
+  void apply_link(int round_trip_ms, bool connected);
   void apply_local_level(double level, bool speaking);
   /// Moves the microphone meter one frame closer to the last measurement.
   ///
@@ -245,6 +248,10 @@ class MainWindow : public QMainWindow {
   /// What the room about to be created is called. Empty is the ordinary case
   /// and not an omission: the server names such a room after its identifier.
   QLineEdit* room_name_ = nullptr;
+  /// How many people the next room will hold. Kept at what was last chosen
+  /// rather than reset after a creation: the name is cleared because it now
+  /// belongs to a room, and a size belongs to nobody.
+  QSpinBox* room_capacity_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
   /// Every room that exists, so that arriving here does not require already
@@ -259,6 +266,10 @@ class MainWindow : public QMainWindow {
   /// every arrival and departure, so this is never long out of date, and a
   /// room missing from it falls back to its identifier.
   QHash<QString, QString> room_names_;
+  /// "3/10" by room identifier, from the same list, for the title above a
+  /// call. Kept as the text the column shows rather than as two numbers,
+  /// because that is the only form anything reads it in.
+  QHash<QString, QString> room_people_;
   /// Shown only to an administrator. See on_open_administration.
   QPushButton* admin_button_ = nullptr;
 
@@ -303,6 +314,11 @@ class MainWindow : public QMainWindow {
   /// no current measurement. Kept because the indicator is repainted from it
   /// on leaving a room, rather than left blank until the next probe.
   int link_round_trip_ms_ = -1;
+  /// Whether the signaling socket is open: 1 when it is, 0 when the server
+  /// refused it or it dropped, and -1 before the first attempt has been
+  /// answered either way. Three values because "not known yet" and "not
+  /// there" are drawn differently: one is a wait, the other is the answer.
+  int link_connected_ = -1;
   /// The link verdict on screen, for the reason `shown_quality_` exists. Its
   /// own, because the two take turns owning the same label and one resetting
   /// the other's memory would skip a restyle that was needed.

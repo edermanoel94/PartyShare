@@ -103,7 +103,7 @@ ID: 8F42A1
 
 Each channel initially has to allow:
 
-* Up to 5 participants with simultaneous audio.
+* A number of participants chosen when the room is created, 5 unless asked otherwise, up to a ceiling the server sets (20 by default, 50 at most), all with simultaneous audio.
 * 1 participant sharing a screen at a time.
 * Participants joining and leaving dynamically.
 
@@ -613,7 +613,7 @@ Do not implement initially:
 * Call recording.
 * File sharing.
 * Public streaming.
-* More than 5 participants.
+* More than the server's ceiling of participants in one room. (Rooms larger than five arrived after the MVP; see section 5.1.)
 * Webcam video.
 * 4K transmission.
 * Background blur.

@@ -23,6 +23,10 @@ struct RoomRecord {
   bool persistent = false;
   /// Seconds since the Unix epoch, UTC. Stamped by the store when zero.
   std::int64_t created_at = 0;
+  /// How many people the room holds. Zero for a record written before the
+  /// field existed, which the RoomManager reads as
+  /// `models::kDefaultRoomCapacity`: the number every room held back then.
+  int capacity = 0;
 };
 
 /// Not thread safe. See UserStore.

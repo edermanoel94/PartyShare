@@ -358,7 +358,8 @@ json room_summary_to_json(const RoomSummary& summary) {
               {"name", summary.name},
               {"owner_id", summary.owner_id},
               {"persistent", summary.persistent},
-              {"participant_count", summary.participant_count}};
+              {"participant_count", summary.participant_count},
+              {"capacity", summary.capacity}};
 }
 
 RoomSummary room_summary_from(FieldReader& reader) {
@@ -368,6 +369,7 @@ RoomSummary room_summary_from(FieldReader& reader) {
   value.owner_id = reader.optional_string("owner_id");
   value.persistent = reader.boolean("persistent");
   value.participant_count = static_cast<int>(reader.optional_integer("participant_count"));
+  value.capacity = static_cast<int>(reader.optional_integer("capacity"));
   return value;
 }
 
@@ -618,9 +620,17 @@ std::string serialize(const Message& message) {
           root["user_id"] = value.user_id;
           root["room_name"] = value.room_name;
           root["persistent"] = value.persistent;
+          // Only when asked for. A client that sends zero is asking for the
+          // default, and the field carrying a zero across the wire would put
+          // a "capacity" of nothing in front of a server built before the
+          // field, which reads it as a value rather than as an absence.
+          if (value.capacity != 0) {
+            root["capacity"] = value.capacity;
+          }
         } else if constexpr (std::is_same_v<T, RoomCreated>) {
           root["room_id"] = value.room_id;
           root["room_name"] = value.room_name;
+          root["capacity"] = value.capacity;
         } else if constexpr (std::is_same_v<T, JoinRoom>) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
@@ -816,12 +826,14 @@ Result<Message> parse(std::string_view json_text) {
       value.user_id = reader.string("user_id");
       value.room_name = reader.optional_string("room_name");
       value.persistent = reader.boolean("persistent");
+      value.capacity = static_cast<int>(reader.optional_integer("capacity"));
       return finish(reader, value);
     }
     case MessageType::RoomCreated: {
       RoomCreated value;
       value.room_id = reader.string("room_id");
       value.room_name = reader.optional_string("room_name");
+      value.capacity = static_cast<int>(reader.optional_integer("capacity"));
       return finish(reader, value);
     }
     case MessageType::JoinRoom: {

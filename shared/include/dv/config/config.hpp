@@ -133,7 +133,11 @@ struct LoggingConfig {
 struct ServerConfig {
   std::string bind_address = "0.0.0.0";
   std::uint16_t port = 8080;
-  int max_participants_per_room = 5;
+  /// The largest room anybody may create on this server. Not the size of a
+  /// room - that is chosen room by room, at creation, up to this - and so the
+  /// number to size the ICE port range and the bandwidth from. At most
+  /// models::kMaxRoomCapacity.
+  int max_participants_per_room = 20;
   int heartbeat_interval_ms = 5000;
   int heartbeat_timeout_ms = 15000;
   /// Development only account list. See server/src/main.cpp.

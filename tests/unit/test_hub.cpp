@@ -295,6 +295,60 @@ TEST_F(HubTest, CreateRoomWithNoNameAnswersWithTheIdentifier) {
   EXPECT_EQ(created->room_name, created->room_id);
 }
 
+TEST_F(HubTest, CreateRoomAnswersWithTheSizeTheRoomEndedUpWith) {
+  // A request for nothing in particular comes back with a number, so the
+  // creator can tell others whether they fit.
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{user.id, ""});
+  const auto created = find<proto::RoomCreated>(out, connection);
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->capacity, dv::models::kDefaultRoomCapacity);
+}
+
+TEST_F(HubTest, CreateRoomHonoursTheSizeAskedFor) {
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{.user_id = user.id, .capacity = 3});
+  const auto created = find<proto::RoomCreated>(out, connection);
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->capacity, 3);
+
+  // And the list everybody is shown says the same, next to how many are in.
+  const auto list = find<proto::RoomList>(out, connection);
+  ASSERT_TRUE(list.has_value());
+  ASSERT_EQ(list->rooms.size(), 1u);
+  EXPECT_EQ(list->rooms.front().capacity, 3);
+  EXPECT_EQ(list->rooms.front().participant_count, 0);
+}
+
+TEST_F(HubTest, CreateRoomRefusesASizeAboveTheServersCeiling) {
+  // The fixture's ceiling is five. Refused with the range, not clamped.
+  const auto [connection, user] = login("ana");
+  const auto out = send(connection, proto::CreateRoom{.user_id = user.id, .capacity = 6});
+  const auto error = find<proto::ErrorMessage>(out, connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+  EXPECT_EQ(error->message, "a room holds between 2 and 5 people");
+  EXPECT_FALSE(find<proto::RoomCreated>(out, connection).has_value());
+}
+
+TEST_F(HubTest, ARoomFillsUpAtItsOwnSize) {
+  const auto [owner, owner_user] = login("owner");
+  const auto out = send(owner, proto::CreateRoom{.user_id = owner_user.id, .capacity = 2});
+  const std::string room = find<proto::RoomCreated>(out, owner)->room_id;
+  (void)send(owner, proto::JoinRoom{room, owner_user.id, ""});
+
+  const auto [second, second_user] = login("second");
+  EXPECT_FALSE(
+      find<proto::ErrorMessage>(send(second, proto::JoinRoom{room, second_user.id, ""}), second)
+          .has_value());
+
+  const auto [third, third_user] = login("third");
+  const auto refused =
+      find<proto::ErrorMessage>(send(third, proto::JoinRoom{room, third_user.id, ""}), third);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "room_full");
+}
+
 TEST_F(HubTest, CreateRoomRejectsANameThatIsTooLong) {
   const auto [connection, user] = login("ana");
   const std::string too_long(dv::models::kMaxRoomNameBytes + 1, 'a');

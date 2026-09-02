@@ -1,7 +1,7 @@
 # 1. Overview
 
-PartyShare is screen sharing and voice for a room of up to five people on the
-desktop. A C++20 codebase: a Qt 6 client, and a signaling server with its own
+PartyShare is screen sharing and voice for a room of a few people on the
+desktop - five unless whoever creates the room asks for more. A C++20 codebase: a Qt 6 client, and a signaling server with its own
 SFU. Media is WebRTC end to end - Opus for audio, H.264 for the screen,
 DTLS-SRTP over both.
 

@@ -4,8 +4,9 @@ Screen sharing and voice rooms for small groups on the desktop.
 
 A C++20 application: a Qt 6 client, and a signaling server with its own SFU.
 Media is WebRTC end to end — Opus for audio, H.264 for the screen, DTLS-SRTP over
-both. The target is a room of up to five people sharing a screen at 720p and
-30 FPS, with audio latency below what anyone notices in conversation.
+both. The target is a room of a few people - five by default, sized when it is
+created - sharing a screen at 720p and 30 FPS, with audio latency below what
+anyone notices in conversation.
 
 ## Quick start
 

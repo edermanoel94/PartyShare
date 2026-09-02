@@ -224,6 +224,41 @@ TEST(RoomManager, JoiningTwiceFails) {
   EXPECT_EQ(failure->code, "already_in_room");
 }
 
+// What a refused room operation says, and not only which code it carries.
+//
+// These messages are not written for a log file alone. `Hub` relays them to
+// the client, which puts them in a dialog, so somebody who joined a room twice
+// used to read "f31d4c2809d51d780fdcc5e49d78340f is already in 332368" - two
+// identifiers and nothing a person recognises. Asserting the text is what
+// keeps it from drifting back: every test here was checking `code`, which is
+// exactly why the wording could rot unnoticed.
+TEST(RoomManager, RefusalsNamePeopleAndRoomsRatherThanIdentifiers) {
+  RoomManager manager = make_manager(2);
+  const std::string id = create(manager, "The Room");
+  ASSERT_FALSE(manager.join(id, user("u1")).has_value());
+  ASSERT_FALSE(manager.join(id, user("u2")).has_value());
+
+  const auto twice = manager.join(id, user("u1"));
+  ASSERT_TRUE(twice.has_value());
+  EXPECT_EQ(twice->message, "Name u1 is already in The Room");
+
+  const auto full = manager.join(id, user("u3"));
+  ASSERT_TRUE(full.has_value());
+  EXPECT_EQ(full->message, "room The Room is full");
+
+  ASSERT_FALSE(manager.start_screen_share(id, "u1").has_value());
+  const auto busy = manager.start_screen_share(id, "u2");
+  ASSERT_TRUE(busy.has_value());
+  EXPECT_EQ(busy->message, "Name u1 is already sharing in The Room");
+
+  // The room resolves even where the person cannot. Somebody who is not a
+  // participant has no name this class can read, and inventing a lookup so an
+  // error path could print a nicer word would be the wrong trade.
+  const auto absent = manager.leave(id, "u9");
+  ASSERT_TRUE(absent.has_value());
+  EXPECT_EQ(absent->message, "u9 is not in The Room");
+}
+
 TEST(RoomManager, EnforcesTheCapacityLimit) {
   RoomManager manager = make_manager(5);
   const std::string id = create(manager);

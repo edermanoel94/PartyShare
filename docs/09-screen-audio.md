@@ -169,8 +169,9 @@ does not. Lowering it lowers it for everyone.
 
 ## 5. Surface, configuration and protocol
 
-**Settings**, not a share dialog — there is no share dialog, the button toggles
-directly and the monitor is chosen in Settings. Two rows next to it: **Share
+**Settings**, not a share dialog — there is no share dialog. The button toggles
+directly, opening a menu of monitors first only when there is more than one, and
+Settings holds the same monitor choice. Two rows next to it: **Share
 sound** (None / Everything but PartyShare / One application) and **Application**,
 plus a hint line that explains a disabled control instead of leaving it dead. The
 application list is re-read on every change of mode, because it is a list of what

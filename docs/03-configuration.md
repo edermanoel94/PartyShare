@@ -65,7 +65,11 @@ The client saves what you pick in **Settings** into this user's `config.ini`: th
 microphone, the output device, the screen resolution and frame rate, both ends of
 the bitrate range, the share sound mode and its volume, noise suppression, and
 the room chime. The monitor is the one thing on that screen that is not saved,
-because it is which screen to share next rather than a setting.
+because it is which screen to share next rather than a setting. With more than
+one monitor the **Share screen** button asks the same question in a menu each
+time a share starts, and the box in Settings follows whatever was last chosen
+either way. Left alone, the primary monitor is shared - one screen, never every
+screen stitched side by side.
 
 **Resolution and frame rate** are `video.width`, `video.height` and `video.fps`,
 and the dialog offers 720p and 1080p at 30 or 60 fps. Both take effect at once,

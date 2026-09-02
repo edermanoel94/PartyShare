@@ -22,11 +22,16 @@ struct Monitor {
   std::string id;
   /// What to put in front of the user, for example "DP-2" or "Monitor 1".
   ///
-  /// There is no size here on purpose. No backend reports one in its source
-  /// list, and the only way to find out is to capture a frame from each
-  /// monitor, which on Wayland means a permission prompt per monitor just to
-  /// fill in a menu label.
+  /// There is no size field on purpose. No backend reports one in its source
+  /// list, and on most systems the only way to find out is to capture a frame
+  /// from each monitor, which on Wayland means a permission prompt per monitor
+  /// just to fill in a menu label. Windows is the exception - the display
+  /// settings answer for free - and there the size rides inside the name,
+  /// "Monitor 1 (2560x1440)", because two monitors of the same make need
+  /// something to tell them apart by.
   std::string name;
+  /// The one the system calls primary, where it says - Windows does - and the
+  /// first one listed where it does not. Exactly one monitor carries this.
   bool is_primary = false;
 
   friend bool operator==(const Monitor&, const Monitor&) = default;
@@ -83,7 +88,9 @@ class ScreenCapturer {
   ScreenCapturer(ScreenCapturer&&) = delete;
   ScreenCapturer& operator=(ScreenCapturer&&) = delete;
 
-  /// Starts capturing `monitor_id`. An empty id means the primary monitor.
+  /// Starts capturing `monitor_id`. An empty id means the primary monitor, the
+  /// one `monitors()` lists first - one monitor, never the whole desktop with
+  /// every screen side by side, which is what the platform's own default is.
   ///
   /// Fails with `monitor_not_found` when the id is not one the system reports,
   /// and with `capture_unavailable` when the platform refuses to start at all.

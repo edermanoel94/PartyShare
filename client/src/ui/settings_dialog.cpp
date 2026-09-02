@@ -872,6 +872,12 @@ void SettingsDialog::on_quality_changed() {
   stage(settings);
 }
 
+void SettingsDialog::select_monitor(const QString& id) {
+  if (const int index = monitor_->findData(id); index >= 0) {
+    monitor_->setCurrentIndex(index);
+  }
+}
+
 QString SettingsDialog::selected_monitor() const {
   return monitor_->currentData().toString();
 }

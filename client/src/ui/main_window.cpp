@@ -1436,6 +1436,14 @@ void MainWindow::on_toggle_share() {
     return;
   }
 
+  // Which screen, asked at the moment of sharing. Settings holds the same
+  // choice, but somebody with two monitors who never opened it had no way of
+  // knowing there was one to make, and shared both screens side by side.
+  if (!choose_monitor()) {
+    refresh_controls();
+    return;
+  }
+
   // Whatever the dialog last chose, or what the configuration says for
   // somebody who has never opened it.
   const client::app::ScreenAudio audio =
@@ -1463,8 +1471,53 @@ void MainWindow::on_toggle_share() {
   refresh_controls();
 }
 
+bool MainWindow::choose_monitor() {
+  const auto listed = session_.monitors();
+  if (!listed || listed.value().size() < 2) {
+    // One monitor, or none this side can name: nothing to ask. The capturer
+    // sorts out the rest, including saying so when there is nothing to grab.
+    return true;
+  }
+
+  // The one in use, or the primary for somebody who has never chosen. Marked
+  // rather than preselected: a menu has no selection, and the mark says which
+  // one "the same as last time" would be.
+  QString current = monitor_id_;
+  if (current.isEmpty()) {
+    for (const client::video::Monitor& monitor : listed.value()) {
+      if (monitor.is_primary) {
+        current = QString::fromStdString(monitor.id);
+      }
+    }
+  }
+
+  QMenu menu(this);
+  for (const client::video::Monitor& monitor : listed.value()) {
+    const QString id = QString::fromStdString(monitor.id);
+    const QString name = QString::fromStdString(monitor.name);
+    QAction* action =
+        menu.addAction(monitor.is_primary ? QStringLiteral("%1, primary").arg(name) : name);
+    action->setCheckable(true);
+    action->setChecked(id == current);
+    action->setData(id);
+  }
+
+  // Under the button, where a menu that a button opened belongs. Nothing
+  // chosen - Escape, a click elsewhere - means no share, and the caller puts
+  // the button back.
+  QAction* chosen = menu.exec(share_button_->mapToGlobal(QPoint(0, share_button_->height())));
+  if (chosen == nullptr) {
+    return false;
+  }
+  monitor_id_ = chosen->data().toString();
+  return true;
+}
+
 void MainWindow::on_open_settings() {
   SettingsDialog dialog(session_, this);
+  // Otherwise every visit to Settings, for whatever reason, would quietly put
+  // the monitor back to the first in the list.
+  dialog.select_monitor(monitor_id_);
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
   screen_audio_ = dialog.selected_screen_audio();
@@ -2330,7 +2383,11 @@ void MainWindow::refresh_controls() {
   // A forced mute is not a button that turned itself off: it is one that will
   // not turn back on. Disabled rather than left clickable and refused, which
   // would leave the microphone looking like it had failed.
-  mute_button_->setEnabled(!restrictions.muted);
+  //
+  // And nothing to mute outside a call: a room is always entered with the
+  // microphone open (CallSession::set_muted says why), so a button that could
+  // be pressed in the lobby would promise a mute the join throws away.
+  mute_button_->setEnabled(in_call && !restrictions.muted);
   mute_button_->setToolTip(
       restrictions.muted ? QStringLiteral("An administrator has muted this account.") : QString());
 

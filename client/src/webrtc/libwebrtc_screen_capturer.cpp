@@ -26,6 +26,16 @@
 #include <modules/desktop_capture/desktop_capturer.h>
 #include <modules/desktop_capture/desktop_frame.h>
 
+#if defined(WEBRTC_WIN)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <dv/logging/logger.hpp>
 
 #include "video/screen_capturer.hpp"
@@ -65,6 +75,63 @@ constexpr int kMaxConsecutiveFailures = 30;
   // X11 gives the output name, "DP-2". Windows and macOS give a title, and
   // sometimes nothing at all, which is what the number is for.
   return source.title.empty() ? "Monitor " + std::to_string(index + 1) : source.title;
+}
+
+/// One entry of `monitors()`, before the primary is settled.
+[[nodiscard]] Monitor describe(const webrtc::DesktopCapturer::Source& source, std::size_t index) {
+  Monitor monitor{
+      .id = std::to_string(source.id), .name = monitor_name(source, index), .is_primary = false};
+#if defined(WEBRTC_WIN)
+  // On Windows a source id is the display's index in EnumDisplayDevices, for
+  // the GDI capturer and the Desktop Duplication one alike - see GetScreenList
+  // in modules/desktop_capture/win/screen_capture_utils.cc, which both draw
+  // their lists from. So the same call answers which display is the primary
+  // and, through its current mode, how big it is. Neither costs a frame.
+  DISPLAY_DEVICEW device{};
+  device.cb = sizeof(device);
+  if (source.id >= 0 &&
+      EnumDisplayDevicesW(nullptr, static_cast<DWORD>(source.id), &device, 0) != 0) {
+    monitor.is_primary = (device.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &mode) != 0 &&
+        mode.dmPelsWidth > 0 && mode.dmPelsHeight > 0) {
+      monitor.name +=
+          " (" + std::to_string(mode.dmPelsWidth) + "x" + std::to_string(mode.dmPelsHeight) + ")";
+    }
+  }
+#endif
+  return monitor;
+}
+
+/// The monitors `capturer` can see, primary first.
+///
+/// Where the system does not say which one is primary, the first it lists is
+/// taken to be. Either way exactly one entry says so, and it is the front.
+[[nodiscard]] Result<std::vector<Monitor>> list_monitors(webrtc::DesktopCapturer& capturer) {
+  webrtc::DesktopCapturer::SourceList sources;
+  if (!capturer.GetSourceList(&sources)) {
+    return Result<std::vector<Monitor>>::failure("capture_unavailable",
+                                                 "the system would not list its monitors");
+  }
+
+  std::vector<Monitor> found;
+  found.reserve(sources.size());
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    found.push_back(describe(sources[index], index));
+  }
+
+  const auto primary =
+      std::ranges::find_if(found, [](const Monitor& monitor) { return monitor.is_primary; });
+  if (primary == found.end()) {
+    if (!found.empty()) {
+      found.front().is_primary = true;
+    }
+  } else {
+    // To the front, with the others kept in the order the system gave them.
+    std::rotate(found.begin(), primary, std::next(primary));
+  }
+  return found;
 }
 
 /// Turns a captured BGRA frame into one at the size we mean to send.
@@ -169,6 +236,24 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
       started.set_value(Result<std::monostate>::failure(
           "capture_unavailable", "this system has no screen capturer, is a display attached?"));
       return;
+    }
+
+    if (use_default) {
+      // An empty id promises the primary monitor, and libwebrtc's own default
+      // is not that. A capturer never told SelectSource keeps
+      // kFullDesktopScreenId and duplicates the whole desktop: on two monitors
+      // that is both of them side by side, fitted into 720p as a strip half
+      // the height, and it is what everybody with a second screen was sending
+      // until this chose for them. Listed here, on the capture thread and from
+      // this capturer, because the ids belong to the capturer that made them.
+      if (const auto listed = list_monitors(*capturer); listed && !listed.value().empty()) {
+        // Written by describe() from a number, so it reads back as one.
+        source_id =
+            static_cast<webrtc::DesktopCapturer::SourceId>(std::stoll(listed.value().front().id));
+        use_default = false;
+      } else {
+        DV_LOG_WARN("Screen capture: could not tell which monitor is primary, sharing them all");
+      }
     }
 
     if (!use_default && !capturer->SelectSource(source_id)) {
@@ -291,19 +376,7 @@ Result<std::vector<Monitor>> monitors() {
         "capture_unavailable", "this system has no screen capturer, is a display attached?");
   }
 
-  webrtc::DesktopCapturer::SourceList sources;
-  if (!capturer->GetSourceList(&sources)) {
-    return Result<std::vector<Monitor>>::failure("capture_unavailable",
-                                                 "the system would not list its monitors");
-  }
-
-  std::vector<Monitor> found;
-  found.reserve(sources.size());
-  for (std::size_t index = 0; index < sources.size(); ++index) {
-    const webrtc::DesktopCapturer::Source& source = sources[index];
-    found.push_back(Monitor{std::to_string(source.id), monitor_name(source, index), index == 0});
-  }
-  return found;
+  return list_monitors(*capturer);
 }
 
 bool screen_capture_is_available() noexcept {

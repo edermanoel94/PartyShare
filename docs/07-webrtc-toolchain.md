@@ -279,8 +279,13 @@ and are not:
 - On **Windows**, `TheEchoCancellerRunsOnTheCapturedAudio` failed while echo
   cancellation was working the whole time. Windows has an echo canceller of its
   own, libwebrtc enables it and switches AEC3 off — *"Disabling EC since built-in
-  EC will be used instead"* — and `echo_return_loss` is an AEC3 metric.
-  `AudioStats::echo_cancellation_active` now answers for both.
+  EC will be used instead"* — and `echo_return_loss` is an AEC3 metric. That
+  canceller has since been declined, and not for the metric: it captures only
+  while it is also playing, so the first participant of a room, whose microphone
+  starts before there is anything to play, sent no audio at all — *"Playout must
+  be started before recording when using the built-in AEC"*. The engine turns it
+  off after the voice engine's own defaults turn it on, AEC3 runs on Windows as
+  it does elsewhere, and `echo_return_loss` is the evidence on every platform.
 - On **macOS**, switching the microphone takes 2.4 s to resume audio against a
   500 ms budget, which is what re-opening a CoreAudio input costs.
 

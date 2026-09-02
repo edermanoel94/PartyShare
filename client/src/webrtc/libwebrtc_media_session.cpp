@@ -91,22 +91,6 @@ class Engine {
     return engine;
   }
 
-  /// Whether the platform offers an echo canceller of its own.
-  ///
-  /// When it does, libwebrtc uses it and switches AEC3 off - see
-  /// media/engine/webrtc_voice_engine.cc, "Disabling EC since built-in EC will
-  /// be used instead". Windows reaches this and Linux does not, which is why
-  /// the same call reports echo cancellation differently on the two.
-  [[nodiscard]] bool built_in_aec_available() {
-    if (audio_device_ == nullptr) {
-      return false;
-    }
-    bool available = false;
-    worker_thread_->BlockingCall(
-        [this, &available] { available = audio_device_->BuiltInAECIsAvailable(); });
-    return available;
-  }
-
   [[nodiscard]] webrtc::PeerConnectionFactoryInterface* factory() const { return factory_.get(); }
   [[nodiscard]] const std::string& failure() const { return failure_; }
 
@@ -146,11 +130,53 @@ class Engine {
     audio_processing_->ApplyConfig(config);
   }
 
+  /// Declines the echo canceller the device module offers, so that AEC3 does
+  /// the job on every platform.
+  ///
+  /// On Windows the module has one, and libwebrtc takes it the moment the
+  /// voice engine initialises: AEC3 goes off and capture runs through the
+  /// Voice Capture DSP instead. That DSP only captures while it is also
+  /// playing, so StartRecording fails - "Playout must be started before
+  /// recording when using the built-in AEC" - whenever there is nothing to
+  /// play yet. libwebrtc starts playout with the first receiving stream and
+  /// recording with the first sending one, tries each once and never again:
+  /// whoever opens a room is alone when their microphone starts, and stays
+  /// silent for everyone who joins after. The first person in every room is
+  /// exactly the one this loses.
+  ///
+  /// Called by every session once its peer connection exists. Not earlier: the
+  /// voice engine initialises lazily, after the factory, and it is that
+  /// initialisation which turns the canceller on - anything done before it is
+  /// undone by it. Not later either: the module refuses the change once
+  /// capture is initialised, which negotiation is about to do. A session then
+  /// re-applies the processing switches, which is what puts AEC3 back after
+  /// the same initialisation switched it off in the processing module.
+  /// audio_options() keeps its side by never setting the switch again.
+  void decline_platform_echo_canceller() {
+    if (audio_device_ == nullptr) {
+      return;
+    }
+    worker_thread_->BlockingCall([this] {
+      if (audio_device_->BuiltInAECIsAvailable() && audio_device_->EnableBuiltInAEC(false) != 0) {
+        DV_LOG_WARN(
+            "Media: the platform echo canceller could not be turned off; the first "
+            "participant of a room will have no microphone");
+      }
+    });
+  }
+
   /// The switches as they stand, in the shape a session hands to the media
   /// engine.
+  ///
+  /// Echo cancellation is deliberately left unset. A set value is an invitation
+  /// libwebrtc accepts on Windows: ApplyOptions sees the device module's own
+  /// canceller and takes it in place of AEC3 - see
+  /// decline_platform_echo_canceller for what that costs. Left unset,
+  /// ApplyOptions leaves both the module and the echo canceller of the
+  /// processing module alone, and set_audio_processing above is the only hand
+  /// on the switch.
   [[nodiscard]] webrtc::AudioOptions audio_options() const {
     webrtc::AudioOptions options;
-    options.echo_cancellation = echo_cancellation_.load();
     options.noise_suppression = noise_suppression_.load();
     options.auto_gain_control = automatic_gain_control_.load();
     return options;
@@ -683,6 +709,11 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
                                              std::string(created.error().message()));
     }
     connection_ = created.MoveValue();
+
+    // With a connection there is an initialised voice engine, and nothing has
+    // started capturing yet: the one moment this can be done. The switches
+    // re-applied just below put AEC3 in its place.
+    engine.decline_platform_echo_canceller();
 
     // The microphone track is added before any negotiation. In unified plan
     // that gives us a transceiver ready to be paired with the recvonly audio
@@ -1245,18 +1276,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // AudioTrackInterface::GetSignalLevel looks like the obvious way to ask,
     // but a local track's source never implements it, so it answers false for
     // every call and an indicator built on it stays at zero forever.
-    // Two ways for this to be true, and only one of them leaves a number.
-    //
-    // AEC3 reports echo return loss while it runs, and that is the evidence on
-    // a platform without an echo canceller of its own. Where the operating
-    // system has one - Windows does - libwebrtc enables it and switches AEC3
-    // off, so there is no ERL to read and the cancellation is happening all the
-    // same. Reading only the first would report "no echo cancellation" on a
-    // machine that is cancelling echo, which is worse than reporting nothing.
-    if (options_.echo_cancellation && Engine::instance().built_in_aec_available()) {
-      collected.echo_cancellation_active = true;
-    }
-
+    // AEC3 reports echo return loss while it runs, and AEC3 is the canceller
+    // on every platform: the engine declines the one Windows offers, see
+    // Engine::decline_platform_echo_canceller. So a missing ERL means no
+    // cancellation, and there is no second case to account for.
     for (const auto* source : report->GetStatsOfType<webrtc::RTCAudioSourceStats>()) {
       if (source->echo_return_loss.has_value()) {
         collected.echo_cancellation_active = true;

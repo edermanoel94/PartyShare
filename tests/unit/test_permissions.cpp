@@ -49,6 +49,7 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
            proto::MessageType::DeleteUser,
            proto::MessageType::DeleteRoom,
            proto::MessageType::ListAudit,
+           proto::MessageType::SendNotice,
        }) {
     EXPECT_EQ(access_for(type), Access::AdminOnly) << proto::type_name(type);
     EXPECT_FALSE(is_allowed(Role::User, type)) << proto::type_name(type);
@@ -80,6 +81,7 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
            proto::MessageType::UserKicked,
            proto::MessageType::UserRestricted,
            proto::MessageType::ChatHistory,
+           proto::MessageType::Notice,
            proto::MessageType::UserList,
            proto::MessageType::RoomList,
            proto::MessageType::AuditList,
@@ -99,6 +101,20 @@ TEST(Permissions, ReadingAConversationIsNotAnAdministrativePower) {
   // narrows it, and this is the half that belongs here.
   EXPECT_EQ(access_for(proto::MessageType::ListChat), Access::Authenticated);
   EXPECT_EQ(access_for(proto::MessageType::ChatMessage), Access::Authenticated);
+}
+
+TEST(Permissions, AnsweringAnAdministratorIsNotAnAdministrativePower) {
+  // Sending somebody a notice is administration; saying you read the one you
+  // were sent is not. An ordinary user who could not send this would be
+  // looking at a box that never goes away, which is the opposite of what the
+  // restriction would be protecting.
+  //
+  // It names a notice and not a person, and Hub::handle_acknowledge_notice
+  // accepts it only for one addressed to the connection's own account. The
+  // table says the message may be sent; the handler is what narrows it, the
+  // same division `list_chat` above is written for.
+  EXPECT_EQ(access_for(proto::MessageType::AcknowledgeNotice), Access::Authenticated);
+  EXPECT_TRUE(is_allowed(Role::User, proto::MessageType::AcknowledgeNotice));
 }
 
 TEST(Permissions, AValueOutsideTheEnumGrantsNothing) {

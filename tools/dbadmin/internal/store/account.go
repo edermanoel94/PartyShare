@@ -188,4 +188,11 @@ type Summary struct {
 	Admins       int64
 	Rooms        int64
 	AuditEntries int64
+	// Sessions is every session document, open and closed alike, which is what
+	// the tab bar counts for the other three as well. How many of them are
+	// somebody who is online right now is a question about time, and the
+	// sessions screen answers it on its own status line rather than here: a
+	// number in the tab bar that changed while nobody did anything would read
+	// as the tool being unable to count.
+	Sessions int64
 }

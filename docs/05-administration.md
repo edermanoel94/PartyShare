@@ -40,15 +40,60 @@ remaining administrator may not be demoted, banned or deleted
 silently ignored. Without them, one click leaves a deployment that can only be
 repaired by editing the database by hand.
 
-## Kick, force mute, and restrictions
+## Kick, force mute, restrictions, and a notice
 
-Three different tools, and none of them replaces another.
+Four different tools, and none of them replaces another.
 
 | | Reaches | Lasts |
 | --- | --- | --- |
 | **Kick** | One participant, one room | That visit. They can come straight back |
 | **Force mute** | One participant, one room | Until an administrator releases it |
 | **Restriction** | The account | Until an administrator lifts it. Survives the room, the session and the process |
+| **Notice** | The account | Until they say they have read it. Waits for them if they are not connected |
+
+The first three take something away. A notice takes nothing away, and that is
+what it is for: it is the only way to tell somebody *why*, and the only one of
+the four that can be aimed at a person who is not connected and still reach
+them.
+
+## Sending somebody a notice
+
+`Message` on the accounts tab of the panel. It is one box of text, at most 500
+bytes, and it arrives on their screen as a box with one button.
+
+A notice is not chat. Chat belongs to a room, is read by everybody in it, and
+needs no answer. A notice belongs to the account, is read by nobody else, and
+exists to be answered — and until it is answered, the server hands it over again
+at the start of every session that account opens. Somebody who was signed out
+when it was written reads it the next time they sign in; somebody who closed the
+box without answering reads it again.
+
+The answer is one button and it goes nowhere near the sender. It is written into
+the audit log as `acknowledge_notice`, with the person who read it as the actor,
+because a receipt that only arrived while the administrator happened to be
+connected would be a receipt nobody could rely on — and the two of them not
+having to be online at the same time is the whole point.
+
+Both halves are in the log, and both carry the identifier of the notice, so a
+message and its answer can be read as a pair:
+
+```text
+2026-09-02 09:41  ana    send_notice         bruno  notice=68b0… please use a headset
+2026-09-02 10:03  bruno  acknowledge_notice  bruno  notice=68b0… from=ana
+```
+
+The full text is in the entry. "An administrator sent a message" with no message
+is a row nobody can act on afterwards, and 500 bytes is a limit small enough
+that a log full of them is still a log somebody scrolls.
+
+Deleting an account removes every notice ever sent to it. These are messages
+written to a named person, and a record with a subject and no owner is not one
+worth keeping.
+
+`dbadmin` cannot send one. A notice needs to be delivered to whoever is
+connected and needs an identifier the moment it is written, and both of those
+are a running server's job — see [what it deliberately does not
+do](../tools/dbadmin/README.md).
 
 A forced mute holds until an administrator releases it: a participant sending
 `unmute` about themselves while one is in place is refused. Muting themselves
@@ -128,9 +173,20 @@ server to talk to:
   where the name is, attributed to `dbadmin:<name>`.
 
 It deliberately does not create collections or indexes, create rooms, close a
-room on a running server, or kick one participant out of one room. The first
-because the schema belongs to the server; the rest because they are about a room
-in a running process's memory, which a database tool has no connection to.
+room on a running server, kick one participant out of one room, or send a
+notice. The first because the schema belongs to the server; the next three
+because they are about a room in a running process's memory, which a database
+tool has no connection to; the last because a notice has to be delivered to
+whoever is connected and needs an identifier at the moment it is written, and
+both of those are the server's job.
+
+What it does have that the panel does not is **who is online, and from where**.
+The server writes one row per session — the account, the address, when it
+started, when it was last heard from — and that collection is written for this
+reader and for no other. The panel shows an `Online` column, but only about the
+server it is connected to and only while it is; the sessions screen is a history
+that outlives the process, which is what makes it the place to answer "which
+address was Bruno on last Tuesday".
 
 ## The audit log
 
@@ -140,17 +196,27 @@ sharing a screen and muting yourself would fill the log with what nobody reads i
 for.
 
 `action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`,
-`create_user`, `update_user`, `delete_user`, `create_room`, `delete_room` or
-`change_password`. A `restrict_user` entry names the flags that **moved** and
+`create_user`, `update_user`, `delete_user`, `create_room`, `delete_room`,
+`change_password`, `send_notice` or `acknowledge_notice`. A `restrict_user`
+entry names the flags that **moved** and
 what they became, plus the reason if one was given: `silenced=true reason=off
 topic`. What moved and not the resulting set, because a log that only ever states
 the result leaves the reader to diff it against an entry they have to go and
 find. An action that changes nothing writes no entry at all.
 
+`acknowledge_notice` is the one entry written by somebody who is not an
+administrator: the actor is the person who read the notice. It belongs here all
+the same, because it is the second half of an administrative action, and an
+action whose outcome is recorded somewhere else is one nobody can follow
+through.
+
 Three properties worth being explicit about:
 
 **Nothing in it is worth stealing.** No password, no salt, no hash, no session
-token. `models::AuditEntry` has no field for any of them.
+token. `models::AuditEntry` has no field for any of them. The text of a notice
+is the one thing an entry quotes in full, and it is there because it is what
+somebody was told — a message an administrator sent and can no longer produce is
+not a message anybody can be held to.
 
 **It cannot be erased from the application.** There is no protocol message and no
 interface that deletes an entry, and `store::AuditLog` has no removal operation

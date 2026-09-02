@@ -44,6 +44,9 @@ TEST(MessageType, NamesRoundTrip) {
       MessageType::ChatMessage,
       MessageType::ListChat,
       MessageType::ChatHistory,
+      MessageType::SendNotice,
+      MessageType::Notice,
+      MessageType::AcknowledgeNotice,
       MessageType::Error,
       MessageType::Ping,
       MessageType::Pong,
@@ -252,6 +255,52 @@ TEST(RoundTrip, ChatHistory) {
   EXPECT_EQ(round_trip(original), original);
 }
 
+TEST(RoundTrip, TheThreeNoticeMessages) {
+  EXPECT_EQ(round_trip(SendNotice{"user1", "the meeting moved to three"}),
+            (SendNotice{"user1", "the meeting moved to three"}));
+
+  const Notice delivered{.notice = {.id = "42",
+                                    .user_id = "user1",
+                                    .from_user_id = "admin1",
+                                    .from_display_name = "Ana",
+                                    .text = "the meeting moved to three",
+                                    .created_at = 1755676800,
+                                    .acknowledged_at = 1755676860}};
+  EXPECT_EQ(round_trip(delivered), delivered);
+
+  EXPECT_EQ(round_trip(AcknowledgeNotice{"42"}), (AcknowledgeNotice{"42"}));
+}
+
+TEST(Protocol, AnUnansweredNoticeCarriesAZeroRatherThanNothing) {
+  // Zero is what "they have not said they read it" is on the wire, and it has
+  // to survive the round trip as zero: a client that read a missing field as
+  // "acknowledged" would stop showing the box that is the whole point.
+  const Notice pending{.notice = {.id = "42",
+                                  .user_id = "user1",
+                                  .from_user_id = "admin1",
+                                  .from_display_name = "Ana",
+                                  .text = "read this",
+                                  .created_at = 1755676800}};
+  const Notice back = round_trip(pending);
+  EXPECT_EQ(back.notice.acknowledged_at, 0);
+  EXPECT_FALSE(back.notice.acknowledged());
+}
+
+TEST(Protocol, ANoticeNeedsItsPayload) {
+  const auto parsed = parse(R"({"type":"notice"})");
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, "missing_field");
+}
+
+TEST(Protocol, ANoticeOnTheWayUpNeedsBothHalves) {
+  // A target and a line of text. Neither has a safe reading when it is absent:
+  // a notice to nobody is a row nothing will ever deliver, and one with no
+  // text is a box with nothing in it.
+  EXPECT_EQ(parse(R"({"type":"send_notice","text":"hello"})").error().code, "missing_field");
+  EXPECT_EQ(parse(R"({"type":"send_notice","user_id":"user1"})").error().code, "missing_field");
+  EXPECT_EQ(parse(R"({"type":"acknowledge_notice"})").error().code, "missing_field");
+}
+
 TEST(RoundTrip, AChatMessageCarriesEmoji) {
   // Not a curiosity: this is the first field of the protocol somebody types
   // for fun rather than for the server, so it is the one that will be full of
@@ -419,6 +468,9 @@ TEST(TypeOf, MatchesTheAlternativeHeld) {
   EXPECT_EQ(type_of(Message{ChatMessage{}}), MessageType::ChatMessage);
   EXPECT_EQ(type_of(Message{ListChat{}}), MessageType::ListChat);
   EXPECT_EQ(type_of(Message{ChatHistory{}}), MessageType::ChatHistory);
+  EXPECT_EQ(type_of(Message{SendNotice{}}), MessageType::SendNotice);
+  EXPECT_EQ(type_of(Message{Notice{}}), MessageType::Notice);
+  EXPECT_EQ(type_of(Message{AcknowledgeNotice{}}), MessageType::AcknowledgeNotice);
   EXPECT_EQ(type_of(Message{ErrorMessage{}}), MessageType::Error);
   EXPECT_EQ(type_of(Message{Ping{}}), MessageType::Ping);
   EXPECT_EQ(type_of(Message{Pong{}}), MessageType::Pong);

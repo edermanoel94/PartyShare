@@ -60,6 +60,16 @@ enum class Access : std::uint8_t {
     // about.
     case protocol::MessageType::ChatMessage:
     case protocol::MessageType::ListChat:
+    // Saying you read what an administrator sent you. Deliberately here and
+    // not in the administration block: a notice is a box on somebody's screen
+    // that only their own answer takes away, and an ordinary user who could
+    // not send this would be looking at that box forever.
+    //
+    // Nothing about it grants power over another account. It names a notice
+    // and not a person, and the handler accepts it only for a notice addressed
+    // to the connection's own account, so a client that guesses somebody
+    // else's identifier is refused as though it had guessed nothing.
+    case protocol::MessageType::AcknowledgeNotice:
     case protocol::MessageType::Ping:
     case protocol::MessageType::Pong:
     // Which rooms exist, and how many people are in each. This was
@@ -84,6 +94,11 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::DeleteUser:
     case protocol::MessageType::DeleteRoom:
     case protocol::MessageType::ListAudit:
+    // Telling one account something, in a box they have to dismiss. It reaches
+    // a person who is in no room and, if they are not connected, a person who
+    // is not there at all, which is exactly the reach that makes it
+    // administration rather than a message.
+    case protocol::MessageType::SendNotice:
       return Access::AdminOnly;
 
     // Answers and announcements. A client sending one of these is confused,
@@ -96,6 +111,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserRestricted:
     case protocol::MessageType::PasswordChanged:
     case protocol::MessageType::ChatHistory:
+    case protocol::MessageType::Notice:
     case protocol::MessageType::UserList:
     case protocol::MessageType::RoomList:
     case protocol::MessageType::AuditList:

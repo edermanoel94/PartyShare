@@ -15,6 +15,8 @@ fixed; it does not quietly disappear.
 | Privilege escalation | — | Covered: one gate, role re-read per action, verified by tests |
 | Audit of administrative actions | — | Covered, and not erasable from the application |
 | Reading another room's chat | — | Covered: participants only, administrators included |
+| An address stored per session | — | Covered: never leaves the database, and no protocol message returns one |
+| Session history kept forever | Low | **Open** by design, the operator sets the retention |
 | Stream storage | — | Covered, nothing is written |
 | Tokens at rest | — | Covered, there is no persistence |
 | Password hash without cost | High | **Fixed** in this review — scrypt |
@@ -179,7 +181,39 @@ operator with the database has them. That is the same position the audit log is
 in: this project encrypts what crosses the network, not what a server was
 deliberately asked to remember.
 
-## 9. A packet that took the server down
+## 9. Storing an address per session
+
+**Covered, and it is a deliberate trade.** The server writes one row per
+sign-in: the account, the address the connection came from, when it started,
+when it was last heard from, and when it ended. It is the first thing this
+project keeps that describes a person rather than what they did, and it exists
+because an operator with no running server had no way to answer "who is on the
+platform" or "which address was this account on".
+
+**What it is for.** The two questions above, and a third one that only appears
+after something goes wrong: an account behaving badly, and an operator holding a
+line from a firewall log with nothing to match it against. A per-session row is
+the smallest thing that answers all three.
+
+**Who may read it.** Nobody over the protocol. There is no message that returns
+an address, and `user_list` carries only a boolean saying whether the account
+has a connection right now. It is read by `tools/dbadmin`, which means it is
+read by somebody who already has the database — and somebody who has the
+database has the password hashes too, so this is not a new door.
+
+**What it is not.** Not a location, and the field is named for the connection
+rather than for the person on purpose: a server behind a proxy records the
+proxy, which is a true statement about that hop and a useless one about
+anybody's whereabouts.
+
+**What is not solved here.** Nothing prunes it. The collection grows one row per
+connection and keeps every address indefinitely, which for a deployment with a
+retention policy is the wrong default and for one without is the only honest
+one — the server cannot know how long its operator is allowed to remember.
+[docs/04-server-and-database.md](04-server-and-database.md) says what to run and
+where; a deployment under a regime that sets a limit has to run it.
+
+## 10. A packet that took the server down
 
 Not requested by section 17, and found while measuring bitrate adaptation.
 

@@ -291,6 +291,8 @@ int main(int argc, char* argv[]) {
     dv::server::store::UserStore* user_store = nullptr;
     dv::server::store::RoomStore* room_store = nullptr;
     dv::server::store::ChatStore* chat_store = nullptr;
+    dv::server::store::NoticeStore* notice_store = nullptr;
+    dv::server::store::SessionStore* session_store = nullptr;
     dv::server::store::AuditLog* audit_log = nullptr;
 #ifdef DV_HAS_MONGO
     // Outlives the server, which holds references into it.
@@ -312,6 +314,8 @@ int main(int argc, char* argv[]) {
       user_store = &database->users();
       room_store = &database->rooms();
       chat_store = &database->chat();
+      notice_store = &database->notices();
+      session_store = &database->sessions();
       audit_log = &database->audit();
 #else
       DV_LOG_ERROR(
@@ -341,6 +345,8 @@ int main(int argc, char* argv[]) {
     options.hub.users = user_store;
     options.hub.rooms = room_store;
     options.hub.chat = chat_store;
+    options.hub.notices = notice_store;
+    options.hub.sessions = session_store;
     options.hub.audit = audit_log;
 
     // ICE for the SFU's own connections. TURN only matters once a participant is

@@ -3,7 +3,9 @@ add_library(dv_shared STATIC
   src/logging/logger.cpp
   src/config/config.cpp
   src/models/chat.cpp
+  src/models/notice.cpp
   src/models/room.cpp
+  src/models/text.cpp
   src/models/user.cpp
   src/protocol/message.cpp
 )

@@ -954,6 +954,30 @@ void MainWindow::wire_session() {
           [this] {
             QMetaObject::invokeMethod(this, "apply_password_changed", Qt::QueuedConnection);
           },
+      .on_notice =
+          [this](const models::Notice& notice) {
+            // The name the administrator held when they wrote it, which is
+            // what travelled with the notice: this may be read a week later,
+            // by which time the account behind it may have been renamed or
+            // removed, and "an administrator" is the right thing to say then
+            // rather than an identifier.
+            const QString from = notice.from_display_name.empty()
+                                     ? QStringLiteral("an administrator")
+                                     : QString::fromStdString(notice.from_display_name);
+            QMetaObject::invokeMethod(this, "apply_notice", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(notice.id)),
+                                      Q_ARG(QString, from),
+                                      Q_ARG(QString, QString::fromStdString(notice.text)));
+          },
+      .on_notice_sent =
+          [this](const models::Notice& notice) {
+            // The identifier and not a name, because turning one into the
+            // other means reading the account list the panel is holding, and
+            // this runs on the signaling thread. The slot at the other end
+            // runs on the interface thread, where that list is safe to touch.
+            QMetaObject::invokeMethod(this, "apply_notice_sent", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(notice.user_id)));
+          },
       .on_user_list =
           [this](const std::vector<protocol::UserSummary>& users) {
             QStringList rows;
@@ -2032,6 +2056,44 @@ void MainWindow::apply_restrictions(const QString& name, const QString& by_name,
   }
   status_->setText(QStringLiteral("%1 restricted your account: %2").arg(by, summary));
   QMessageBox::information(this, QStringLiteral("Your account was restricted"), text);
+}
+
+void MainWindow::apply_notice(const QString& notice_id, const QString& from, const QString& text) {
+  // One button, and it means what it says. Dismissing the box any way at all
+  // counts as having read it, because the distinction between pressing OK and
+  // pressing Escape on a box somebody has just looked at is not one anybody
+  // could act on. What is not treated as read is the box never being answered:
+  // closing the client with it open, or losing the connection before the
+  // answer goes out, both leave the notice outstanding and the server hands it
+  // over again at the next sign-in. That is the failure this feature has to
+  // survive, and it survives it by doing nothing.
+  QMessageBox box(this);
+  box.setIcon(QMessageBox::Information);
+  box.setWindowTitle(QStringLiteral("Message from %1").arg(from));
+  box.setText(QStringLiteral("%1 sent you a message:").arg(from));
+  box.setInformativeText(text);
+  // Plain text, always. A notice is somebody's typing, and Qt reads a string
+  // containing tags as rich text unless it is told otherwise - which would let
+  // an administrator's message carry markup, and a message carry a link.
+  box.setTextFormat(Qt::PlainText);
+  box.setStandardButtons(QMessageBox::Ok);
+  box.exec();
+
+  status_->setText(QStringLiteral("Message from %1 marked as read").arg(from));
+  const auto sent = session_.acknowledge_notice(notice_id.toStdString());
+  if (!sent) {
+    // Reported, and nothing else to do: the notice is still outstanding on the
+    // server, so it arrives again next time rather than being lost.
+    apply_error(QString::fromStdString(sent.error().code),
+                QString::fromStdString(sent.error().message));
+  }
+}
+
+void MainWindow::apply_notice_sent(const QString& user_id) {
+  // On the interface thread, which is what makes the panel's account list safe
+  // to read here. See the callback that queued this.
+  const QString to = admin_panel_ != nullptr ? admin_panel_->label_for(user_id) : user_id;
+  status_->setText(QStringLiteral("Message delivered to %1").arg(to));
 }
 
 void MainWindow::apply_forced_mute(const QString& name, const QString& by_name, bool muted) {

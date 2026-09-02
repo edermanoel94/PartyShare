@@ -131,6 +131,21 @@ class MainWindow : public QMainWindow {
   /// registered metatype, and this needs none.
   void apply_restrictions(const QString& name, const QString& by_name, const QString& summary,
                           const QString& reason, bool is_us);
+  /// An administrator's message to this account: a box with one button.
+  ///
+  /// Modal on purpose, which nothing else the server announces is. A
+  /// restriction explains a control that stopped working and can wait for the
+  /// person to look; this is somebody addressing them directly and expecting
+  /// an answer, and the answer is the whole feature - until it is sent, the
+  /// server hands the same notice over again at every sign-in.
+  ///
+  /// Strings and not the model, for the reason the restriction line above is:
+  /// crossing threads with a queued connection needs a registered metatype and
+  /// this needs none.
+  void apply_notice(const QString& notice_id, const QString& from, const QString& text);
+  /// A notice this administrator sent was written down. One line, not a box:
+  /// they are the one who just typed it.
+  void apply_notice_sent(const QString& user_id);
   void apply_chat_message(const QString& line);
   /// Replaces what is on screen rather than adding to it. See
   /// CallSession::Callbacks::on_chat_history for why.

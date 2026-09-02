@@ -103,7 +103,10 @@ void SignalingServer::on_client(const std::shared_ptr<rtc::WebSocket>& socket) {
   socket->onOpen([this, id, remote_address] {
     DV_LOG_INFO("Connection {} opened from {}", id, remote_address);
     const std::lock_guard<std::mutex> lock(mutex_);
-    hub_.on_connect(id, Hub::Clock::now());
+    // The address goes to the Hub as well as to the log. The log is for
+    // whoever is reading this machine; the Hub writes it into the session
+    // record, which is for whoever is not.
+    hub_.on_connect(id, remote_address, Hub::Clock::now());
   });
 
   socket->onMessage([this, id](rtc::message_variant data) {

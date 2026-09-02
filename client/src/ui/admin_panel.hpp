@@ -47,6 +47,17 @@ class AdminPanel : public QWidget {
   /// looked at is worse than one that shows nothing.
   void refresh();
 
+  /// How an account should read on screen, from the server's last answer.
+  ///
+  /// Here rather than in the window because this is where that answer is kept.
+  /// An identifier nothing in it matches comes back as itself: an account
+  /// deleted a moment ago, or a panel that has never been opened, is better
+  /// named by a code than by a blank.
+  ///
+  /// Only safe to call on the interface thread, like every other method of a
+  /// QWidget.
+  [[nodiscard]] QString label_for(const QString& user_id) const;
+
  public slots:
   // Called on the UI thread, from the session's callbacks, which arrive on the
   // signaling thread. Rows travel as tab separated strings for the same reason
@@ -64,6 +75,7 @@ class AdminPanel : public QWidget {
 
  private slots:
   void on_create_user();
+  void on_send_notice();
   void on_change_role();
   void on_reset_password();
   void on_restrict_user();
@@ -94,6 +106,10 @@ class AdminPanel : public QWidget {
   /// reaching into a cell either.
   struct Account {
     QString username;
+    /// What they call themselves, kept beside the username so that anything
+    /// naming this account on screen reads the way a log line does. See
+    /// models::user_label, which is what turns the two into one string.
+    QString display_name;
     models::Role role = models::Role::User;
     models::Restrictions restrictions;
   };
@@ -113,6 +129,7 @@ class AdminPanel : public QWidget {
 
   QTableWidget* users_ = nullptr;
   QPushButton* create_user_ = nullptr;
+  QPushButton* send_notice_ = nullptr;
   QPushButton* change_role_ = nullptr;
   QPushButton* reset_password_ = nullptr;
   QPushButton* restrict_user_ = nullptr;

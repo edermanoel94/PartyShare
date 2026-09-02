@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/06-protocol.md must match.
-constexpr std::array<TypeMapping, 38> kTypeMappings{{
+constexpr std::array<TypeMapping, 41> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -37,6 +37,9 @@ constexpr std::array<TypeMapping, 38> kTypeMappings{{
     {.type = MessageType::ChatMessage, .name = "chat_message"},
     {.type = MessageType::ListChat, .name = "list_chat"},
     {.type = MessageType::ChatHistory, .name = "chat_history"},
+    {.type = MessageType::SendNotice, .name = "send_notice"},
+    {.type = MessageType::Notice, .name = "notice"},
+    {.type = MessageType::AcknowledgeNotice, .name = "acknowledge_notice"},
     {.type = MessageType::Error, .name = "error"},
     {.type = MessageType::Ping, .name = "ping"},
     {.type = MessageType::Pong, .name = "pong"},
@@ -388,6 +391,31 @@ models::ChatMessage chat_message_from(FieldReader& reader) {
   return value;
 }
 
+json notice_to_json(const models::Notice& notice) {
+  return json{{"id", notice.id},
+              {"user_id", notice.user_id},
+              {"from_user_id", notice.from_user_id},
+              {"from_display_name", notice.from_display_name},
+              {"text", notice.text},
+              {"created_at", notice.created_at},
+              {"acknowledged_at", notice.acknowledged_at}};
+}
+
+models::Notice notice_from(FieldReader& reader) {
+  models::Notice value;
+  // Only the text is required. Everything else is the server's to fill in, and
+  // a client never builds one of these on the way up: `send_notice` carries a
+  // target and a line of text, and this object is what comes back down.
+  value.id = reader.optional_string("id");
+  value.user_id = reader.optional_string("user_id");
+  value.from_user_id = reader.optional_string("from_user_id");
+  value.from_display_name = reader.optional_string("from_display_name");
+  value.text = reader.string("text");
+  value.created_at = reader.optional_integer("created_at");
+  value.acknowledged_at = reader.optional_integer("acknowledged_at");
+  return value;
+}
+
 json audit_entry_to_json(const models::AuditEntry& entry) {
   return json{{"id", entry.id},
               {"actor_id", entry.actor_id},
@@ -506,6 +534,15 @@ MessageType type_of(const Message& message) noexcept {
         }
         if constexpr (std::is_same_v<T, ChatHistory>) {
           return MessageType::ChatHistory;
+        }
+        if constexpr (std::is_same_v<T, SendNotice>) {
+          return MessageType::SendNotice;
+        }
+        if constexpr (std::is_same_v<T, Notice>) {
+          return MessageType::Notice;
+        }
+        if constexpr (std::is_same_v<T, AcknowledgeNotice>) {
+          return MessageType::AcknowledgeNotice;
         }
         if constexpr (std::is_same_v<T, ErrorMessage>) {
           return MessageType::Error;
@@ -637,6 +674,13 @@ std::string serialize(const Message& message) {
             messages.push_back(chat_message_to_json(line));
           }
           root["messages"] = std::move(messages);
+        } else if constexpr (std::is_same_v<T, SendNotice>) {
+          root["user_id"] = value.user_id;
+          root["text"] = value.text;
+        } else if constexpr (std::is_same_v<T, Notice>) {
+          root["notice"] = notice_to_json(value.notice);
+        } else if constexpr (std::is_same_v<T, AcknowledgeNotice>) {
+          root["notice_id"] = value.notice_id;
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {
           root["code"] = value.code;
           root["message"] = value.message;
@@ -887,6 +931,22 @@ Result<Message> parse(std::string_view json_text) {
       ChatHistory value;
       value.room_id = reader.string("room_id");
       value.messages = reader.array<models::ChatMessage>("messages", chat_message_from);
+      return finish(reader, value);
+    }
+    case MessageType::SendNotice: {
+      SendNotice value;
+      value.user_id = reader.string("user_id");
+      value.text = reader.string("text");
+      return finish(reader, value);
+    }
+    case MessageType::Notice: {
+      Notice value;
+      value.notice = reader.object<models::Notice>("notice", notice_from);
+      return finish(reader, value);
+    }
+    case MessageType::AcknowledgeNotice: {
+      AcknowledgeNotice value;
+      value.notice_id = reader.string("notice_id");
       return finish(reader, value);
     }
     case MessageType::Error: {

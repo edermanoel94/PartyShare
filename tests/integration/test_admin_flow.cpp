@@ -1,11 +1,12 @@
 // End to end tests for administration: real sockets, real WebSocket handshakes,
 // real JSON on the wire.
 //
-// The unit tests in test_hub_admin.cpp already cover the rules. What is under
-// test here is everything between them and a client: that the thirteen new
-// messages survive serialization and parsing in both directions, and that a
-// participant who is removed finds out on their own socket rather than only in
-// the server's memory.
+// The unit tests in test_hub_admin.cpp and test_hub_notices.cpp already cover
+// the rules. What is under test here is everything between them and a client:
+// that the administrative messages survive serialization and parsing in both
+// directions, that a participant who is removed finds out on their own socket
+// rather than only in the server's memory, and that a notice written while
+// somebody was away is on the next socket they open.
 
 #include <chrono>
 #include <memory>
@@ -243,6 +244,102 @@ TEST_F(AdminFlowTest, TheAuditLogCrossesTheWire) {
   EXPECT_EQ(log->entries.front().actor_id, ana.id);
   EXPECT_EQ(log->entries.front().target_id, bruno.id);
   EXPECT_GT(log->entries.front().timestamp_seconds, 0);
+}
+
+// --- notices -----------------------------------------------------------------
+
+TEST_F(AdminFlowTest, ANoticeReachesTheAccountItWasWrittenTo) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+
+  // No room anywhere in this test, and that is the point of it: a notice is
+  // about the account, so neither of them has to be anywhere in particular.
+  admin->send(proto::SendNotice{bruno.id, "please use a headset"});
+
+  const auto delivered = plain->wait_for<proto::Notice>(kTimeout);
+  ASSERT_TRUE(delivered.has_value());
+  EXPECT_EQ(delivered->notice.user_id, bruno.id);
+  EXPECT_EQ(delivered->notice.from_user_id, ana.id);
+  EXPECT_EQ(delivered->notice.from_display_name, "Ana");
+  EXPECT_EQ(delivered->notice.text, "please use a headset");
+  EXPECT_FALSE(delivered->notice.id.empty());
+  EXPECT_GT(delivered->notice.created_at, 0);
+  EXPECT_EQ(delivered->notice.acknowledged_at, 0);
+
+  // The administrator's copy is the same row, which is what makes it a
+  // confirmation rather than an echo.
+  const auto confirmed = admin->wait_for<proto::Notice>(kTimeout);
+  ASSERT_TRUE(confirmed.has_value());
+  EXPECT_EQ(confirmed->notice.id, delivered->notice.id);
+}
+
+TEST_F(AdminFlowTest, AnAcknowledgementIsRecordedAndTheNoticeStopsComingBack) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+
+  admin->send(proto::SendNotice{bruno.id, "please use a headset"});
+  const auto delivered = plain->wait_for<proto::Notice>(kTimeout);
+  ASSERT_TRUE(delivered.has_value());
+
+  plain->send(proto::AcknowledgeNotice{delivered->notice.id});
+
+  // Nothing comes back on the wire, so the audit log is what says it happened
+  // - which is the whole design: the administrator may not be connected when
+  // somebody finally reads what they were sent.
+  //
+  // Read after a second sign-in rather than after a sleep: by the time the
+  // server has answered a fresh `authenticate`, it has finished handling the
+  // message that arrived before it.
+  auto [second, again] = login("bruno");
+  EXPECT_TRUE(second->none_arrives<proto::Notice>(500ms))
+      << "an acknowledged notice was delivered again";
+
+  admin->send(proto::ListAudit{});
+  const auto log = admin->wait_for<proto::AuditList>(kTimeout);
+  ASSERT_TRUE(log.has_value());
+  ASSERT_EQ(log->entries.size(), 2U);
+
+  // Newest first, so the answer comes back before the message.
+  EXPECT_EQ(log->entries[0].action, "acknowledge_notice");
+  EXPECT_EQ(log->entries[0].actor_id, bruno.id);
+  EXPECT_NE(log->entries[0].detail.find("notice=" + delivered->notice.id), std::string::npos);
+
+  EXPECT_EQ(log->entries[1].action, "send_notice");
+  EXPECT_EQ(log->entries[1].actor_id, ana.id);
+  EXPECT_EQ(log->entries[1].target_id, bruno.id);
+  EXPECT_NE(log->entries[1].detail.find("please use a headset"), std::string::npos);
+}
+
+TEST_F(AdminFlowTest, ANoticeWrittenWhileSomebodyIsAwayArrivesWhenTheySignIn) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+  admin->send(proto::SendNotice{bruno.id, "while you were out"});
+  ASSERT_TRUE(plain->wait_for<proto::Notice>(kTimeout).has_value());
+
+  // Away, and back on a new socket. The notice was never answered, so it is
+  // handed over again.
+  auto [second, again] = login("bruno");
+  const auto redelivered = second->wait_for<proto::Notice>(kTimeout);
+  ASSERT_TRUE(redelivered.has_value());
+  EXPECT_EQ(redelivered->notice.text, "while you were out");
+}
+
+TEST_F(AdminFlowTest, AnOrdinaryUserCannotSendOneOverTheWire) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+
+  plain->send(proto::SendNotice{ana.id, "you are demoted"});
+  const auto refused = plain->wait_for<proto::ErrorMessage>(kTimeout);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "forbidden");
+
+  // And acknowledging somebody else's is refused the same way an identifier
+  // belonging to nobody is, so being refused says nothing about whether the
+  // notice exists.
+  plain->send(proto::AcknowledgeNotice{"nothing"});
+  const auto missing = plain->wait_for<proto::ErrorMessage>(kTimeout);
+  ASSERT_TRUE(missing.has_value());
+  EXPECT_EQ(missing->code, "notice_not_found");
 }
 
 }  // namespace

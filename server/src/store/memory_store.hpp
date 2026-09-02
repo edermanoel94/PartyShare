@@ -7,7 +7,9 @@
 
 #include "store/audit_log.hpp"
 #include "store/chat_store.hpp"
+#include "store/notice_store.hpp"
 #include "store/room_store.hpp"
+#include "store/session_store.hpp"
 #include "store/user_store.hpp"
 
 namespace dv::server::store {
@@ -72,6 +74,62 @@ class MemoryChatStore final : public ChatStore {
   /// Oldest first within each room, so appending is a push_back and trimming
   /// is one erase at the front.
   std::unordered_map<std::string, std::vector<models::ChatMessage>> rooms_;
+  std::uint64_t next_id_ = 1;
+};
+
+/// A vector again, and a flat one: a notice is looked up by its own
+/// identifier and by the account it is for, and both of those are a scan over
+/// a collection that holds however many messages an administrator has sent by
+/// hand.
+class MemoryNoticeStore final : public NoticeStore {
+ public:
+  /// Notices beyond this are dropped, oldest first, acknowledged ones first of
+  /// all. The reasoning is MemoryAuditLog's: a store that only grows is how a
+  /// long lived process runs out of memory, and this one is not the durable
+  /// copy.
+  ///
+  /// Acknowledged first is what makes the cap safe to have. Dropping a notice
+  /// somebody has already read loses a receipt; dropping one they have not
+  /// loses the message itself, so the cap takes the cheap ones until there are
+  /// no cheap ones left.
+  static constexpr std::size_t kCapacity = 2000;
+
+  [[nodiscard]] Result<models::Notice> append(models::Notice notice) override;
+  [[nodiscard]] std::vector<models::Notice> pending_for(const std::string& user_id) const override;
+  [[nodiscard]] Result<models::Notice> acknowledge(const std::string& notice_id,
+                                                   const std::string& user_id) override;
+  [[nodiscard]] std::optional<Error> clear_for(const std::string& user_id) override;
+
+ private:
+  /// Oldest first, so appending is a push_back and `pending_for` hands back
+  /// the order it reads in without reversing anything.
+  std::vector<models::Notice> notices_;
+  std::uint64_t next_id_ = 1;
+};
+
+/// Presence, for a server with no database.
+///
+/// It is very nearly a no-op, and saying why is worth more than the code. The
+/// whole point of writing sessions down is that something which is not this
+/// process can read them, and nothing outside this process can read a vector
+/// on its heap. What this exists for is that the Hub has one code path rather
+/// than two: it opens, touches and closes a session whether or not there is a
+/// database behind it, and the version without one costs a push_back.
+class MemorySessionStore final : public SessionStore {
+ public:
+  /// Sessions beyond this are dropped, ended ones first and oldest of those
+  /// first, for MemoryAuditLog's reason. An open session is never dropped: it
+  /// is the only row here that answers a question anybody is asking.
+  static constexpr std::size_t kCapacity = 2000;
+
+  [[nodiscard]] Result<SessionRecord> open(SessionRecord record) override;
+  [[nodiscard]] std::optional<Error> touch(const std::vector<std::string>& ids) override;
+  [[nodiscard]] std::optional<Error> close(const std::string& id) override;
+  [[nodiscard]] std::size_t close_open() override;
+  [[nodiscard]] std::vector<SessionRecord> list_open() const override;
+
+ private:
+  std::vector<SessionRecord> sessions_;
   std::uint64_t next_id_ = 1;
 };
 

@@ -212,7 +212,17 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
   // different moments, and only the first one was logged. The rest stay at
   // debug: a room of five is five sessions, and every transition of each of
   // them is noise in a log an operator has to read.
-  session.connection->onStateChange([label](rtc::PeerConnection::State state) {
+  //
+  // `Failed` names the state it came from. docs/15-postmortems.md asks whoever
+  // meets a connection that dies at birth to record the state before it
+  // failed, and the debug line below is where that was - compiled out of the
+  // build the CI runs. Carrying the previous state in the error line costs one
+  // enum in the closure and answers the question the postmortem could not: a
+  // connection that failed out of `new` never gathered a candidate, and one
+  // that failed out of `connecting` gathered and could not pair, which are
+  // different faults on different sides of the socket.
+  session.connection->onStateChange([label, previous = rtc::PeerConnection::State::New](
+                                        rtc::PeerConnection::State state) mutable {
     switch (state) {
       case rtc::PeerConnection::State::Connected:
         DV_LOG_INFO("SFU: the connection of {} is {}", label, state_name(state));
@@ -221,13 +231,14 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
         DV_LOG_WARN("SFU: the connection of {} is {}", label, state_name(state));
         break;
       case rtc::PeerConnection::State::Failed:
-        DV_LOG_ERROR("SFU: the connection of {} is {}, no media will reach them again", label,
-                     state_name(state));
+        DV_LOG_ERROR("SFU: the connection of {} is {} after {}, no media will reach them again",
+                     label, state_name(state), state_name(previous));
         break;
       default:
         DV_LOG_DEBUG("SFU: the connection of {} is {}", label, state_name(state));
         break;
     }
+    previous = state;
   });
 
   session.connection->onSignalingStateChange(

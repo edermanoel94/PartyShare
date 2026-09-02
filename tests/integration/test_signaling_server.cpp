@@ -8,11 +8,13 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "signaling/server.hpp"
+#include "store/memory_store.hpp"
 #include "websocket_test_client.hpp"
 
 namespace {
@@ -304,6 +306,73 @@ TEST_F(SignalingServerTest, TheServerPingsIdleClients) {
   auto [client, user] = login("user0");
   const auto ping = client->wait_for<proto::Ping>(kTimeout);
   EXPECT_TRUE(ping.has_value());
+}
+
+// --- presence ----------------------------------------------------------------
+
+/// Everything about a session record except the one thing only a real socket
+/// can answer: whether an address arrives at all.
+///
+/// The Hub tests in test_hub_presence.cpp hand `on_connect` a string and check
+/// what the store ends up holding, which is the whole of the Hub's part. What
+/// they cannot check is the seam under it: `rtc::WebSocket::remoteAddress()` is
+/// an optional the transport fills in, and a version of libdatachannel that
+/// left it empty would give a presence report where every row's address is
+/// blank, with nothing failing anywhere.
+///
+/// Its own server rather than the fixture's, because the store has to outlive
+/// it and be readable afterwards.
+TEST(SignalingServerPresence, AnAddressReachesTheSessionRecordThroughARealSocket) {
+  dv::server::store::MemorySessionStore sessions;
+
+  SignalingServer::Options options;
+  options.bind_address = "127.0.0.1";
+  options.port = 0;
+  options.enable_sfu = false;
+  options.hub.heartbeat_interval = 500ms;
+  options.hub.heartbeat_timeout = 2000ms;
+  options.hub.sessions = &sessions;
+
+  auto server = std::make_unique<SignalingServer>(options);
+  ASSERT_TRUE(server->add_user("ana", "password", "Ana").ok());
+  server->start();
+  ASSERT_NE(server->port(), 0);
+
+  {
+    WebSocketTestClient client(server->port());
+    ASSERT_TRUE(client.wait_until_open(kConnectTimeout));
+    client.send(proto::Authenticate{"ana", "password"});
+    const auto authenticated = client.wait_for<proto::Authenticated>(kTimeout);
+    ASSERT_TRUE(authenticated.has_value());
+
+    const auto open = sessions.list_open();
+    ASSERT_EQ(open.size(), 1U);
+    EXPECT_EQ(open.front().user_id, authenticated->user.id);
+    // The loopback the client dialled, whatever shape the transport reports it
+    // in. Checked as a substring rather than for equality because a port may
+    // ride along, and which of the two libdatachannel hands over is its
+    // business - what matters here is that something identifying the far end
+    // arrives instead of an empty string.
+    EXPECT_NE(open.front().ip.find("127.0.0.1"), std::string::npos)
+        << "the session recorded the address as '" << open.front().ip << "'";
+    EXPECT_GT(open.front().connected_at, 0);
+  }
+
+  // The socket going away closes the row, which is the other half a real
+  // transport is needed for: the Hub only ever sees `on_disconnect` because
+  // something below it noticed.
+  const auto closed = [&sessions] {
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      if (sessions.list_open().empty()) {
+        return true;
+      }
+      std::this_thread::sleep_for(20ms);
+    }
+    return false;
+  }();
+  EXPECT_TRUE(closed) << "the session was still open after the client went away";
+
+  server->stop();
 }
 
 }  // namespace

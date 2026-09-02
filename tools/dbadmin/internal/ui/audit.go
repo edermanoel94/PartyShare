@@ -208,7 +208,7 @@ func (m *auditModel) Update(message tea.Msg) tea.Cmd {
 	case "a":
 		return m.toggleActor()
 	case "l":
-		m.limit = nextLimit(m.limit)
+		m.limit = nextLimit(auditLimits, m.limit, store.DefaultAuditLimit)
 		return loadAudit(m.store, m.query())
 	case "enter":
 		if cursor := m.table.Cursor(); cursor >= 0 && cursor < len(m.visible) {
@@ -247,13 +247,25 @@ func (m *auditModel) toggleActor() tea.Cmd {
 	return loadAudit(m.store, m.query())
 }
 
-func nextLimit(current int) int {
-	for i, limit := range auditLimits {
+// nextLimit is the entry after `current` in `ladder`, wrapping round at the
+// end, which is what one press of the l key does on the two screens that read
+// history.
+//
+// A `current` the ladder does not hold answers `fallback`, the screen's own
+// default: a limit that arrived from somewhere else should step back onto the
+// ladder rather than off it.
+//
+// Shared by the audit and sessions screens rather than written twice. The two
+// ladders differ - a page of a log and a page of connections are not the same
+// number of rows - but the stepping is the same, and a copy of it is how one
+// of them quietly stops wrapping.
+func nextLimit(ladder []int, current, fallback int) int {
+	for i, limit := range ladder {
 		if limit == current {
-			return auditLimits[(i+1)%len(auditLimits)]
+			return ladder[(i+1)%len(ladder)]
 		}
 	}
-	return store.DefaultAuditLimit
+	return fallback
 }
 
 func (m *auditModel) updateFilter(key tea.KeyMsg) tea.Cmd {
@@ -379,7 +391,7 @@ func (m *auditModel) help() string {
 		keyHint("↑↓", "move"),
 		keyHint("enter", "details"),
 		keyHint("a", "only this actor"),
-		keyHint("l", "read "+strconv.Itoa(nextLimit(m.limit))),
+		keyHint("l", "read "+strconv.Itoa(nextLimit(auditLimits, m.limit, store.DefaultAuditLimit))),
 		keyHint("/", "filter"),
 		keyHint("r", "refresh"),
 		keyHint("tab", "users"),

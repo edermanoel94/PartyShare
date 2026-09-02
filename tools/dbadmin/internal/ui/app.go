@@ -1,6 +1,6 @@
-// Package ui is the terminal interface: three screens over the users, rooms
-// and audit collections, and the messages that carry a database answer back
-// into them.
+// Package ui is the terminal interface: four screens over the users, rooms,
+// sessions and audit collections, and the messages that carry a database
+// answer back into them.
 //
 // Every call to the database happens inside a tea.Cmd and never inside Update.
 // That is what keeps the screen answering while a query is in flight, and it
@@ -25,6 +25,11 @@ type tab int
 const (
 	tabUsers tab = iota
 	tabRooms
+	// Between the rooms and the log, which is where it belongs in time: the
+	// two screens before it are what the system is, and the two after it are
+	// what happened to it. Sessions sit on the join - they are the only screen
+	// that answers a question about right now.
+	tabSessions
 	tabAudit
 	tabCount
 )
@@ -47,6 +52,8 @@ type (
 	accountsMsg []store.Account
 	// roomsMsg is a fresh room list.
 	roomsMsg []store.Room
+	// sessionsMsg is a fresh page of the sessions, open ones first.
+	sessionsMsg []store.Session
 	// auditEntriesMsg is a fresh page of the audit log.
 	auditEntriesMsg []store.AuditEntry
 	// summaryMsg is the counts in the header.
@@ -84,10 +91,12 @@ type status struct {
 
 // Model is the whole program.
 type Model struct {
-	store   Database
-	users   *usersModel
-	rooms   *roomsModel
-	audit   *auditModel
+	store    Database
+	users    *usersModel
+	rooms    *roomsModel
+	sessions *sessionsModel
+	audit    *auditModel
+
 	tab     tab
 	summary store.Summary
 	status  status
@@ -101,10 +110,11 @@ type Model struct {
 // New builds the program over an open store.
 func New(database Database) Model {
 	return Model{
-		store: database,
-		users: newUsersModel(database),
-		rooms: newRoomsModel(database),
-		audit: newAuditModel(database),
+		store:    database,
+		users:    newUsersModel(database),
+		rooms:    newRoomsModel(database),
+		sessions: newSessionsModel(database),
+		audit:    newAuditModel(database),
 		// A first size, so that the first frame is laid out rather than
 		// squeezed into the eighty columns of a default.
 		width:  100,
@@ -112,7 +122,7 @@ func New(database Database) Model {
 	}
 }
 
-// Init reads everything the three screens show. All of it at once: they are
+// Init reads everything the four screens show. All of it at once: they are
 // independent queries and the screen is more useful for having whichever
 // arrives first.
 func (m Model) Init() tea.Cmd {
@@ -120,6 +130,7 @@ func (m Model) Init() tea.Cmd {
 		loadAccounts(m.store),
 		loadSummary(m.store),
 		loadRooms(m.store),
+		loadSessions(m.store, m.sessions.query()),
 		loadAudit(m.store, m.audit.query()),
 	)
 }
@@ -151,6 +162,16 @@ func loadRooms(database Database) tea.Cmd {
 			return failureMsg{err}
 		}
 		return roomsMsg(rooms)
+	}
+}
+
+func loadSessions(database Database, limit int) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := database.Sessions(context.Background(), limit)
+		if err != nil {
+			return failureMsg{err: err}
+		}
+		return sessionsMsg(sessions)
 	}
 }
 
@@ -191,9 +212,11 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountsMsg:
 		m.users.setAccounts(typed)
-		// The rooms screen shows who owns each room, and an owner is a user id
-		// in the document. This is where it learns the names.
+		// The rooms screen shows who owns each room, and the sessions screen
+		// shows whose connection each one is. Both are user ids in the
+		// documents, and this is where they learn the names.
 		m.rooms.setAccounts(typed)
+		m.sessions.setAccounts(typed)
 		if m.focus != "" {
 			m.users.focusOn(m.focus)
 			m.focus = ""
@@ -202,6 +225,14 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case roomsMsg:
 		m.rooms.setRooms(typed)
+		return m, nil
+
+	case sessionsMsg:
+		m.sessions.setSessions(typed)
+		// The users screen shows on its detail card whether the account it is
+		// looking at is connected. This is where it learns that, the same way
+		// the rooms screen learns its owners.
+		m.users.setSessions(typed)
 		return m, nil
 
 	case auditEntriesMsg:
@@ -270,6 +301,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 	case "3":
+		m.tab = tabSessions
+		m.layout()
+		return m, nil
+	case "4":
 		m.tab = tabAudit
 		m.layout()
 		return m, nil
@@ -290,6 +325,7 @@ func (m Model) refresh() tea.Cmd {
 		loadAccounts(m.store),
 		loadSummary(m.store),
 		loadRooms(m.store),
+		loadSessions(m.store, m.sessions.query()),
 		loadAudit(m.store, m.audit.query()),
 	)
 }
@@ -298,6 +334,8 @@ func (m Model) capturesKeys() bool {
 	switch m.tab {
 	case tabRooms:
 		return m.rooms.capturesKeys()
+	case tabSessions:
+		return m.sessions.capturesKeys()
 	case tabAudit:
 		return m.audit.capturesKeys()
 	case tabUsers, tabCount:
@@ -309,6 +347,8 @@ func (m Model) delegate(message tea.Msg) tea.Cmd {
 	switch m.tab {
 	case tabRooms:
 		return m.rooms.Update(message)
+	case tabSessions:
+		return m.sessions.Update(message)
 	case tabAudit:
 		return m.audit.Update(message)
 	case tabUsers, tabCount:
@@ -319,6 +359,7 @@ func (m Model) delegate(message tea.Msg) tea.Cmd {
 func (m Model) layout() {
 	m.users.setSize(m.innerWidth(), m.bodyHeight())
 	m.rooms.setSize(m.innerWidth(), m.bodyHeight())
+	m.sessions.setSize(m.innerWidth(), m.bodyHeight())
 	m.audit.setSize(m.innerWidth(), m.bodyHeight())
 }
 
@@ -353,6 +394,8 @@ func (m Model) View() string {
 	switch m.tab {
 	case tabRooms:
 		body, help = m.rooms.View(), m.rooms.help()
+	case tabSessions:
+		body, help = m.sessions.View(), m.sessions.help()
 	case tabAudit:
 		body, help = m.audit.View(), m.audit.help()
 	case tabUsers, tabCount:
@@ -401,9 +444,10 @@ func (m Model) header(width int) string {
 
 func (m Model) tabs(width int) string {
 	labels := map[tab]string{
-		tabUsers: "Users " + countLabel(m.summary.Users),
-		tabRooms: "Rooms " + countLabel(m.summary.Rooms),
-		tabAudit: "Audit " + countLabel(m.summary.AuditEntries),
+		tabUsers:    "Users " + countLabel(m.summary.Users),
+		tabRooms:    "Rooms " + countLabel(m.summary.Rooms),
+		tabSessions: "Sessions " + countLabel(m.summary.Sessions),
+		tabAudit:    "Audit " + countLabel(m.summary.AuditEntries),
 	}
 
 	pieces := make([]string, 0, int(tabCount))
@@ -451,6 +495,21 @@ func (m Model) summaryLine() string {
 			return " "
 		}
 		return plural(m.summary.Rooms, "room", "rooms")
+	}
+
+	if m.tab == tabSessions {
+		if m.summary.Sessions == 0 {
+			return " "
+		}
+		// The count everybody came for goes first, and it is a count of what
+		// was read rather than of the collection: "online" is a question about
+		// time, and the rows in hand are the ones whose time this program
+		// knows. What follows says how much history that was taken from, so a
+		// number that looks too small can be read as a page rather than as the
+		// truth.
+		return plural(int64(m.sessions.online()), "account online", "accounts online") + " · " +
+			fmt.Sprintf("reading the newest %d of %s",
+				m.sessions.limit, plural(m.summary.Sessions, "session", "sessions"))
 	}
 
 	if m.summary.Users == 0 {

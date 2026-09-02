@@ -744,7 +744,16 @@ TEST_F(SfuTest, EverySessionHasItsVideoTracksFromTheStart) {
   // Both video m-lines exist before anyone asks to share anything. That is
   // what makes starting and stopping a share cost no renegotiation, which
   // section 5.2 of SPEC.md needs to work without interrupting the call.
+  //
+  // The server's half needs no connection: the tracks are created with the
+  // session. The participant's half does - a track is open only once media is
+  // up - so the wait for the connection comes between the two, and for the
+  // reason every other test here has it: a connection that died at birth is
+  // then reported as what it is, rather than as ten seconds of a track that
+  // never opened. The CI run of PR #53 spent exactly those ten seconds here,
+  // on a connection the SFU had declared failed 52 ms after creating it.
   EXPECT_TRUE(wait_until([&] { return router->has_video_tracks(ana.user().id); }));
+  ASSERT_TRUE(ana.wait_until_media_connected());
   EXPECT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }))
       << "the participant was never offered an m-line to send its screen on";
   EXPECT_TRUE(wait_until([&] { return ana.incoming_video_track_count() == 1; }))

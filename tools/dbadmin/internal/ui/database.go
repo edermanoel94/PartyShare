@@ -6,7 +6,7 @@ import (
 	"github.com/edermanoel94/PartyShare/tools/dbadmin/internal/store"
 )
 
-// Database is everything the two screens ask of the database.
+// Database is everything the four screens ask of the database.
 //
 // An interface and not the concrete store for one reason: the interface is
 // what lets the screens be driven, keystroke for keystroke, against a fake in
@@ -25,6 +25,11 @@ type Database interface {
 	Accounts(ctx context.Context) ([]store.Account, error)
 	Summary(ctx context.Context) (store.Summary, error)
 	Rooms(ctx context.Context) ([]store.Room, error)
+	// Sessions is read only and stays that way. Every other collection here
+	// has a write beside its read, because an operator reaches for this
+	// program to change something; this one records what the server saw, and a
+	// presence history an administrator can edit is not evidence of anything.
+	Sessions(ctx context.Context, limit int) ([]store.Session, error)
 	Audit(ctx context.Context, query store.AuditQuery) ([]store.AuditEntry, error)
 
 	CreateAccount(ctx context.Context, spec store.NewAccount) (store.Account, error)

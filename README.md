@@ -50,14 +50,14 @@ is written to an audit log.
 
 | Platform | Development | A tagged release ships |
 | --- | --- | --- |
-| Linux x64 | Built, run and measured. Every number in the documentation comes from here | **nothing** — build from source |
+| Linux x64 | Built, run and measured. Every number in the documentation comes from here | The server, as a tarball `scripts/install_server.sh` installs. The client: **nothing** — build from source |
 | Windows x64 | Built, run and packaged. Media layer included | `.msi` and `.zip`, installed and run |
 | macOS ARM64 | Built and run, media layer included | `.dmg`, which still ships a client that **cannot make a call** |
 | macOS x64 | Code, presets and packaging exist. Never built | **nothing** — the build fails on the Intel runner |
 
-Windows is the one platform where a downloaded release works. The other three
-each have a named blocker, and [chapter 14](docs/14-release.md) says what each
-one is.
+Windows is the one platform where a downloaded client works, and Linux the one
+where a downloaded server does. The other gaps each have a named blocker, and
+[chapter 14](docs/14-release.md) says what each one is.
 
 Two gaps remain open in the product itself: screen capture on a Wayland session,
 and audio latency measured on a real network rather than on loopback. Everything
@@ -86,7 +86,8 @@ A push to `master` cuts a release: the workflow works out the next version, tags
 it, and publishes. No artifact is ever built on a development machine — a binary
 published from a laptop is one nobody can reproduce afterwards.
 
-A tag carries three files and a checksum list — the Windows `.msi` and `.zip` and
-the macOS arm64 `.dmg`. The Linux and macOS x64 jobs are switched off, so the run
-is green with two artifacts missing and nothing in its output says so.
+A tag carries four files and a checksum list — the Windows `.msi` and `.zip`, the
+macOS arm64 `.dmg`, and the Linux server tarball. The Linux client and macOS x64
+jobs are switched off, so the run is green with two artifacts missing and nothing
+in its output says so.
 [Chapter 14](docs/14-release.md) is the procedure, and the reason for each.

@@ -17,6 +17,7 @@
 #include <QIcon>
 
 #include "app/call_session.hpp"
+#include "audio/loopback_capturer.hpp"
 #include "media/media_session.hpp"
 #include "ui/chimes.hpp"
 #include "ui/main_window.hpp"
@@ -308,9 +309,30 @@ int run(int argc, char* argv[]) {
   session_options.media.video_min_bitrate_kbps = video_bitrate.min_kbps;
   session_options.media.video_max_bitrate_kbps = video_bitrate.max_kbps;
   session_options.media.video_floor_bitrate_kbps = config.video.floor_bitrate_kbps;
+  // The configuration says what to share; this says what the machine can. The
+  // default in ScreenAudioConfig is "system", and it is the right default for
+  // the platform that has the feature, but only Windows does: see
+  // docs/09-screen-audio.md, section 8. Carried unchanged onto a Mac it made
+  // every single share end with "Sharing without sound: capturing what an
+  // application is playing is only implemented on Windows" in a status bar
+  // that fits about a third of that sentence - a warning about a feature the
+  // settings dialog has already greyed out, in a message nobody can finish
+  // reading.
+  const bool screen_sound_possible = dv::client::audio::loopback_capture_is_available();
   session_options.screen_audio_mode =
-      dv::client::app::screen_audio_mode_from(config.screen_audio.mode);
+      screen_sound_possible ? dv::client::app::screen_audio_mode_from(config.screen_audio.mode)
+                            : dv::client::app::ScreenAudio::Mode::None;
   session_options.media.screen_audio_volume_percent = config.screen_audio.volume_percent;
+
+  // Said once at startup rather than on every share, and only to somebody who
+  // asked for sound: a file that already says "none" is getting what it asked
+  // for and has nothing to be told.
+  if (!screen_sound_possible && dv::client::app::screen_audio_mode_from(config.screen_audio.mode) !=
+                                    dv::client::app::ScreenAudio::Mode::None) {
+    DV_LOG_INFO(
+        "Screen sound: this system cannot capture what an application is playing, so a shared "
+        "screen carries the microphone only. See docs/09-screen-audio.md, section 8.");
+  }
 
   if (!dv::client::media::media_is_available()) {
     DV_LOG_WARN(

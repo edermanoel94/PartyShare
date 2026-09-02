@@ -263,6 +263,15 @@ is why the test is written that way.
   them and `loopback_stub.cpp` answers `capture_unavailable` until then. Linux was
   validated to the extent that the stub is correct and the loopback test skips
   itself.
+
+  The configured mode is resolved against the machine at startup, in
+  `client/src/main.cpp`, so a client here reads `screen_audio.mode` from the file
+  and still starts on `none`.
+  Without that step the default of `"system"` reached every share, each one
+  ending with a warning about a feature the settings dialog had already greyed
+  out.
+  The reason is said once instead, in the startup log, and only to a
+  configuration that asked for sound.
 - **Window capture.** Sharing only the browser window instead of the monitor is a
   video-side change and does not depend on this.
 - **Per-source volume at the receiver.** Only option B offers it. The volume here

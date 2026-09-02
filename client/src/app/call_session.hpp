@@ -143,6 +143,13 @@ class CallSession {
     /// Round trip to the signaling server, or unset when there is no current
     /// measurement: no probe answered yet, or no connection at all.
     std::optional<std::chrono::milliseconds> round_trip;
+    /// Whether the signaling socket is open right now. The round trip alone
+    /// cannot say: it is unset for the few seconds between a socket opening
+    /// and its first probe coming back, and unset for a server that is not
+    /// there, and an interface that showed the same thing for both would be
+    /// telling somebody at the login screen nothing about whether signing in
+    /// can work.
+    bool connected = false;
   };
 
   struct Callbacks {
@@ -267,12 +274,31 @@ class CallSession {
   [[nodiscard]] Result<std::monostate> connect_and_authenticate(const std::string& username,
                                                                 const std::string& password);
 
+  /// Opens the signaling socket without signing in, so that `on_link` has
+  /// something to report from the login screen: whether the server is there,
+  /// and how far away it is.
+  ///
+  /// Nothing is sent on the socket but `ping`, which the server answers
+  /// before authentication. The socket is kept and reused by
+  /// `connect_and_authenticate`, so signing in afterwards costs no second
+  /// connection, and it reconnects on its own if the server goes away and
+  /// comes back. Does nothing when a socket is already up or on its way.
+  ///
+  /// The state callback stays quiet while only this is running: a server that
+  /// is not there is news for the indicator, not a failed sign-in.
+  [[nodiscard]] Result<std::monostate> probe_server();
+
   /// Creates a room and reports its identifier through `on_room_created`.
   ///
   /// `persistent` asks for a room that outlives its last participant, which
   /// the server accepts only from an administrator.
+  ///
+  /// `capacity` is how many people the room should hold, the creator
+  /// included. Zero leaves the choice to the server, which gives
+  /// `models::kDefaultRoomCapacity`; anything else is sent as asked and the
+  /// server answers `invalid_value` when it is more than it allows.
   [[nodiscard]] Result<std::monostate> create_room(const std::string& room_name,
-                                                   bool persistent = false);
+                                                   bool persistent = false, int capacity = 0);
   void on_room_created(std::function<void(std::string room_id)> handler);
 
   [[nodiscard]] Result<std::monostate> join(const std::string& room_id,
@@ -556,6 +582,14 @@ class CallSession {
   void set_state(State state, const std::string& detail);
   void publish_participants();
   void report(const Error& error);
+  /// Tells `on_link` what the socket is doing right now. On the metrics
+  /// interval, and also the moment the socket opens or drops, so the
+  /// indicator does not wait out an interval to say the server has gone.
+  void report_link();
+  /// Opens the socket and starts the metrics thread. What `probe_server` and
+  /// `connect_and_authenticate` have in common once they have decided that a
+  /// new socket is what is needed.
+  [[nodiscard]] Result<std::monostate> open_signaling();
   void metrics_loop();
 
   Options options_;

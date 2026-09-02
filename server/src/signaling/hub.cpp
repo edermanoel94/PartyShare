@@ -541,7 +541,11 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   // get, and the administrator gate that used to guard the request guarded
   // nothing worth guarding. The field stays on the wire so that a client built
   // before this still connects.
-  auto created = rooms_.create_room(message.room_name, user->id);
+  //
+  // `message.capacity` is passed through as it came, zero included: the
+  // RoomManager is what knows the default and the ceiling, and it answers a
+  // size it cannot give with `invalid_value` naming the range.
+  auto created = rooms_.create_room(message.room_name, user->id, message.capacity);
   if (!created) {
     reply_error(out, connection.id, created.error());
     return;
@@ -554,6 +558,10 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   // other client's list shows it carrying a code.
   const models::Room* created_room = rooms_.find(room_id);
   const std::string room_name = created_room != nullptr ? created_room->name : room_id;
+  // Echoed for the same reason the name is: a request for nothing in
+  // particular came back with a number, and the creator is the one person
+  // who has to know it to tell others whether they fit.
+  const int capacity = created_room != nullptr ? created_room->capacity : message.capacity;
 
   // Not recorded in the audit log. It used to be, for the one room an
   // administrator had to ask for; creating a room is now something every
@@ -562,11 +570,11 @@ void Hub::handle_create_room(std::vector<Outgoing>& out, Connection& connection,
   // Both the name and the identifier, and this is the one line that keeps the
   // identifier on purpose: it is what the creator has to pass to whoever they
   // want in the room, so it is the fact an operator is here to read.
-  DV_LOG_INFO("Room {} (\"{}\") created by {}", room_id, room_name,
+  DV_LOG_INFO("Room {} (\"{}\", {} people) created by {}", room_id, room_name, capacity,
               models::user_label(user->id, user->display_name, connection.username));
-  out.push_back(
-      Outgoing{.connection = connection.id,
-               .message = protocol::RoomCreated{.room_id = room_id, .room_name = room_name}});
+  out.push_back(Outgoing{.connection = connection.id,
+                         .message = protocol::RoomCreated{
+                             .room_id = room_id, .room_name = room_name, .capacity = capacity}});
   broadcast_room_list(out);
 }
 
@@ -1583,7 +1591,8 @@ protocol::RoomList Hub::room_list() const {
                                                .name = room.name,
                                                .owner_id = room.owner_id,
                                                .persistent = room.persistent,
-                                               .participant_count = static_cast<int>(room.size())});
+                                               .participant_count = static_cast<int>(room.size()),
+                                               .capacity = room.capacity});
   }
   // The RoomManager holds rooms in a hash map, so its order is whatever the
   // hashing produced. Sorting here means a panel that refreshes does not
@@ -1606,8 +1615,9 @@ void Hub::broadcast_room_list(std::vector<Outgoing>& out) const {
   // first thing somebody sees after signing in, so a count frozen at whatever
   // it was when the room was created is a wrong number on the main screen
   // rather than a stale detail in an administrator's tab. That costs one
-  // message per connection per join, which a room of five bounded by
-  // max_participants makes a rounding error.
+  // message per connection per join, which rooms bounded by
+  // max_participants_per_room make a rounding error next to the audio each
+  // of those connections is relaying.
   const protocol::RoomList list = room_list();
   for (const auto& entry : user_to_connection_) {
     out.push_back(Outgoing{.connection = entry.second, .message = list});

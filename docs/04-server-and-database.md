@@ -154,8 +154,9 @@ libdatachannel's own default, which it reads as "no range" and answers with an
 ephemeral port anyway.
 
 Size it from the load, because the SFU binds one port per participant:
-`max_participants_per_room` times the number of rooms running at once. A hundred
-ports carries twenty full rooms. The server logs the range it ended up with on
+`max_participants_per_room` - the largest room anybody may create, 20 by default -
+times the number of rooms running at once. A hundred ports carries five rooms at
+that ceiling, or twenty rooms of the default five. The server logs the range it ended up with on
 startup, or warns that the ports are ephemeral when none was set.
 
 That warning is worth reading. A server started without it, behind a firewall

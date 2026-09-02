@@ -38,6 +38,7 @@
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -54,6 +55,7 @@
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
 #include "ui/metrics_dialog.hpp"
+#include "ui/participant_delegate.hpp"
 #include "ui/password_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
@@ -71,13 +73,17 @@ constexpr int kRoomPage = 2;
 constexpr int kAdminPage = 3;
 
 /// Where the participant's plain name is kept on a list item, next to the
-/// user id in Qt::UserRole. The visible text carries the state as well.
-constexpr int kNameRole = Qt::UserRole + 1;
+/// user id in Qt::UserRole. The state is on its own role and drawn as icons
+/// by ParticipantDelegate; see ui/participant_delegate.hpp.
+constexpr int kNameRole = kParticipantNameRole;
 
 /// "Nothing is being measured" as a value the indicator can remember having
 /// drawn. Outside the NetworkQuality range on purpose, so it can never be
 /// mistaken for one of the three verdicts.
 constexpr int kNoLinkQuality = -2;
+/// "The server is not there", likewise: its own value because it is drawn in
+/// its own colour, and the indicator only restyles when the value moves.
+constexpr int kLinkOffline = -3;
 
 /// The colour of a verdict, from the theme rather than from a literal, so the
 /// three of them follow the colour scheme instead of staying at their
@@ -342,6 +348,20 @@ MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
   wire_session();
   refresh_controls();
   show_page();
+
+  // The indicator says something from the first frame, and the socket that
+  // will answer it is opened now rather than at the first sign-in. Somebody
+  // looking at the login screen is asking whether the server is there before
+  // they are asking anything else, and a form that only finds out by being
+  // submitted answers that question with an error.
+  show_link_quality();
+  if (const auto probed = session_.probe_server(); !probed) {
+    // A refused address - empty, or not ws:// - is what the settings dialog
+    // exists to fix, and the indicator saying "offline" until it is fixed is
+    // the right amount of noise about it.
+    link_connected_ = 0;
+    show_link_quality();
+  }
 }
 
 MainWindow::~MainWindow() {
@@ -481,8 +501,8 @@ void MainWindow::build_home_page() {
   // The slack goes to Name rather than to the last column, which is what
   // make_table does by default. A room name runs to 48 bytes now where it used
   // to be a six character code, and the default widths cut "Reunião de sexta
-  // às 18h" down to "Reunião de sext..." while People kept room for a number
-  // that is never wider than one digit.
+  // às 18h" down to "Reunião de sext..." while People kept room for "3/10",
+  // which is as wide as that column ever gets.
   room_list_->horizontalHeader()->setStretchLastSection(false);
   room_list_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   room_list_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -497,13 +517,34 @@ void MainWindow::build_home_page() {
   // optional, and a modal that opens on every click would make it feel
   // required; a field somebody can walk straight past says the opposite.
   room_name_ = new QLineEdit(box);
-  room_name_->setPlaceholderText(QStringLiteral("Room name, or leave empty for the code"));
+  // Short, because the size box beside it takes a third of the width and the
+  // longer wording was being cut off mid-sentence. The rest is in the tooltip.
+  room_name_->setPlaceholderText(QStringLiteral("Room name (optional)"));
+  room_name_->setToolTip(QStringLiteral("Leave it empty and the room is named after its code."));
   room_name_->setAlignment(Qt::AlignCenter);
   room_name_->setMinimumHeight(44);
   // No setMaxLength. Qt counts UTF-16 code units and the server counts UTF-8
   // bytes, so a cap of 48 here would still let "Reunião de sexta" through at
   // one length and refuse it at another. The length is checked on the way out
   // instead, with the same predicate the server uses. See on_create_room.
+
+  // How many people the room will hold, beside the name because both are
+  // answers to "what room do you want" and neither is worth a dialog. The
+  // range is what the protocol accepts; the server may allow less and says so
+  // when asked for more, which is rarer than the box getting in the way.
+  room_capacity_ = new QSpinBox(box);
+  room_capacity_->setRange(models::kMinRoomCapacity, models::kMaxRoomCapacity);
+  room_capacity_->setValue(models::kDefaultRoomCapacity);
+  room_capacity_->setSuffix(QStringLiteral(" people"));
+  room_capacity_->setAlignment(Qt::AlignCenter);
+  room_capacity_->setMinimumHeight(44);
+  room_capacity_->setToolTip(QStringLiteral("How many people the room holds, you included."));
+
+  auto* room_form = new QHBoxLayout();
+  room_form->setContentsMargins(0, 0, 0, 0);
+  room_form->setSpacing(8);
+  room_form->addWidget(room_name_, 1);
+  room_form->addWidget(room_capacity_);
 
   create_button_ = new QPushButton(QStringLiteral("Create room"), box);
   create_button_->setMinimumHeight(44);
@@ -548,7 +589,7 @@ void MainWindow::build_home_page() {
   column->addWidget(room_list_, 1);
   column->addWidget(rooms_empty_);
   column->addSpacing(12);
-  column->addWidget(room_name_);
+  column->addLayout(room_form);
   column->addWidget(create_button_);
   column->addSpacing(16);
   // The field stays. A list is how you find a room nobody told you about; a
@@ -637,6 +678,11 @@ void MainWindow::build_room_page() {
   participants_ = new QListWidget(people);
   participants_->setMinimumHeight(120);
   participants_->setMaximumHeight(180);
+  // The name and, beside it, an icon for each thing known about them:
+  // microphone, muted, sharing. Words used to follow the name and read like a
+  // log line; the icons say the same at a glance and leave the words to the
+  // tooltip. See ui/participant_delegate.hpp.
+  participants_->setItemDelegate(new ParticipantDelegate(participants_));
   // The menu is built on demand and is empty for anybody who is not an
   // administrator, so there is nothing to enable or disable here.
   participants_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -819,17 +865,18 @@ void MainWindow::wire_session() {
             // milliseconds against a server on this machine.
             QMetaObject::invokeMethod(
                 this, "apply_link", Qt::QueuedConnection,
-                Q_ARG(int, link.round_trip ? static_cast<int>(link.round_trip->count()) : -1));
+                Q_ARG(int, link.round_trip ? static_cast<int>(link.round_trip->count()) : -1),
+                Q_ARG(bool, link.connected));
           },
       .on_participants =
           [this](const std::vector<client::app::Participant>& list) {
             QStringList names;
             names.reserve(static_cast<qsizetype>(list.size()));
             for (const client::app::Participant& participant : list) {
-              // Three tab separated fields: the id, then what the row shows,
-              // then the bare name. The last two are so that the volume slider
-              // knows whose volume it is changing and can say the name without
-              // the state that got appended to it.
+              // Four tab separated fields: the id, the name, the state as
+              // bits, and the level as a fraction. The name is what the row
+              // shows and what the volume slider says; the state and the
+              // level are what the delegate draws beside it.
               //
               // The id goes first, and that order is the point rather than a
               // matter of taste. It used to sit in the middle, between two
@@ -849,23 +896,28 @@ void MainWindow::wire_session() {
               const QString name =
                   as_field(participant.user.display_name.empty() ? participant.user.id
                                                                  : participant.user.display_name);
-              QString label = name;
+              int state = kParticipantNone;
               if (participant.muted) {
-                label += QStringLiteral("  (muted)");
-              } else if (participant.speaking) {
-                label += QStringLiteral("  (speaking)");
-              } else if (participant.audio_active) {
-                label += QStringLiteral("  (connected)");
+                state |= kParticipantMuted;
+              }
+              if (participant.speaking) {
+                state |= kParticipantSpeaking;
+              }
+              if (participant.audio_active) {
+                state |= kParticipantAudioActive;
               }
               if (participant.sharing_screen) {
-                // Two words apart, because they answer different questions:
-                // whose picture is on screen, and why this person's volume
-                // slider is now also the volume of a film.
-                label += participant.sharing_audio ? QStringLiteral("  (sharing with sound)")
-                                                   : QStringLiteral("  (sharing)");
+                state |= kParticipantSharing;
+                if (participant.sharing_audio) {
+                  state |= kParticipantSharingWithSound;
+                }
               }
+              // The same curve the local meter uses, so that the microphone
+              // beside a name fills the way the bar under our own does.
+              const double level = client::app::meter_fraction(participant.level);
               names.push_back(QString::fromStdString(participant.user.id) + QLatin1Char('\t') +
-                              label + QLatin1Char('\t') + name);
+                              name + QLatin1Char('\t') + QString::number(state) +
+                              QLatin1Char('\t') + QString::number(level, 'f', 3));
             }
             QMetaObject::invokeMethod(this, "apply_participants", Qt::QueuedConnection,
                                       Q_ARG(QStringList, names));
@@ -1031,8 +1083,17 @@ void MainWindow::wire_session() {
               QStringList fields;
               // Identifier first and unshown, then the columns in the order
               // both tables declare them. See ui::fill.
+              // "3/10" rather than "3": how many are in says nothing about
+              // whether there is room for one more, and that is the question
+              // somebody reading this column is asking. A server from before
+              // rooms had sizes sends none, and the column is a bare count
+              // again rather than "3/0".
+              const QString people =
+                  summary.capacity > 0
+                      ? QStringLiteral("%1/%2").arg(summary.participant_count).arg(summary.capacity)
+                      : QString::number(summary.participant_count);
               fields << as_field(summary.id) << as_field(summary.id) << as_field(summary.name)
-                     << QString::number(summary.participant_count);
+                     << people;
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             // Both screens, from the one answer. The administrator's tab is
@@ -1157,6 +1218,15 @@ void MainWindow::on_sign_out() {
   // and a server address that has just been changed is the other one.
   password_->clear();
   show_login_error(QString{});
+
+  // Back on the login screen, the indicator has the same question to answer
+  // as when the window opened, and the socket that answered it has just been
+  // closed. A new one, to whatever address is set now - which is how a
+  // changed address takes effect, and why signing out is the way to it.
+  link_round_trip_ms_ = -1;
+  link_connected_ = -1;
+  show_link_quality();
+  (void)session_.probe_server();
 }
 
 void MainWindow::on_change_password() {
@@ -1206,7 +1276,7 @@ void MainWindow::on_create_room() {
     return;
   }
 
-  if (const auto created = session_.create_room(name); !created) {
+  if (const auto created = session_.create_room(name, false, room_capacity_->value()); !created) {
     apply_error(QString::fromStdString(created.error().code),
                 QString::fromStdString(created.error().message));
   }
@@ -1528,14 +1598,19 @@ void MainWindow::apply_state(int state, const QString& detail) {
 
 void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
   // Read off the rows before they are handed to the table, which keeps only
-  // what it shows. The row is identifier, identifier, name, count; the first
+  // what it shows. The row is identifier, identifier, name, people; the first
   // field is the hidden key every table here carries. See ui::fill.
   room_names_.clear();
   room_names_.reserve(static_cast<int>(rows.size()));
+  room_people_.clear();
+  room_people_.reserve(static_cast<int>(rows.size()));
   for (const QString& row : rows) {
     const QStringList fields = row.split(QLatin1Char('\t'));
     if (fields.size() >= 3) {
       room_names_.insert(fields.at(0), fields.at(2));
+    }
+    if (fields.size() >= 4) {
+      room_people_.insert(fields.at(0), fields.at(3));
     }
   }
   // The list is what carries the name, and it arrives after the join as often
@@ -1572,13 +1647,21 @@ void MainWindow::apply_participants(const QStringList& names) {
   const QSignalBlocker blocker(participants_);
   participants_->clear();
   for (const QString& entry : names) {
-    // Field 0 is the identifier, field 1 is what the row shows, field 2 is the
-    // bare name. See on_participants for why the identifier is first and not
-    // in the middle.
+    // Field 0 is the identifier, field 1 the name, field 2 the state bits and
+    // field 3 the level. See on_participants for why the identifier is first
+    // and not in the middle.
     const QStringList parts = entry.split(QLatin1Char('\t'));
+    const int state = parts.value(2).toInt();
     auto* item = new QListWidgetItem(parts.value(1), participants_);
-    item->setData(Qt::UserRole, parts.value(0));
-    item->setData(kNameRole, parts.value(2));
+    item->setData(kParticipantIdRole, parts.value(0));
+    item->setData(kNameRole, parts.value(1));
+    item->setData(kParticipantStateRole, state);
+    item->setData(kParticipantLevelRole, parts.value(3).toDouble());
+    // The words the icons stand for, for whoever hovers to ask and for a
+    // screen reader, which cannot see a struck-through microphone.
+    const QString words = describe_participant_state(state);
+    item->setToolTip(words);
+    item->setData(Qt::AccessibleDescriptionRole, words);
     if (!selected.isEmpty() && parts.value(0) == selected) {
       participants_->setCurrentItem(item);
     }
@@ -1589,7 +1672,7 @@ void MainWindow::apply_participants(const QStringList& names) {
     const QString id = parts.value(0);
     present.insert(id);
     if (participants_seeded_ && id != us && !known_participants_.contains(id)) {
-      arrived.push_back(parts.value(2));
+      arrived.push_back(parts.value(1));
     }
   }
 
@@ -1701,8 +1784,9 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
       QStringLiteral("color: %1; font-weight: bold;").arg(quality_colour(measured).name()));
 }
 
-void MainWindow::apply_link(int round_trip_ms) {
+void MainWindow::apply_link(int round_trip_ms, bool connected) {
   link_round_trip_ms_ = round_trip_ms;
+  link_connected_ = connected ? 1 : 0;
 
   // While there is a call, the verdict weighing all three measurements is the
   // better answer and keeps the label. This one fills the rest of the time,
@@ -1715,18 +1799,41 @@ void MainWindow::apply_link(int round_trip_ms) {
 }
 
 void MainWindow::show_link_quality() {
+  if (link_connected_ == 0) {
+    // The server is not there, or has gone: the socket was refused, or
+    // dropped and is being retried. Red, and the filled dot, because this is
+    // the one answer the indicator exists to give somebody at the login
+    // screen - signing in cannot work until it changes - and a grey "no
+    // server" read as the indicator having nothing to say.
+    if (shown_link_quality_ != kLinkOffline) {
+      shown_link_quality_ = kLinkOffline;
+      shown_quality_ = -1;
+      quality_->setStyleSheet(
+          QStringLiteral("color: %1; font-weight: bold;").arg(theme::colors().danger.name()));
+    }
+    quality_->setText(QStringLiteral("%1 server offline")
+                          .arg(from_utf8(client::app::glyph(client::app::NetworkQuality::Good))));
+    return;
+  }
+
   if (link_round_trip_ms_ < 0) {
     // Not blank. "Nothing is being measured" is itself the answer to whether
     // the connection is any good, and an empty status bar says it so quietly
     // that it reads as the indicator being broken.
+    //
+    // Two wordings: the socket is up and the first probe has not come back,
+    // which lasts a few seconds, or nothing is known yet, which is the moment
+    // the window opens and the probe has not been answered either way.
     if (shown_link_quality_ != kNoLinkQuality) {
       shown_link_quality_ = kNoLinkQuality;
+      shown_quality_ = -1;
       quality_->setStyleSheet(
           QStringLiteral("color: %1; font-weight: bold;").arg(theme::colors().muted.name()));
     }
-    quality_->setText(
-        QStringLiteral("%1 no server")
-            .arg(from_utf8(client::app::glyph(client::app::NetworkQuality::Unknown))));
+    const QString glyph = from_utf8(client::app::glyph(client::app::NetworkQuality::Unknown));
+    quality_->setText(link_connected_ == 1
+                          ? QStringLiteral("%1 server online").arg(glyph)
+                          : QStringLiteral("%1 looking for the server").arg(glyph));
     return;
   }
 
@@ -2115,8 +2222,16 @@ void MainWindow::refresh_room_title() {
   // A room nobody named carries its own identifier as its name, so showing
   // both would read "8F42A1 (8F42A1)". The same line covers a name we have not
   // been told yet, which is what the first moments after a join look like.
-  room_title_->setText(name.isEmpty() || name == id ? QStringLiteral("Room: %1").arg(id)
-                                                    : QStringLiteral("%1 - %2").arg(name, id));
+  QString title = name.isEmpty() || name == id ? QStringLiteral("Room: %1").arg(id)
+                                               : QStringLiteral("%1 - %2").arg(name, id);
+  // How many are in and how many fit, from the same list. The list is
+  // broadcast on every arrival, so this is as current as the participant
+  // column below it, and it is the number to read out to somebody asking
+  // whether they can still join.
+  if (const QString people = room_people_.value(id); !people.isEmpty()) {
+    title += QStringLiteral(" · %1 people").arg(people);
+  }
+  room_title_->setText(title);
 }
 
 void MainWindow::show_page() {

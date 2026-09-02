@@ -98,28 +98,71 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
   // connecting again", which is a sentence written for whoever wrote the call
   // and not for whoever mistyped their password. Worse, the button then did
   // nothing at all: the only way back was to close the window.
-  if (signaling_.is_connected()) {
-    if (auto sent =
-            signaling_.send(protocol::Authenticate{.username = username, .password = password});
-        !sent) {
-      set_state(State::Failed, sent.error().message);
-      return sent;
+  //
+  // The same socket is also the one `probe_server` opened from the login
+  // screen, which is the ordinary case now: signing in reuses it rather than
+  // opening a second one.
+  switch (signaling_.state()) {
+    case SignalingClient::State::Connected: {
+      if (auto sent =
+              signaling_.send(protocol::Authenticate{.username = username, .password = password});
+          !sent) {
+        set_state(State::Failed, sent.error().message);
+        return sent;
+      }
+      return std::monostate{};
     }
-    return std::monostate{};
+    case SignalingClient::State::Connecting:
+    case SignalingClient::State::Reconnecting:
+      // On its way, from the probe or from a drop. The credentials are held
+      // and sent the moment it opens, by handle_signaling_state, which is
+      // also what a reconnection during a call relies on.
+      return std::monostate{};
+    case SignalingClient::State::Failed:
+      // A socket that gave up is still a socket as far as connect() is
+      // concerned. Taken down first, so that this is a fresh attempt rather
+      // than `already_connected`.
+      signaling_.disconnect();
+      break;
+    case SignalingClient::State::Disconnected:
+      break;
   }
 
+  if (auto opened = open_signaling(); !opened) {
+    set_state(State::Failed, opened.error().message);
+    return opened;
+  }
+  return std::monostate{};
+}
+
+Result<std::monostate> CallSession::probe_server() {
+  switch (signaling_.state()) {
+    case SignalingClient::State::Connected:
+    case SignalingClient::State::Connecting:
+    case SignalingClient::State::Reconnecting:
+      // Already being measured, and a reconnecting socket is already knocking.
+      return std::monostate{};
+    case SignalingClient::State::Failed:
+      signaling_.disconnect();
+      break;
+    case SignalingClient::State::Disconnected:
+      break;
+  }
+  return open_signaling();
+}
+
+Result<std::monostate> CallSession::open_signaling() {
   if (auto connected = signaling_.connect(); !connected) {
-    set_state(State::Failed, connected.error().message);
     return connected;
   }
-
   if (!running_.exchange(true)) {
     metrics_thread_ = std::thread([this] { metrics_loop(); });
   }
   return std::monostate{};
 }
 
-Result<std::monostate> CallSession::create_room(const std::string& room_name, bool persistent) {
+Result<std::monostate> CallSession::create_room(const std::string& room_name, bool persistent,
+                                                int capacity) {
   std::string user_id;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -128,8 +171,8 @@ Result<std::monostate> CallSession::create_room(const std::string& room_name, bo
   if (user_id.empty()) {
     return Result<std::monostate>::failure("unauthorized", "authenticate before creating a room");
   }
-  return signaling_.send(
-      protocol::CreateRoom{.user_id = user_id, .room_name = room_name, .persistent = persistent});
+  return signaling_.send(protocol::CreateRoom{
+      .user_id = user_id, .room_name = room_name, .persistent = persistent, .capacity = capacity});
 }
 
 Result<std::monostate> CallSession::change_password(const std::string& current_password,
@@ -656,6 +699,22 @@ std::string CallSession::signaling_url() const {
 
 void CallSession::set_signaling_url(std::string url) {
   signaling_.set_url(std::move(url));
+
+  // Adopted at the next sign-in, as the setting promises - unless nobody is
+  // signed in, in which case the only socket up is the probe's, and it is
+  // knocking at the old address. Taken down and reopened so that the
+  // indicator on the login screen describes the server that was just typed
+  // in, and so that the sign-in that follows reuses a socket to that one.
+  bool signed_in = false;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    signed_in = !local_user_.id.empty() || !pending_username_.empty();
+  }
+  if (signed_in || signaling_.state() == SignalingClient::State::Disconnected) {
+    return;
+  }
+  signaling_.disconnect();
+  (void)probe_server();
 }
 
 void CallSession::disconnect() {
@@ -675,6 +734,12 @@ void CallSession::disconnect() {
     // screen over nothing at all - it decides which page to show by asking
     // whether anybody is signed in.
     local_user_ = {};
+    // And so do the credentials waiting to be sent. The next socket may be
+    // the probe's, opened from the login screen after signing out, and a
+    // socket that opens with a username still pending signs that person
+    // straight back in.
+    pending_username_.clear();
+    pending_password_.clear();
   }
   if (session) {
     session->close();
@@ -739,20 +804,61 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
           report(sent.error());
         }
       }
+      // The first probe goes out now rather than at the next tick of the
+      // metrics thread, so the indicator carries a number one interval after
+      // the socket opens instead of two. And the socket being up is itself
+      // news worth a report: it is what turns "server offline" back into a
+      // measurement in progress.
+      (void)signaling_.probe();
+      report_link();
       break;
     }
     case SignalingClient::State::Failed:
-      set_state(State::Failed, detail);
+    case SignalingClient::State::Reconnecting: {
+      // Said at once, not at the next tick: a server that has gone is the
+      // one thing the indicator exists to say, and five seconds of a green
+      // dot over a dead socket is five seconds of it lying.
+      report_link();
+
+      // A socket nobody asked to sign in on is the probe from the login
+      // screen, and a server that is not there is what its indicator is for -
+      // not a failed sign-in. The state callback stays quiet, so the login
+      // page does not show "connecting" over a form nobody has filled in, or
+      // an error about a password nobody has typed.
+      bool probing = false;
+      {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        probing = pending_username_.empty() && local_user_.id.empty();
+      }
+      if (probing) {
+        break;
+      }
+      if (state == SignalingClient::State::Failed) {
+        set_state(State::Failed, detail);
+      } else {
+        // Not Failed: the connection is coming back on its own, and the
+        // interface has something different to say while it does. The room
+        // and the identity are kept, and walked back into once the socket is
+        // up.
+        set_state(State::Connecting, detail);
+      }
       break;
-    case SignalingClient::State::Reconnecting:
-      // Not Failed: the connection is coming back on its own, and the
-      // interface has something different to say while it does. The room and
-      // the identity are kept, and walked back into once the socket is up.
-      set_state(State::Connecting, detail);
-      break;
+    }
     case SignalingClient::State::Disconnected:
     case SignalingClient::State::Connecting:
       break;
+  }
+}
+
+void CallSession::report_link() {
+  Callbacks callbacks;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    callbacks = callbacks_;
+  }
+  if (callbacks.on_link) {
+    callbacks.on_link(
+        LinkStats{.round_trip = signaling_.round_trip(), .connected = signaling_.is_connected()});
   }
 }
 
@@ -1540,12 +1646,11 @@ void CallSession::metrics_loop() {
     // call starts, which is what makes it the right clock for it.
     //
     // Reported before the new probe is sent, so what goes out is a round trip
-    // that has actually come back. The first report of a connection therefore
-    // carries nothing, and the one after it carries a number: waiting here for
-    // a reply would be blocking a timer thread on the network it is measuring.
-    if (callbacks.on_link) {
-      callbacks.on_link(LinkStats{.round_trip = signaling_.round_trip()});
-    }
+    // that has actually come back: waiting here for a reply would be blocking
+    // a timer thread on the network it is measuring. The first probe of a
+    // connection is sent the moment the socket opens, so the first report
+    // here already carries a number.
+    report_link();
     // A failure here is not worth a line in the log every five seconds. It
     // means the socket is down, which the state callback has already said in
     // the words the interface actually shows.

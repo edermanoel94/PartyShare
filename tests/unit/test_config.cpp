@@ -99,7 +99,7 @@ TEST(Config, DefaultsMatchTheSpec) {
   EXPECT_EQ(config.audio.sample_rate_hz, 48000);
   EXPECT_EQ(config.audio.channels, 1);
   EXPECT_EQ(config.audio.frame_duration_ms, 20);
-  EXPECT_EQ(config.server.max_participants_per_room, 5);
+  EXPECT_EQ(config.server.max_participants_per_room, 20);
   EXPECT_TRUE(config.audio.echo_cancellation);
   EXPECT_TRUE(config.audio.noise_suppression);
   EXPECT_TRUE(config.audio.automatic_gain_control);

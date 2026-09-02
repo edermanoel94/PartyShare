@@ -334,7 +334,17 @@ class Client {
               return std::unique_ptr<media::MediaSession>(std::move(fake));
             })) {
     session_->on_events({
-        .on_state = [this](CallSession::State state, std::string) { last_state_ = state; },
+        .on_state =
+            [this](CallSession::State state, std::string) {
+              last_state_ = state;
+              state_reports_.fetch_add(1);
+            },
+        .on_link =
+            [this](CallSession::LinkStats link) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              last_link_ = link;
+              ++link_reports_;
+            },
         .on_participants =
             [this](std::vector<Participant> list) {
               const std::lock_guard<std::mutex> lock(mutex_);
@@ -484,6 +494,15 @@ class Client {
     return histories_;
   }
   [[nodiscard]] CallSession::State last_state() const { return last_state_.load(); }
+  [[nodiscard]] std::uint64_t state_reports() const { return state_reports_.load(); }
+  [[nodiscard]] CallSession::LinkStats last_link() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return last_link_;
+  }
+  [[nodiscard]] std::uint64_t link_reports() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return link_reports_;
+  }
   [[nodiscard]] double local_level() const { return local_level_.load(); }
   [[nodiscard]] bool local_speaking() const { return local_speaking_.load(); }
   [[nodiscard]] std::uint64_t metrics_reports() const { return metrics_reports_.load(); }
@@ -504,6 +523,9 @@ class Client {
   std::uint64_t histories_ = 0;
   std::string created_room_;
   std::atomic<CallSession::State> last_state_{CallSession::State::Idle};
+  std::atomic<std::uint64_t> state_reports_{0};
+  CallSession::LinkStats last_link_;
+  std::uint64_t link_reports_ = 0;
   std::atomic<std::uint64_t> metrics_reports_{0};
   std::atomic<double> local_level_{0};
   std::atomic<bool> local_speaking_{false};
@@ -547,6 +569,13 @@ class CallSessionTest : public ::testing::Test {
     return *clients_.back();
   }
 
+  /// A client pointed at a port nothing listens on: what the login screen
+  /// looks like when the server is down.
+  Client& add_without_a_server(const std::string& username) {
+    clients_.push_back(std::make_unique<Client>(1, username));
+    return *clients_.back();
+  }
+
   std::unique_ptr<SignalingServer> server_;
   std::vector<std::unique_ptr<Client>> clients_;
 };
@@ -584,6 +613,79 @@ TEST_F(CallSessionTest, AWrongPasswordCanBeFollowedByTheRightOne) {
       << "the second attempt was refused before it reached the server";
   EXPECT_TRUE(wait_until([&] { return !ana.session().local_user().id.empty(); }))
       << "the right password after a wrong one did not authenticate";
+}
+
+TEST_F(CallSessionTest, ProbingBeforeSigningInMeasuresTheServer) {
+  // The login screen asks this before anybody has typed anything: is the
+  // server there, and how far away is it.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().connected; }))
+      << "the probe never reported the socket open";
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().round_trip.has_value(); }))
+      << "the probe never reported a round trip";
+
+  // And none of it is a sign-in: nobody is authenticated, nothing failed,
+  // and the state callback had nothing to say.
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+  EXPECT_EQ(ana.last_state(), CallSession::State::Idle);
+  EXPECT_EQ(ana.state_reports(), 0u);
+  EXPECT_TRUE(ana.errors().empty());
+}
+
+TEST_F(CallSessionTest, SigningInReusesTheProbeSocket) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().connected; }));
+
+  ASSERT_TRUE(ana.login());
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Authenticated; }));
+  // Still the same socket, still measured.
+  EXPECT_TRUE(ana.last_link().connected);
+}
+
+TEST_F(CallSessionTest, AProbeAgainstNoServerSaysSoWithoutFailingASignIn) {
+  Client& ana = add_without_a_server("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+
+  ASSERT_TRUE(wait_until([&] { return ana.link_reports() > 0; }))
+      << "the refused connection was never reported to the indicator";
+  EXPECT_FALSE(ana.last_link().connected);
+  EXPECT_FALSE(ana.last_link().round_trip.has_value());
+
+  // The indicator was told; the login form was not. A red dot is the whole
+  // message, and "failed" over a form nobody has filled in is not.
+  EXPECT_EQ(ana.last_state(), CallSession::State::Idle);
+  EXPECT_EQ(ana.state_reports(), 0u);
+  EXPECT_TRUE(ana.errors().empty());
+}
+
+TEST_F(CallSessionTest, SigningInWhileTheProbeIsStillKnockingIsReportedAsConnecting) {
+  // The socket is retrying against nothing. Signing in on top of it does not
+  // open a second one; it hands over the credentials and says what is going
+  // on, which is what it did before there was a probe.
+  Client& ana = add_without_a_server("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+  ASSERT_TRUE(wait_until([&] { return ana.link_reports() > 0; }));
+
+  ASSERT_TRUE(ana.session().connect_and_authenticate("ana", "password").ok());
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Connecting; }));
+}
+
+TEST_F(CallSessionTest, SigningOutLeavesNoCredentialsForTheProbeToUse) {
+  // After a sign-out the probe opens a new socket. The credentials of the
+  // person who just left must not go out on it.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ana.session().disconnect();
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+
+  ASSERT_TRUE(ana.session().probe_server().ok());
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().connected; }));
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().round_trip.has_value(); }));
+  EXPECT_TRUE(ana.session().local_user().id.empty()) << "the probe signed somebody back in";
+  EXPECT_EQ(ana.last_state(), CallSession::State::Idle);
 }
 
 TEST_F(CallSessionTest, AuthenticatesAndReachesTheAuthenticatedState) {

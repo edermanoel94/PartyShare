@@ -198,11 +198,13 @@ TEST_F(MongoStoreTest, UpdatingOrRemovingSomethingAbsentIsAnError) {
 }
 
 TEST_F(MongoStoreTest, UpsertingARoomTwiceKeepsOneRecord) {
-  ASSERT_FALSE(stores_->rooms()
-                   .upsert(RoomRecord{.id = "8F42A1", .name = "standup", .persistent = true})
-                   .has_value());
+  ASSERT_FALSE(
+      stores_->rooms()
+          .upsert(RoomRecord{.id = "8F42A1", .name = "standup", .persistent = true, .capacity = 12})
+          .has_value());
   const auto created = stores_->rooms().find("8F42A1");
   ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->capacity, 12);
 
   ASSERT_FALSE(stores_->rooms()
                    .upsert(RoomRecord{.id = "8F42A1", .name = "retro", .persistent = true})

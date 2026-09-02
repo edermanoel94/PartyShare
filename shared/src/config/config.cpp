@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include <dv/config/config.hpp>
+#include <dv/models/room.hpp>
 
 #ifdef _WIN32
 // Before windows.h and not after, for the same reason crash_reporter.cpp says:
@@ -1049,8 +1050,13 @@ std::optional<Error> validate(const Config& config) {
   if (config.server.port == 0) {
     return invalid_value("server.port", "must not be zero");
   }
-  if (config.server.max_participants_per_room < 2) {
-    return invalid_value("server.max_participants_per_room", "must be at least 2");
+  if (config.server.max_participants_per_room < models::kMinRoomCapacity) {
+    return invalid_value("server.max_participants_per_room",
+                         "must be at least " + std::to_string(models::kMinRoomCapacity));
+  }
+  if (config.server.max_participants_per_room > models::kMaxRoomCapacity) {
+    return invalid_value("server.max_participants_per_room",
+                         "must be at most " + std::to_string(models::kMaxRoomCapacity));
   }
   if (config.server.heartbeat_timeout_ms <= config.server.heartbeat_interval_ms) {
     return invalid_value("server.heartbeat_timeout_ms", "must exceed heartbeat_interval_ms");

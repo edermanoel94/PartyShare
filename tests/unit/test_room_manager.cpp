@@ -244,7 +244,7 @@ TEST(RoomManager, RefusalsNamePeopleAndRoomsRatherThanIdentifiers) {
 
   const auto full = manager.join(id, user("u3"));
   ASSERT_TRUE(full.has_value());
-  EXPECT_EQ(full->message, "room The Room is full");
+  EXPECT_EQ(full->message, "room The Room is full (2 people)");
 
   ASSERT_FALSE(manager.start_screen_share(id, "u1").has_value());
   const auto busy = manager.start_screen_share(id, "u2");
@@ -269,6 +269,85 @@ TEST(RoomManager, EnforcesTheCapacityLimit) {
   ASSERT_TRUE(failure.has_value());
   EXPECT_EQ(failure->code, "room_full");
   EXPECT_EQ(manager.find(id)->size(), 5u);
+}
+
+TEST(RoomManager, ARoomHoldsTheNumberItWasCreatedFor) {
+  // The ceiling is twenty and this room asks for three: the third person
+  // fits and the fourth does not, whatever the server would have allowed.
+  RoomManager manager = make_manager(20);
+  const auto created = manager.create_room("small", "owner", 3);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  const std::string id = created.value();
+  EXPECT_EQ(manager.find(id)->capacity, 3);
+
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FALSE(manager.join(id, user("u" + std::to_string(i))).has_value());
+  }
+  const auto failure = manager.join(id, user("u3"));
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "room_full");
+  EXPECT_EQ(failure->message, "room small is full (3 people)");
+}
+
+TEST(RoomManager, TwoRoomsOnOneServerCanHoldDifferentNumbers) {
+  RoomManager manager = make_manager(20);
+  const std::string small = manager.create_room("small", "a", 2).value();
+  const std::string large = manager.create_room("large", "b", 10).value();
+  EXPECT_EQ(manager.find(small)->capacity, 2);
+  EXPECT_EQ(manager.find(large)->capacity, 10);
+}
+
+TEST(RoomManager, ARoomThatAsksForNoSizeGetsTheDefault) {
+  // What every room held before the size was a choice, so a client built
+  // before the field gets the room it always got.
+  RoomManager manager = make_manager(20);
+  const std::string id = create(manager);
+  EXPECT_EQ(manager.find(id)->capacity, dv::models::kDefaultRoomCapacity);
+  EXPECT_EQ(manager.default_capacity(), dv::models::kDefaultRoomCapacity);
+}
+
+TEST(RoomManager, TheDefaultNeverExceedsTheServersCeiling) {
+  RoomManager manager = make_manager(3);
+  EXPECT_EQ(manager.default_capacity(), 3);
+  EXPECT_EQ(manager.max_capacity(), 3);
+  const std::string id = create(manager);
+  EXPECT_EQ(manager.find(id)->capacity, 3);
+}
+
+TEST(RoomManager, RefusesASizeAboveTheServersCeiling) {
+  // Refused, not clamped: somebody who asked for twenty and got five finds
+  // out at the sixth arrival.
+  RoomManager manager = make_manager(5);
+  const auto created = manager.create_room("big", "owner", 6);
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().code, "invalid_value");
+  EXPECT_EQ(created.error().message, "a room holds between 2 and 5 people");
+  EXPECT_EQ(manager.room_count(), 0u);
+}
+
+TEST(RoomManager, RefusesASizeNobodyCouldUse) {
+  RoomManager manager = make_manager(20);
+  EXPECT_EQ(manager.create_room("one", "owner", 1).error().code, "invalid_value");
+  EXPECT_EQ(manager.create_room("none", "owner", -4).error().code, "invalid_value");
+  EXPECT_EQ(manager.create_room("crowd", "owner", dv::models::kMaxRoomCapacity + 1).error().code,
+            "invalid_value");
+}
+
+TEST(RoomManager, TheCeilingIsCappedByWhatTheProtocolAccepts) {
+  RoomManager manager = make_manager(1000);
+  EXPECT_EQ(manager.max_capacity(), dv::models::kMaxRoomCapacity);
+  EXPECT_TRUE(manager.create_room("crowd", "owner", dv::models::kMaxRoomCapacity).ok());
+  EXPECT_FALSE(manager.create_room("mob", "owner", dv::models::kMaxRoomCapacity + 1).ok());
+}
+
+TEST(RoomManager, ASizeIsCheckedBeforeTheName) {
+  // A request nobody could be given is answered as such rather than as "that
+  // name is taken", and nothing is written for it.
+  RoomManager manager = make_manager(5);
+  (void)create(manager, "daily");
+  const auto created = manager.create_room("daily", "owner", 50);
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().code, "invalid_value");
 }
 
 TEST(RoomManager, JoiningASecondRoomLeavesTheFirst) {
@@ -326,7 +405,40 @@ TEST(RoomManager, CreatingARoomWritesItToTheStore) {
   EXPECT_EQ(record->id, id);
   EXPECT_EQ(record->name, "dev-room");
   EXPECT_TRUE(record->persistent);
+  EXPECT_EQ(record->capacity, dv::models::kDefaultRoomCapacity);
   EXPECT_EQ(store.list().size(), 1u);
+}
+
+TEST(RoomManager, TheSizeSurvivesARestart) {
+  dv::server::store::MemoryRoomStore store;
+  std::string id;
+  {
+    RoomManager before(
+        RoomManager::Options{.max_participants_per_room = 20, .id_seed = 1234u, .store = &store});
+    id = before.create_room("dev-room", "owner", 12).value();
+    EXPECT_EQ(store.find(id)->capacity, 12);
+  }
+
+  RoomManager after(
+      RoomManager::Options{.max_participants_per_room = 20, .id_seed = 4321u, .store = &store});
+  EXPECT_EQ(after.load_rooms(), 1u);
+  ASSERT_NE(after.find(id), nullptr);
+  EXPECT_EQ(after.find(id)->capacity, 12);
+}
+
+TEST(RoomManager, ARoomStoredBeforeSizesGetsTheDefault) {
+  // A record from an older server carries no capacity. It gets the number
+  // every room held then, and is not measured against this server's ceiling:
+  // refusing it would delete a room somebody is using.
+  dv::server::store::MemoryRoomStore store;
+  ASSERT_FALSE(
+      store.upsert(dv::server::store::RoomRecord{.id = "8F42A1", .name = "old", .persistent = true})
+          .has_value());
+  RoomManager manager(
+      RoomManager::Options{.max_participants_per_room = 3, .id_seed = 1234u, .store = &store});
+  EXPECT_EQ(manager.load_rooms(), 1u);
+  ASSERT_NE(manager.find("8F42A1"), nullptr);
+  EXPECT_EQ(manager.find("8F42A1")->capacity, dv::models::kDefaultRoomCapacity);
 }
 
 TEST(RoomManager, RoomsComeBackFromTheStoreOnStartup) {

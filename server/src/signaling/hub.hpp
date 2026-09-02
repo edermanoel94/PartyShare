@@ -71,13 +71,15 @@ class MediaSignals {
 /// participant could mute another, or send an offer in someone else's name.
 ///
 /// Not thread safe. The server serializes all calls onto one mutex, which is
-/// ample for the five participants per room the MVP targets.
+/// ample for rooms of the size this server is configured to allow.
 class Hub {
  public:
   using Clock = Authenticator::Clock;
 
   struct Options {
-    int max_participants_per_room = 5;
+    /// The largest room anybody may create here. A room's own size is chosen
+    /// when it is made; see RoomManager::Options.
+    int max_participants_per_room = 20;
     std::chrono::milliseconds heartbeat_interval{5000};
     std::chrono::milliseconds heartbeat_timeout{15000};
     /// Fixing this makes room identifiers reproducible in tests.

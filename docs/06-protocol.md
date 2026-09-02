@@ -54,7 +54,7 @@ Since server assigned identifiers are 16 hexadecimal characters, there is no way
 | --- | --- | --- |
 | `authenticate` | `username`, `password` | |
 | `change_password` | `current_password`, `new_password` | |
-| `create_room` | `user_id` | `room_name`, `persistent` |
+| `create_room` | `user_id` | `room_name`, `persistent`, `capacity` |
 | `join_room` | `room_id`, `user_id` | `display_name` |
 | `leave_room` | `room_id`, `user_id` | |
 
@@ -76,6 +76,13 @@ Closing a room releases its name.
 
 Rooms already in the database when this rule arrived keep the names they have, duplicates included: the rule applies to creating a room, which is the moment somebody can be asked to pick something else.
 
+`capacity` is how many people the room holds, the creator included, and is chosen room by room.
+Absent, or zero, asks for the default of 5, which is what every room held before the size was a choice and what a client built before the field still gets.
+Otherwise it has to be between 2 and 50, and no more than the server's `max_participants_per_room` ([chapter 3](03-configuration.md)), which an operator sets from the ports and bandwidth the machine has; anything else is answered with `invalid_value` naming the range the server does allow.
+Refused rather than clamped: somebody who asked for a room of twenty and was quietly given one of five would find out at the sixth arrival.
+The size a room ended up with comes back in `room_created` and in every `room_list` entry, beside how many are inside.
+A room stored before it had a size holds the default, and is not measured against the server's ceiling on the way back in.
+
 `authenticate` has to be the first message on the connection.
 Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.6.
 `ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.
@@ -90,7 +97,7 @@ The server never echoes one back and never writes one to a log.
 | --- | --- | --- |
 | `authenticated` | `user`, `token`, `expires_in_seconds` | |
 | `password_changed` | | |
-| `room_created` | `room_id` | `room_name` |
+| `room_created` | `room_id` | `room_name`, `capacity` |
 | `user_joined` | `room_id`, `user` | |
 | `user_left` | `room_id`, `user_id` | |
 | `error` | `code` | `message` |
@@ -415,7 +422,7 @@ No password, salt or hash appears here, and none is defined for any message in t
 `rooms` is an array of:
 
 ```json
-{ "id": "8F42A1", "name": "standup", "owner_id": "user123", "persistent": true, "participant_count": 3 }
+{ "id": "8F42A1", "name": "standup", "owner_id": "user123", "persistent": true, "participant_count": 3, "capacity": 10 }
 ```
 
 `entries` is an array of:
@@ -570,7 +577,7 @@ The message alongside them is for humans only and may change.
 | `invalid_type` | A field exists with the wrong JSON type |
 | `unknown_message_type` | The `type` does not belong to this protocol |
 | `room_not_found` | No room exists with that `room_id` |
-| `room_full` | The room already reached its participant limit |
+| `room_full` | The room already holds the number of people it was created for |
 | `already_in_room` | The user is already in the room |
 | `not_in_room` | The operation requires the user to be in the room |
 | `screen_share_busy` | Another participant is already sharing their screen |

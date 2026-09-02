@@ -132,6 +132,14 @@ struct CreateRoom {
   /// quietly given an ordinary room, because a room that silently forgets it
   /// was meant to be permanent is worse than a refusal.
   bool persistent = false;
+  /// How many people the room should hold, counting the creator. Zero, which
+  /// is what a client built before the field sends, asks for
+  /// `models::kDefaultRoomCapacity`. Anything else has to satisfy
+  /// `models::is_valid_room_capacity` and the server's own ceiling, or the
+  /// request is answered with `invalid_value` rather than clamped: somebody
+  /// who asked for a room of twenty and got one of five would find out at the
+  /// sixth arrival.
+  int capacity = 0;
 
   friend bool operator==(const CreateRoom&, const CreateRoom&) = default;
 };
@@ -178,6 +186,9 @@ struct PasswordChanged {
 struct RoomCreated {
   std::string room_id;
   std::string room_name;
+  /// The size the room ended up with: what was asked for, or the default when
+  /// nothing was.
+  int capacity = 0;
 
   friend bool operator==(const RoomCreated&, const RoomCreated&) = default;
 };
@@ -495,6 +506,9 @@ struct RoomSummary {
   std::string owner_id;
   bool persistent = false;
   int participant_count = 0;
+  /// How many fit, so a list can show "3/10" and a person can tell a room
+  /// with room in it from one that is full before trying the door.
+  int capacity = 0;
 
   friend bool operator==(const RoomSummary&, const RoomSummary&) = default;
 };

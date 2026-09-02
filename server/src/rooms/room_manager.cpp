@@ -68,7 +68,31 @@ bool RoomManager::name_taken(const std::string& key) const {
       rooms_, [&](const auto& entry) { return models::room_name_key(entry.second.name) == key; });
 }
 
-Result<std::string> RoomManager::create_room(const std::string& name, std::string owner_id) {
+int RoomManager::default_capacity() const noexcept {
+  return std::min(models::kDefaultRoomCapacity, max_capacity());
+}
+
+int RoomManager::max_capacity() const noexcept {
+  // Never below the smallest room, whatever the configuration says: a ceiling
+  // under the floor would leave no size a room could be created with, and the
+  // configuration reader already refuses a value that low.
+  return std::clamp(options_.max_participants_per_room, models::kMinRoomCapacity,
+                    models::kMaxRoomCapacity);
+}
+
+Result<std::string> RoomManager::create_room(const std::string& name, std::string owner_id,
+                                             int capacity) {
+  // Checked before anything else is looked at, name included, so a request
+  // that asks for a size nobody could be given is told that rather than told
+  // its name is taken.
+  if (capacity == 0) {
+    capacity = default_capacity();
+  } else if (!models::is_valid_room_capacity(capacity) || capacity > max_capacity()) {
+    return Result<std::string>::failure(
+        "invalid_value", "a room holds between " + std::to_string(models::kMinRoomCapacity) +
+                             " and " + std::to_string(max_capacity()) + " people");
+  }
+
   // Trimmed once, before the loop, because it does not depend on which
   // identifier the loop settles on.
   const std::string wanted = models::trim_room_name(name);
@@ -116,6 +140,7 @@ Result<std::string> RoomManager::create_room(const std::string& name, std::strin
     room.name = wanted.empty() ? id : wanted;
     room.owner_id = std::move(owner_id);
     room.persistent = true;
+    room.capacity = capacity;
 
     if (options_.store != nullptr) {
       // Written before the room is live, and written for every room now. A
@@ -126,8 +151,11 @@ Result<std::string> RoomManager::create_room(const std::string& name, std::strin
       // A failure here fails the creation instead of carrying on. The caller
       // asked for a room that survives, and one that exists only in this
       // process is not it: better to say so now than at the next restart.
-      if (auto failure = options_.store->upsert(store::RoomRecord{
-              .id = room.id, .name = room.name, .owner_id = room.owner_id, .persistent = true})) {
+      if (auto failure = options_.store->upsert(store::RoomRecord{.id = room.id,
+                                                                  .name = room.name,
+                                                                  .owner_id = room.owner_id,
+                                                                  .persistent = true,
+                                                                  .capacity = room.capacity})) {
         return Result<std::string>::failure(*failure);
       }
     }
@@ -164,6 +192,11 @@ std::size_t RoomManager::load_rooms() {
     room.name = record.name;
     room.owner_id = record.owner_id;
     room.persistent = true;
+    // A record from before rooms had a size carries zero, and gets the number
+    // every room held then. Not checked against this server's ceiling for the
+    // same reason names are not: the record is what it is, and refusing it
+    // would delete a room somebody is using.
+    room.capacity = record.capacity > 0 ? record.capacity : models::kDefaultRoomCapacity;
     rooms_.emplace(record.id, std::move(room));
     ++loaded;
   }
@@ -216,8 +249,12 @@ std::optional<Error> RoomManager::join(const std::string& room_id, models::User 
     return error("already_in_room", models::user_label(user.id, user.display_name, kNoUsername) +
                                         " is already in " + models::room_label(room_id, room.name));
   }
-  if (std::cmp_greater_equal(room.size(), options_.max_participants_per_room)) {
-    return error("room_full", "room " + models::room_label(room_id, room.name) + " is full");
+  // The room's own size, not the server's ceiling: two rooms on one server can
+  // hold different numbers of people, and the number that matters is the one
+  // whoever made this room chose.
+  if (room.is_full()) {
+    return error("room_full", "room " + models::room_label(room_id, room.name) + " is full (" +
+                                  std::to_string(room.capacity) + " people)");
   }
 
   // A user can only be in one room at a time. Joining a second one leaves the

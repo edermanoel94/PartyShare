@@ -8,9 +8,29 @@
 
 namespace dv::models {
 
-/// Rooms are plain data here. Capacity limits, identifier generation and the
-/// join and leave policy belong to the server side RoomManager (M2), because
-/// they depend on server configuration.
+/// How many people a room holds when whoever created it did not say. The
+/// number every room held before the size became a choice, so that a client
+/// built before the field existed still gets the room it always got.
+inline constexpr int kDefaultRoomCapacity = 5;
+
+/// The smallest room worth having: one person alone is not a call.
+inline constexpr int kMinRoomCapacity = 2;
+
+/// The most the protocol accepts, whatever the server is configured to allow.
+/// A bound the client can size its control by without asking; the server's
+/// own ceiling, which an operator sets from the ports and bandwidth they have,
+/// is applied on top and may be lower. See docs/06-protocol.md.
+inline constexpr int kMaxRoomCapacity = 50;
+
+/// Whether `capacity` is a number of people a room can be asked to hold.
+[[nodiscard]] constexpr bool is_valid_room_capacity(int capacity) noexcept {
+  return capacity >= kMinRoomCapacity && capacity <= kMaxRoomCapacity;
+}
+
+/// Rooms are plain data here. Identifier generation and the join and leave
+/// policy belong to the server side RoomManager (M2), because they depend on
+/// server configuration. The capacity is data of the room itself, chosen when
+/// it is created, and the RoomManager is what enforces it.
 struct Room {
   std::string id;
   std::string name;
@@ -22,8 +42,15 @@ struct Room {
   /// create one. An ordinary room is still deleted the moment it empties, so
   /// nothing accumulates on its own.
   bool persistent = false;
+  /// How many people fit, counting whoever is already inside. Chosen by whoever
+  /// creates the room; `kDefaultRoomCapacity` for one that predates the field.
+  int capacity = kDefaultRoomCapacity;
 
   [[nodiscard]] std::size_t size() const noexcept { return participants.size(); }
+
+  [[nodiscard]] bool is_full() const noexcept {
+    return participants.size() >= static_cast<std::size_t>(capacity);
+  }
 
   [[nodiscard]] const Participant* find(const std::string& user_id) const noexcept;
   [[nodiscard]] Participant* find(const std::string& user_id) noexcept;
@@ -86,7 +113,7 @@ inline constexpr std::size_t kMaxRoomNameBytes = 48;
 ///
 /// Unlike `user_label` this prints one thing and not two. A room name is
 /// unique, because `create_room` refuses one that is taken, so the name alone
-/// already says which room. See docs/05-rooms.md.
+/// already says which room. See section 4.1 of docs/06-protocol.md.
 [[nodiscard]] std::string room_label(const std::string& id, const std::string& name);
 
 }  // namespace dv::models

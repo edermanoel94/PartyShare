@@ -68,6 +68,27 @@ TEST(Room, SizeCountsParticipants) {
   EXPECT_EQ(make_room().size(), 3u);
 }
 
+TEST(Room, HoldsTheDefaultNumberUnlessToldOtherwise) {
+  EXPECT_EQ(make_room().capacity, dv::models::kDefaultRoomCapacity);
+}
+
+TEST(Room, IsFullAtItsOwnCapacity) {
+  Room room = make_room();
+  room.capacity = 3;
+  EXPECT_TRUE(room.is_full());
+  room.capacity = 4;
+  EXPECT_FALSE(room.is_full());
+}
+
+TEST(RoomCapacity, AcceptsTheRangeAndRefusesWhatIsOutsideIt) {
+  EXPECT_TRUE(dv::models::is_valid_room_capacity(dv::models::kMinRoomCapacity));
+  EXPECT_TRUE(dv::models::is_valid_room_capacity(dv::models::kDefaultRoomCapacity));
+  EXPECT_TRUE(dv::models::is_valid_room_capacity(dv::models::kMaxRoomCapacity));
+  EXPECT_FALSE(dv::models::is_valid_room_capacity(dv::models::kMinRoomCapacity - 1));
+  EXPECT_FALSE(dv::models::is_valid_room_capacity(dv::models::kMaxRoomCapacity + 1));
+  EXPECT_FALSE(dv::models::is_valid_room_capacity(0));
+}
+
 TEST(RoomId, AcceptsTheSpecExample) {
   EXPECT_TRUE(dv::models::is_valid_room_id("8F42A1"));
 }

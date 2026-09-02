@@ -125,9 +125,9 @@ voice.
 **Lowering a participant's volume also lowers what they are sharing.** This one
 has no fix inside option A, and it is the honest price of it: the two sounds are
 encoded together, and no receiver separates them again. The interface says so —
-somebody sharing with sound appears as `(sharing with sound)` rather than
-`(sharing)`, which is what explains why that person's volume slider now controls
-two things.
+somebody sharing with sound gets sound waves drawn beside the monitor icon on
+their row, and "sharing with sound" rather than "sharing" in its tooltip, which
+is what explains why that person's volume slider now controls two things.
 
 One thing predicted to break and did not: the **remote** speech indicator.
 libwebrtc computes the `audio-level` header extension *before* the frame

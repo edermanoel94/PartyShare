@@ -18,7 +18,8 @@
 namespace dv::server {
 
 /// Owns the set of live rooms and enforces the rules from section 5.1 of
-/// SPEC.md: a capacity limit, and at most one participant sharing their screen.
+/// SPEC.md: each room's own capacity, and at most one participant sharing
+/// their screen.
 ///
 /// This class knows nothing about sockets or about the wire protocol. It is
 /// pure state plus rules, which is what makes it directly testable.
@@ -28,7 +29,12 @@ namespace dv::server {
 class RoomManager {
  public:
   struct Options {
-    int max_participants_per_room = 5;
+    /// The most a room may be created to hold on this server. Not the size of
+    /// a room: that is chosen at creation, room by room, and this is the
+    /// ceiling on the choice. An operator sets it from what the machine can
+    /// carry - the SFU binds one port and relays one audio stream per
+    /// participant - and `models::kMaxRoomCapacity` caps it in turn.
+    int max_participants_per_room = 20;
     /// Fixing the seed makes room identifiers reproducible in tests.
     std::optional<std::uint32_t> id_seed;
     /// Where persistent rooms are written. Null means rooms live and die with
@@ -69,7 +75,24 @@ class RoomManager {
   /// name, compared by `models::room_name_key`. A name is what somebody reads
   /// in a list and then clicks, so two rooms wearing one name is a list that
   /// cannot be acted on.
-  [[nodiscard]] Result<std::string> create_room(const std::string& name, std::string owner_id = {});
+  ///
+  /// `capacity` is how many people the room holds, the creator included. Zero
+  /// asks for `models::kDefaultRoomCapacity`, which is what a client built
+  /// before the choice existed gets. Anything else has to be a size
+  /// `models::is_valid_room_capacity` accepts and no larger than
+  /// `max_participants_per_room`, or the creation fails with `invalid_value`:
+  /// refused rather than clamped, because a room quietly made smaller than
+  /// asked is found out by the person who does not fit.
+  [[nodiscard]] Result<std::string> create_room(const std::string& name, std::string owner_id = {},
+                                                int capacity = 0);
+
+  /// The size a room gets when the request does not say: the default, unless
+  /// this server is configured to allow less than that.
+  [[nodiscard]] int default_capacity() const noexcept;
+
+  /// The largest room this server will create: its own ceiling, itself capped
+  /// by what the protocol accepts.
+  [[nodiscard]] int max_capacity() const noexcept;
 
   /// Reads the rooms back from the store, so that an identifier somebody wrote
   /// down still works after a restart. Rooms come back empty: who was inside
@@ -84,8 +107,8 @@ class RoomManager {
   /// the one path that removes a persistent room.
   [[nodiscard]] Result<std::vector<std::string>> remove_room(const std::string& room_id);
 
-  /// Adds a participant. Fails with room_not_found, room_full or
-  /// already_in_room.
+  /// Adds a participant. Fails with room_not_found, room_full - the room's
+  /// own capacity, not a server-wide number - or already_in_room.
   [[nodiscard]] std::optional<Error> join(const std::string& room_id, models::User user);
 
   /// Removes a participant, and the room itself once it becomes empty.

@@ -149,8 +149,38 @@ TEST(RoundTrip, CreateRoom) {
   EXPECT_EQ(round_trip(original), original);
 }
 
+TEST(RoundTrip, CreateRoomCarriesTheSizeAskedFor) {
+  const CreateRoom original{.user_id = "user123", .room_name = "dev-room", .capacity = 10};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(Serialize, ACreateRoomThatAsksForNoSizeSendsNone) {
+  // Zero means "the default" on this side and must not reach a server as a
+  // number: one built before the field would read a capacity of nothing.
+  const std::string payload = serialize(Message{CreateRoom{"user123", "dev-room"}});
+  EXPECT_EQ(payload.find("capacity"), std::string::npos) << payload;
+}
+
+TEST(Parse, ACreateRoomFromBeforeSizesAsksForTheDefault) {
+  const auto parsed = parse(R"({"type":"create_room","user_id":"user123","room_name":"x"})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(std::get<CreateRoom>(parsed.value()).capacity, 0);
+}
+
 TEST(RoundTrip, RoomCreated) {
-  const RoomCreated original{"8F42A1", "dev-room"};
+  const RoomCreated original{"8F42A1", "dev-room", 10};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, RoomListCarriesEachRoomsSizeAndOccupancy) {
+  RoomList original;
+  original.rooms.push_back(RoomSummary{.id = "8F42A1",
+                                       .name = "standup",
+                                       .owner_id = "user123",
+                                       .persistent = true,
+                                       .participant_count = 3,
+                                       .capacity = 10});
+  original.rooms.push_back(RoomSummary{.id = "A26DCB", .name = "A26DCB", .capacity = 5});
   EXPECT_EQ(round_trip(original), original);
 }
 

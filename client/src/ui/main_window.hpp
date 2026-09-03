@@ -32,6 +32,7 @@ namespace dv::ui {
 
 class AdminPanel;
 class ChatView;
+class ElidedLabel;
 class MetricsDialog;
 class ScreenView;
 class UpdateChecker;
@@ -298,8 +299,6 @@ class MainWindow : public QMainWindow {
   /// call. Kept as the text the column shows rather than as two numbers,
   /// because that is the only form anything reads it in.
   QHash<QString, QString> room_people_;
-  /// Shown only to an administrator. See on_open_administration.
-  QPushButton* admin_button_ = nullptr;
 
   // Room.
   QLabel* room_title_ = nullptr;
@@ -313,6 +312,8 @@ class MainWindow : public QMainWindow {
   QPushButton* share_button_ = nullptr;
   QPushButton* settings_button_ = nullptr;
   QPushButton* network_status_button_ = nullptr;
+  /// Shown only to an administrator. See on_open_administration.
+  QPushButton* admin_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
 
@@ -370,13 +371,12 @@ class MainWindow : public QMainWindow {
 
   // Administration.
   AdminPanel* admin_panel_ = nullptr;
-  /// Which page to go back to when the administration page is closed.
-  int previous_page_ = 0;
 
   // Status bar.
   QLabel* status_ = nullptr;
   QLabel* quality_ = nullptr;
-  QLabel* metrics_ = nullptr;
+  /// Ends in an ellipsis when the bar runs short, rather than mid-word.
+  ElidedLabel* metrics_ = nullptr;
   /// Which build this is, at the right hand end of the status bar.
   ///
   /// Written in the constructor from a number decided when the binary was

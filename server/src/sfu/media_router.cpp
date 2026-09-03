@@ -21,7 +21,8 @@ constexpr int kOpusClockRate = 48000;
 [[nodiscard]] AudioCodecs audio_codecs(const MediaRouter::Options& options) {
   return AudioCodecs{.opus_payload_type = options.opus_payload_type,
                      .opus_max_bitrate_kbps = options.opus_max_bitrate_kbps,
-                     .red_payload_type = options.red_payload_type};
+                     .red_payload_type = options.red_payload_type,
+                     .nack = options.audio_nack};
 }
 
 /// RFC 6464. Senders put the loudness of each packet in the RTP header, and
@@ -266,7 +267,14 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
   session.inbound = session.connection->addTrack(inbound);
 
   // Generates the receiver reports the sender needs to estimate loss and RTT.
-  session.inbound->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
+  auto audio_receiving = std::make_shared<rtc::RtcpReceivingSession>();
+  if (options_.audio_nack) {
+    // Asks the sender again for what did not arrive, so that what is forwarded
+    // is a stream with the holes filled. See sfu/loss_repair.hpp.
+    session.audio_repair = std::make_shared<LossRepair>();
+    audio_receiving->addToChain(session.audio_repair);
+  }
+  session.inbound->setMediaHandler(audio_receiving);
 
   session.inbound->onMessage(
       [this, user_id, room_id](const rtc::binary& packet) {
@@ -473,6 +481,20 @@ void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std:
   }
 }
 
+MediaRouter::AudioRepairStats MediaRouter::audio_repair_stats() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  AudioRepairStats total;
+  for (const auto& [user_id, session] : sessions_) {
+    if (session.audio_repair == nullptr) {
+      continue;
+    }
+    total.requests_sent += session.audio_repair->requests_sent();
+    total.packets_missing += session.audio_repair->packets_missing();
+    total.packets_repaired += session.audio_repair->packets_repaired();
+  }
+  return total;
+}
+
 MediaRouter::VideoRepairStats MediaRouter::video_repair_stats() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   VideoRepairStats total;
@@ -529,7 +551,17 @@ void MediaRouter::add_outbound_track(Session& session, const std::string& source
   // is what the metrics of section 22 of SPEC.md are read from.
   auto rtp_config = std::make_shared<rtc::RtpPacketizationConfig>(
       ssrc, source_user_id, static_cast<std::uint8_t>(options_.opus_payload_type), kOpusClockRate);
-  outbound.track->setMediaHandler(std::make_shared<rtc::RtcpSrReporter>(rtp_config));
+  auto reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
+  if (options_.audio_nack) {
+    // Answers a listener that says it missed packet number n by sending that
+    // packet again, out of a cache of the last few hundred: ten seconds of
+    // audio, against a jitter buffer that asks within one. The observer sits
+    // in front because the responder answers and says nothing.
+    reporter->addToChain(std::make_shared<NackObserver>(
+        [this] { audio_nacks_received_.fetch_add(1, std::memory_order_relaxed); }));
+    reporter->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+  }
+  outbound.track->setMediaHandler(reporter);
 
   session.outbound.emplace(source_user_id, std::move(outbound));
   session.renegotiation_pending = true;

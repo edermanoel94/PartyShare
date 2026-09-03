@@ -27,15 +27,17 @@ constexpr auto kUnderImpairment = 15000ms;
 
 /// What 5% of loss sounds like, in concealment events per second at the
 /// listener, measured on this machine on 2026-09-03 by the two tests below.
-/// Without any repair the link produced 4.64, with 7.1% of the samples
-/// invented; with RED it produced 0.46, with 0.74%. The remainder is what RED
-/// cannot reach: two packets lost back to back, which at the 10% the two legs
-/// add up to happens about once every two seconds.
+/// Without any repair the link produced 4.2 to 4.8 across runs, with 6% to 8%
+/// of the samples invented. With RED alone it produced 0.46, with 0.74%: what
+/// RED cannot reach is two packets lost back to back, which at the 10% the two
+/// legs add up to happens about once every two seconds. With RED and
+/// retransmission together it produced 0.00 to 0.13, with at most 0.33%: the
+/// SFU asked for some seventy packets and all but a handful came back.
 ///
-/// Both thresholds sit between the two measurements with room on each side,
-/// so a drift in either direction is caught before it is a regression.
+/// Both thresholds sit between the measurements with room on each side, so a
+/// drift in either direction is caught before it is a regression.
 constexpr double kConcealmentWithoutRepairPerSecond = 2.5;
-constexpr double kConcealmentWithRedundancyPerSecond = 1.5;
+constexpr double kConcealmentWithRepairPerSecond = 1.0;
 
 class ImpairedNetworkTest : public MediaEndToEndTest {
  protected:
@@ -107,12 +109,14 @@ class ImpairedNetworkTest : public MediaEndToEndTest {
   }
 };
 
-/// The same fixture with the redundancy turned off on the server: the offer as
-/// it was before RED existed, and what `[audio] redundancy = false` gives back.
-class ImpairedNetworkWithoutRedundancyTest : public ImpairedNetworkTest {
+/// The same fixture with every repair turned off on the server: the offer as
+/// it was before RED and retransmission existed, and what
+/// `[audio] redundancy = false` and `[audio] retransmission = false` give back.
+class ImpairedNetworkWithoutRepairTest : public ImpairedNetworkTest {
  protected:
   void configure(SignalingServer::Options& options) override {
     options.sfu.red_payload_type.reset();
+    options.sfu.audio_nack = false;
   }
 };
 
@@ -172,7 +176,12 @@ TEST_F(ImpairedNetworkTest, ACallSurvivesFivePercentPacketLoss) {
   EXPECT_GT(server_->media_router()->audio_packets_forwarded() - forwarded_before, 300U);
 
   // The loss is visible where it should be, in the receiver's own accounting.
-  EXPECT_GT(stats.packets_lost, 0U) << "libwebrtc never noticed the loss the injector caused";
+  // With retransmission on, the gap a lost packet leaves is filled again
+  // before the receiver report counts it, so packets_lost sits at zero on a
+  // link that is demonstrably losing 5%. What remains of the loss at this
+  // level is the request it caused.
+  EXPECT_GT(stats.packets_lost + after.stats.nacks_sent, 0U)
+      << "libwebrtc never noticed the loss the injector caused";
 
   // Degradation, not collapse: the loss the receiver sees is of the order of
   // what was injected, not a multiple of it. Opus carries one frame per packet,
@@ -190,11 +199,34 @@ TEST_F(ImpairedNetworkTest, ACallSurvivesFivePercentPacketLoss) {
   EXPECT_GT(server_->media_router()->audio_red_packets_received() - red_before, 0U)
       << "no RED reached the SFU, so whatever was measured above was measured without "
          "the redundancy";
-  EXPECT_LT(concealment_events_per_second(before, after), kConcealmentWithRedundancyPerSecond)
-      << "the redundancy is negotiated and the listener still hears the loss";
+  EXPECT_LT(concealment_events_per_second(before, after), kConcealmentWithRepairPerSecond)
+      << "the repairs are negotiated and the listener still hears the loss";
+
+  // The retransmission, on both legs. The SFU asks the sender for what did
+  // not arrive and the sender answers; the listener asks the SFU and the SFU
+  // answers out of its cache. Each half leaves a count on each side.
+  const auto repair = server_->media_router()->audio_repair_stats();
+  const media::AudioStats sender = ana().last_stats();
+  std::printf(
+      "retransmission   the SFU asked %llu times and %llu of %llu came back; ana sent "
+      "%llu packets again; bruno asked %llu times, the SFU heard %llu\n",
+      static_cast<unsigned long long>(repair.requests_sent),
+      static_cast<unsigned long long>(repair.packets_repaired),
+      static_cast<unsigned long long>(repair.packets_missing),
+      static_cast<unsigned long long>(sender.retransmitted_packets_sent),
+      static_cast<unsigned long long>(after.stats.nacks_sent),
+      static_cast<unsigned long long>(server_->media_router()->audio_nacks_received()));
+  std::fflush(stdout);
+  EXPECT_GT(repair.requests_sent, 0U) << "the SFU never asked the sender for a lost audio packet";
+  EXPECT_GT(repair.packets_repaired, 0U) << "the SFU asked and nothing ever came back";
+  EXPECT_GT(sender.nacks_received, 0U) << "no request from the SFU reached the sender";
+  EXPECT_GT(sender.retransmitted_packets_sent, 0U) << "the sender never sent a packet again";
+  EXPECT_GT(after.stats.nacks_sent, 0U) << "the listener never asked the SFU for a lost packet";
+  EXPECT_GT(server_->media_router()->audio_nacks_received(), 0U)
+      << "no request from the listener reached the SFU";
 }
 
-TEST_F(ImpairedNetworkWithoutRedundancyTest, FivePercentLossIsHeardWithoutRedundancy) {
+TEST_F(ImpairedNetworkWithoutRepairTest, FivePercentLossIsHeardWithoutRepair) {
   // The instrument, calibrated. With Opus alone every lost packet is a hole
   // the jitter buffer has to paper over, and this is how many per second the
   // link above produces. It is the number the test above is measured against:
@@ -212,6 +244,11 @@ TEST_F(ImpairedNetworkWithoutRedundancyTest, FivePercentLossIsHeardWithoutRedund
 
   EXPECT_EQ(server_->media_router()->audio_red_packets_received(), 0U)
       << "RED arrived with the redundancy turned off, so the key does not turn it off";
+  EXPECT_EQ(server_->media_router()->audio_repair_stats().requests_sent, 0U)
+      << "the SFU asked for a packet with the retransmission turned off";
+  EXPECT_EQ(server_->media_router()->audio_nacks_received(), 0U)
+      << "a listener asked for a packet with the retransmission turned off, so the key does "
+         "not reach the offer";
   EXPECT_GT(concealment_events_per_second(before, after), kConcealmentWithoutRepairPerSecond)
       << "5% loss left no audible mark without any repair, so the redundancy test cannot "
          "tell a repair from nothing";

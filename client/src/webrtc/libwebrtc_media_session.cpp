@@ -1264,6 +1264,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       collected.total_samples_received += inbound->total_samples_received.value_or(0);
       collected.concealed_samples += inbound->concealed_samples.value_or(0);
       collected.concealment_events += inbound->concealment_events.value_or(0);
+      // On an inbound stream, nack_count is what this receiver asked for.
+      collected.nacks_sent += inbound->nack_count.value_or(0);
     }
 
     for (const auto* outbound : report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>()) {
@@ -1272,6 +1274,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       }
       collected.packets_sent += outbound->packets_sent.value_or(0);
       collected.bytes_sent += outbound->bytes_sent.value_or(0);
+      // On an outbound stream, nack_count is what the other end asked this
+      // sender for, and the retransmissions are the answer.
+      collected.nacks_received += outbound->nack_count.value_or(0);
+      collected.retransmitted_packets_sent += outbound->retransmitted_packets_sent.value_or(0);
     }
 
     // The audio source is where the processing module surfaces: echo return

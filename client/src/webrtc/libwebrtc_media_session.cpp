@@ -100,6 +100,17 @@ class Engine {
   /// nothing to mix.
   [[nodiscard]] audio::ScreenAudioMixer& screen_audio() { return screen_audio_; }
 
+  /// The processing module's configuration as it stands, which is the truth
+  /// about what runs on the captured audio after everybody had their say: the
+  /// constructor, the voice engine's own defaults and set_audio_processing.
+  /// Nothing when the module could not be built.
+  [[nodiscard]] std::optional<webrtc::AudioProcessing::Config> audio_processing_config() const {
+    if (audio_processing_ == nullptr) {
+      return std::nullopt;
+    }
+    return audio_processing_->GetConfig();
+  }
+
   /// Moves the three audio processing switches, now, for every session in the
   /// process.
   ///
@@ -125,8 +136,14 @@ class Engine {
     webrtc::AudioProcessing::Config config = audio_processing_->GetConfig();
     config.echo_canceller.enabled = echo_cancellation;
     config.noise_suppression.enabled = noise_suppression;
-    config.gain_controller1.enabled = automatic_gain_control;
-    config.gain_controller1.analog_gain_controller.enabled = automatic_gain_control;
+    // The first gain controller is switched off here and not only in the
+    // constructor, because the voice engine switches it on behind our back:
+    // its Init applies a default set of options with auto_gain_control on
+    // (webrtc_voice_engine.cc, Init), and that runs when the first peer
+    // connection is created - after the module was built, and before this is
+    // called for the first session. Off here means off for every session.
+    config.gain_controller1.enabled = false;
+    config.gain_controller2.enabled = automatic_gain_control;
     audio_processing_->ApplyConfig(config);
   }
 
@@ -175,10 +192,15 @@ class Engine {
   /// ApplyOptions leaves both the module and the echo canceller of the
   /// processing module alone, and set_audio_processing above is the only hand
   /// on the switch.
+  ///
+  /// Automatic gain control is left unset for a related reason. A set value
+  /// makes ApplyOptions switch the *first* gain controller, in analog mode
+  /// (webrtc_voice_engine.cc, ApplyOptions), which is the one this engine
+  /// retired. The second is only reachable through ApplyConfig, and
+  /// set_audio_processing is the hand on it.
   [[nodiscard]] webrtc::AudioOptions audio_options() const {
     webrtc::AudioOptions options;
     options.noise_suppression = noise_suppression_.load();
-    options.auto_gain_control = automatic_gain_control_.load();
     return options;
   }
 
@@ -408,12 +430,20 @@ class Engine {
     // Rumble, desk bumps and DC offset, none of which Opus should be paying
     // bits for.
     processing.high_pass_filter.enabled = true;
-    // Adaptive analog is the desktop mode: it drives the operating system's
-    // own input volume and only compresses in software what is left.
-    processing.gain_controller1.enabled = true;
-    processing.gain_controller1.mode =
-        webrtc::AudioProcessing::Config::GainController1::kAdaptiveAnalog;
-    processing.gain_controller1.analog_gain_controller.enabled = true;
+    // The second gain controller, which is the one Chrome ships: an input
+    // volume controller that drives the operating system's own microphone
+    // volume, as the analog half of the first one did, and an adaptive digital
+    // gain behind it that only moves on speech and stops at a noise floor,
+    // which the first one never had. The first is off for good; libwebrtc's
+    // own defaults would turn it back on at engine start, and
+    // set_audio_processing puts it off again right after - see there. Every
+    // number is the m152 default and none has been listened to yet: 5 dB of
+    // headroom, at most 50 dB of gain, 6 dB/s, a noise floor of -50 dBFS.
+    // docs/16-audio-plan.md, step 4.
+    processing.gain_controller1.enabled = false;
+    processing.gain_controller2.enabled = true;
+    processing.gain_controller2.input_volume_controller.enabled = true;
+    processing.gain_controller2.adaptive_digital.enabled = true;
     // The call is mono at 48 kHz, so multi-channel processing would only cost
     // CPU for channels that are not there.
     processing.pipeline.multi_channel_capture = false;
@@ -1301,6 +1331,15 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       // after the mixer, so once a screen audio share is on it is the level of
       // the voice and the film together. audio::ScreenAudioMixer publishes the
       // microphone on its own, and that is what collect_levels uses.
+    }
+
+    // The gain control has no statistic of its own, so what is reported is
+    // the module's configuration read back: what runs, after the voice
+    // engine's defaults and set_audio_processing both had their say. The
+    // legacy flag exists so that a test can say it stays off.
+    if (const auto config = Engine::instance().audio_processing_config()) {
+      collected.gain_control_active = config->gain_controller2.enabled;
+      collected.legacy_gain_control_active = config->gain_controller1.enabled;
     }
 
     // Round trip time is only known from the other end's receiver reports.

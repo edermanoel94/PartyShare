@@ -199,6 +199,9 @@ step 1, and without it there is no in-band FEC to react to anything. The rule:
 implement only if step 1 is reverted and FEC comes back. Otherwise record the
 decision in chapter 9 and move on to step 4.
 
+**Decided on 3 September 2026: not done.** Steps 1 and 2 landed with
+`useinbandfec` out of the profile, and chapter 9 section 8 records it.
+
 If it is ever done:
 
 - A handler in the outbound chain, after `RtcpSrReporter`, that reads the

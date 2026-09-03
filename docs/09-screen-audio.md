@@ -282,3 +282,10 @@ is why the test is written that way.
 - **Per-source volume at the receiver.** Only option B offers it. The volume here
   is applied by the sender, before encoding, which is why it applies to the whole
   room.
+- **Feeding the listeners' loss back to the sender.** Step 3 of
+  [chapter 16](16-audio-plan.md) considered rewriting the receiver report the
+  SFU sends to a sharer with the worst loss any listener reported, so that Opus
+  in-band FEC would react to the right leg. Decided against on 3 September
+  2026: steps 1 and 2 took `useinbandfec` out of the offer and repair the same
+  loss with RED and retransmission, so there is no FEC left to steer. It comes
+  back only if step 1 is ever reverted.

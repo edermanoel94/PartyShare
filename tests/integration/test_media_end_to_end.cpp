@@ -243,6 +243,36 @@ TEST_F(MediaEndToEndTest, TurningTheEchoCancellerOffStopsIt) {
       << "the echo canceller kept running after being turned off";
 }
 
+TEST_F(MediaEndToEndTest, TheGainControlIsTheSecondGenerationAndTurnsOffWithTheSwitch) {
+  // The gain control has no statistic to be caught running by, so this reads
+  // the module back. Two things are pinned: that it is the second generation
+  // controller and not the first, which libwebrtc's own defaults would turn
+  // back on at engine start (docs/16-audio-plan.md, step 4); and that the
+  // switch in Settings reaches it mid-call, in both directions.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  EXPECT_TRUE(wait_until([&] { return ana.session().stats().gain_control_active; }, 5000ms))
+      << "the gain control is not running";
+  EXPECT_FALSE(ana.session().stats().legacy_gain_control_active)
+      << "the first generation gain control is running, so the voice engine's defaults won";
+
+  ASSERT_TRUE(
+      ana.session().set_audio_processing(true, true, /*automatic_gain_control=*/false).ok());
+  EXPECT_TRUE(wait_until([&] { return !ana.session().stats().gain_control_active; }, 5000ms))
+      << "the gain control kept running after being turned off";
+  EXPECT_FALSE(ana.session().stats().legacy_gain_control_active);
+
+  // Back on, because the module is shared by every session in the process.
+  ASSERT_TRUE(ana.session().set_audio_processing(true, true, /*automatic_gain_control=*/true).ok());
+  EXPECT_TRUE(wait_until([&] { return ana.session().stats().gain_control_active; }, 5000ms))
+      << "the gain control did not come back";
+}
+
 TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {
   const char* virtual_input = std::getenv("DV_VIRTUAL_INPUT_DEVICE");
   if (virtual_input == nullptr) {

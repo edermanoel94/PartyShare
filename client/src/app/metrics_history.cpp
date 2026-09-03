@@ -18,8 +18,11 @@ void MetricsHistory::observe(const media::AudioStats& stats, double at_ms) {
   // negative loss. WebRTC starts them again from zero for a new peer
   // connection, and subtracting across that boundary produces a figure with an
   // exponent in it.
-  const bool restarted =
-      stats.packets_lost < packets_lost_ || stats.packets_received < packets_received_;
+  const bool restarted = stats.packets_lost < packets_lost_ ||
+                         stats.packets_received < packets_received_ ||
+                         stats.concealed_samples < concealed_samples_ ||
+                         stats.total_samples_received < total_samples_ ||
+                         stats.jitter_buffer_emitted_count < jitter_buffer_emitted_;
 
   if (measured_ && !restarted) {
     const std::uint64_t lost = stats.packets_lost - packets_lost_;
@@ -27,10 +30,26 @@ void MetricsHistory::observe(const media::AudioStats& stats, double at_ms) {
     if (const std::uint64_t expected = lost + received; expected > 0) {
       sample.loss_percent = 100.0 * static_cast<double>(lost) / static_cast<double>(expected);
     }
+    // The same arithmetic for what was heard: samples invented over samples
+    // played in this interval, and buffer time over samples emitted.
+    const std::uint64_t concealed = stats.concealed_samples - concealed_samples_;
+    if (const std::uint64_t played = stats.total_samples_received - total_samples_; played > 0) {
+      sample.concealment_percent =
+          100.0 * static_cast<double>(concealed) / static_cast<double>(played);
+    }
+    const double waited = stats.jitter_buffer_delay_seconds - jitter_buffer_delay_seconds_;
+    if (const std::uint64_t emitted = stats.jitter_buffer_emitted_count - jitter_buffer_emitted_;
+        emitted > 0 && waited >= 0.0) {
+      sample.jitter_buffer_ms = 1000.0 * waited / static_cast<double>(emitted);
+    }
   }
 
   packets_lost_ = stats.packets_lost;
   packets_received_ = stats.packets_received;
+  concealed_samples_ = stats.concealed_samples;
+  total_samples_ = stats.total_samples_received;
+  jitter_buffer_delay_seconds_ = stats.jitter_buffer_delay_seconds;
+  jitter_buffer_emitted_ = stats.jitter_buffer_emitted_count;
   measured_ = true;
 
   samples_.push_back(sample);
@@ -44,6 +63,10 @@ void MetricsHistory::clear() noexcept {
   measured_ = false;
   packets_lost_ = 0;
   packets_received_ = 0;
+  concealed_samples_ = 0;
+  total_samples_ = 0;
+  jitter_buffer_delay_seconds_ = 0.0;
+  jitter_buffer_emitted_ = 0;
 }
 
 double nice_ceiling(double value) noexcept {

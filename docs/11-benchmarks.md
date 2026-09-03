@@ -255,6 +255,33 @@ REMB the sender's estimate climbed to the ceiling and stayed there even with a
 fifth of the packets being dropped — libwebrtc has no way of learning about a loss
 nobody tells it about.
 
+### The audio does not follow, yet
+
+Step 10 of [chapter 16](16-audio-plan.md) asked whether the audio could be made
+to do the same. The experiment is in the tree behind two switches, both off:
+`[audio] adaptive = true` on the server puts a REMB on every incoming audio
+track, and `DV_AUDIO_ADAPTIVE=1` in a client's environment turns on the two
+libwebrtc trials that let the audio send stream join the bitrate allocation
+without transport-wide feedback and asks the sender for `adaptive_ptime`, which
+is the one thing that opens the stream's minimum below its target. Measured on
+3 September 2026, two clients, 20% loss switched on for fifteen seconds:
+
+```text
+clean link        128 kbps
+with 20% loss     128 kbps, the SFU asking for 32 in 30 reports
+```
+
+Every piece is wired — the SFU asks, the client accepts the trials and the
+parameter — and the encoder's target does not move. Where the loop breaks is
+inside libwebrtc's congestion controller, which in this configuration treats a
+REMB as a cap on an estimate that nothing else is producing, and the audio
+allocation never sees a number below its ceiling. Closing that gap means either
+transport-wide feedback from the SFU, which libdatachannel does not generate, or
+a deeper change to how the client's estimate is driven. Neither is worth it for
+a product that runs on a LAN, so the switches stay off and the record stays
+here. `ImpairedNetworkAdaptiveAudioTest` is this table made executable: the day
+its last assertion fails is the day the audio started following.
+
 ### One thing that could not be enabled
 
 The other direction of the loop is missing: the viewer telling the SFU how much

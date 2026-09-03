@@ -143,9 +143,10 @@ form, and `DV_SECTION_KEY` in the environment.
 | --- | --- | --- |
 | `input_device`, `output_device` | empty | Empty means the system default. The name has to be the one the system shows |
 | `sample_rate_hz`, `channels` | 48000, 1 | |
-| `bitrate_kbps` | 96 | The ceiling the SFU's offer puts on Opus. 96 rather than 48 because a screen share is stereo and carries music |
+| `bitrate_kbps` | 128 | The ceiling the SFU's offer puts on Opus. Above a voice's needs on purpose: a screen share is stereo and carries music, and at 128 kbps stereo Opus is close to transparent where 96 was merely good. [Chapter 16](16-audio-plan.md), step 7 |
 | `redundancy` | true | Server only. RED next to Opus in every audio offer: each packet carries the previous frame again, so an isolated loss on either leg is repaired at the receiver without any feedback. Costs up to twice `bitrate_kbps` per audio stream. Off gives back the offer as it was before, Opus alone. [Chapter 16](16-audio-plan.md), step 1 |
 | `retransmission` | true | Server only. `nack` in every audio offer, a retransmission cache on every outgoing audio track and a repair on every incoming one: what the redundancy cannot cover, two packets lost back to back, is asked for again on both legs. Costs nothing while nothing is lost. [Chapter 16](16-audio-plan.md), step 2 |
+| `adaptive` | false | Server only, and experimental. The SFU tells each sender once a second what its audio may aim for, from the loss it sees; a client started with `DV_AUDIO_ADAPTIVE=1` in its environment follows it, every other client ignores it. In the environment the server key is `DV_AUDIO_ADAPTIVE_SFU`, because the client reads the same section. On a LAN nothing changes. [Chapter 16](16-audio-plan.md), step 10 |
 | `frame_duration_ms` | 20 | |
 | `noise_suppression` | true | Tuned for one voice in a room and treats everything else as the room. Turn it off for an instrument or a record playing behind you |
 | `noise_suppression_level` | `high` | How hard it bites: `low`, `moderate`, `high` or `very_high`, which take 6, 12, 18 and 21 dB off the noise. `high` is what Chrome ships and what every call had before the level was a setting, so it stays the default until somebody has listened to `moderate`, which spares consonants and instruments. [Chapter 16](16-audio-plan.md), step 5 |
@@ -167,6 +168,7 @@ separate thing. [Chapter 9](09-screen-audio.md) is the whole subject.
 | --- | --- | --- |
 | `mode` | `system` | `none`, `system` (everything the machine plays except this client) or `process` (one application, chosen in Settings) |
 | `volume_percent` | 100 | 0 to 200. Only the screen side moves; your voice keeps its own gain control |
+| `limiter` | true | The peak limiter on the mix. When your voice and the screen together do not fit a sample, the gain drops for that moment, on both channels, instead of crackling, and climbs back over about a third of a second. Only runs while a share carries sound. Off gives back the plain clamp. [Chapter 16](16-audio-plan.md), step 8 |
 
 Needs Windows 10 build 20348 or newer. On Linux and macOS the capture does not
 exist yet and the option does not appear. A mode this build does not recognise

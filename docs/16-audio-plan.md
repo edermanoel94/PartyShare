@@ -346,6 +346,13 @@ code: in shared mode the format is Windows' own.
 
 With a headset at 16 kHz the hint appears; at 48 kHz nothing appears.
 
+**Landed on 3 September 2026.** The rate travels from the frame processor to
+the mixer to `AudioStats::microphone_sample_rate_hz`, the log says it once per
+change, and the sentence under the microphone box is
+`audio::microphone_rate_hint`, pure and tested. Two sentences rather than one:
+a device on a low default format is fixed in the Windows sound settings, and a
+Bluetooth headset on the hands-free profile is not fixable there at all.
+
 ## 9. Step 7: a 128 kbps ceiling
 
 Server configuration. Trivial, one hour. Key `audio.bitrate_kbps`.
@@ -371,6 +378,10 @@ good; near 128 it is nearly transparent.
 
 The end-to-end suite is green and a known track has been listened to at both
 ceilings.
+
+**Landed on 3 September 2026.** The default is 128 in `config.hpp`, in the
+router's options and in the offer's pure functions, so the three cannot
+disagree. The listening test at both ceilings is still owed.
 
 ### Risk and way back
 
@@ -410,6 +421,14 @@ Voice and screen together stop crackling. Today the sum saturates in
 
 The four unit tests pass and the manual test does not crackle.
 
+**Landed on 3 September 2026.** The limiter is linked across both channels,
+so a peak on one side turns the other down by the same amount and the stereo
+image holds; the gain is Q15, rounded up so a limited peak lands on 32767 and
+not one below; the release is one step per sample, which from half gain is a
+third of a second, and the unit test pins it under thirty blocks. The listening
+test with a loud voice over loud music is still owed, and it is what decides
+whether the release constant moves.
+
 ### Risk and way back
 
 Pumping if the release is too short. Measure by ear and adjust the constant.
@@ -448,6 +467,13 @@ counters went in at step 1; here the rest and the screen go in.
 
 The chart shows, in the 5% test, the difference between RED on and off.
 
+**Landed on 3 September 2026.** The concealment chart sits under the loss
+chart with guide lines at 1% and 3%, the status bar says `concealed N%` for
+the last interval, and the five-second log line says it for the call so far.
+The jitter buffer's depth is derived too and kept in the history for the day
+it earns a chart of its own; `quality_of` still judges by the three original
+measurements, as proposed.
+
 ## 12. Step 10: audio in congestion control
 
 A spike first. Two days, with a stop.
@@ -477,6 +503,19 @@ generates no transport-wide feedback; the SFU only speaks REMB. So
 
 One number: the audio bitrate before and after, under loss, recorded in
 chapter 11.
+
+**Spiked on 3 September 2026, and closed: the audio does not follow.** The
+first idea, the adaptor fed by loss and round trip time alone, is dead by
+reading: `webrtc_voice_engine.cc` sets the audio send stream's minimum equal to
+its target, so no estimate can move it, and only `adaptive_ptime` opens the
+minimum. The second idea was built, behind two switches that stay off:
+`[audio] adaptive` on the server puts a REMB on the incoming audio, and
+`DV_AUDIO_ADAPTIVE=1` on a client turns on `WebRTC-Audio-ABWENoTWCC` and
+`WebRTC-Audio-AdaptivePtime` and asks the sender for `adaptive_ptime`. With
+both on and 20% loss, the SFU asked for 32 kbps in 30 reports and the client
+kept aiming for 128. The record and the reasoning are in chapter 11, and
+`ImpairedNetworkAdaptiveAudioTest` pins the result so that a change in
+libwebrtc's behaviour is noticed.
 
 ## 13. Step 11: a second track for the screen sound
 
@@ -509,6 +548,57 @@ Stop if the drift measured in the spike exceeds 80 ms with no viable
 correction. In that case option A stays, and the result goes into chapter 9
 section 8.
 
+### The decision document, 3 September 2026
+
+Phase one, written; phases two to four, not started. This is the record of
+what a second track would buy and cost, so that whoever picks it up starts
+from here and not from the review.
+
+**What it buys.** Three things, and only the first is asked for by anybody.
+A listener could set the shared sound's volume apart from the sharer's voice,
+which chapter 9 section 3 names as the one price of option A that has no fix
+inside it. The sharer could mute their voice and keep the film, or the other
+way round, without the mixer having to fake it. And the sound would be encoded
+by an encoder that never meets the voice: no limiter between them, no shared
+gain, no shared ceiling.
+
+**What it costs, in order of how much it hurts.**
+
+- *Lip sync stops being guaranteed.* libwebrtc synchronises audio with video
+  only inside one peer connection, through the RTCP sender reports both
+  streams share. A second peer connection is a second transport with its own
+  clock, and the receiver has nothing to line the two up with. A film of a
+  person talking is the case that shows it, and it is the common case.
+- *A second capture path.* One `PeerConnectionFactory` has one audio device
+  module, and every send stream it owns receives the same captured frame
+  (chapter 9 section 1). The second track needs a second factory with an
+  audio device module of its own, fed by the loopback capture. libwebrtc ships
+  `TestAudioDeviceModule`, which takes a capturer, but it is not in this
+  build's library, so this is either a rebuild of libwebrtc with it or an
+  implementation of the module interface by hand, some eighty virtual
+  functions, most of them answering "not supported".
+- *A second negotiation per sharer.* The server offers a second audio m-line,
+  or a second connection, when a share with sound starts, and takes it down
+  when the share stops; the signaling protocol gains the messages for both,
+  and the mid-share join case of chapter 9 section 5 has to be re-done for
+  two tracks.
+- *Every viewer's client changes.* A second remote audio track per sharer,
+  a second volume, a second speaking indicator that must stay dark.
+
+**The spike, if it is ever run.** `tools/screen_audio_spike` already drives
+the frame processor with a real loopback capture. Extend it with a second
+peer connection carrying the same capture through a hand-made audio device
+module, play a film with a visible clap, and measure the offset between the
+clap and its sound at the receiver over ten minutes, with the machine busy.
+Under 80 ms, and steady, is the bar; over it with no correction that survives
+a clock drift is the stop.
+
+**The recommendation, today.** Do not start it. Steps 1, 2, 7 and 8 removed
+most of what made the shared sound worse than it needed to be, and the one
+thing left, per-source volume at the receiver, is worth less than lip sync.
+It comes back the day somebody watching a film asks for the voice quieter and
+the film louder, and not before.
+
 ## 14. Step 12: the new Windows ADM
 
 Toolchain and client. Large, one week, rebuild included. Way back
@@ -537,6 +627,20 @@ that it does not compile.
 
 Unplugging the headset mid-call brings the audio back by itself on the next
 device, and the end-to-end suite is green.
+
+**Verified on 3 September 2026, and not done.** The out directory of the
+libwebrtc build on this machine, `out/dv-release`, has no object for the Core
+Audio module at all: `windows_core_audio_utility` has a ninja file and nothing
+compiled, and `audio_device_module_from_input_and_output`, the target that
+holds `audio_device_module_win.cc`, `core_audio_base_win.cc` and the factory,
+was never built. The likely cause named above was half right: the target is
+missing from `EXTRA_TARGETS` in `scripts/build_webrtc.sh`, and that is now
+fixed, but there is nothing to bundle until the next rebuild. An incremental
+ninja run of the out directory wants to regenerate its files first, which
+needs gn and the Chromium python toolchain in the environment the tree was
+configured with, so this is the rebuild of chapter 7 and not an afternoon's
+merge. The client side, `CreateWindowsCoreAudioAudioDeviceModule` behind
+`DV_AUDIO_LEGACY_ADM`, waits for a library that has the symbol.
 
 ### Risk and way back
 

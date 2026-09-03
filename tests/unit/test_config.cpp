@@ -555,10 +555,10 @@ TEST(Config, ValidationRefusesAShareSoundModeNobodyImplements) {
 
 TEST(Config, TheOpusCeilingDescribesWhatTheOfferAlreadyCarried) {
   // It was 48 and was applied to nothing: what went on the wire was
-  // libdatachannel's own default of 96. Now that it reaches the offer, the
-  // default has to be the number that was already true, or turning the setting
-  // on would quietly halve every screen share's sound.
-  EXPECT_EQ(Config{}.audio.bitrate_kbps, 96);
+  // libdatachannel's own default of 96, and that became the default when the
+  // setting first reached the offer. 128 since docs/16-audio-plan.md step 7,
+  // which is where stereo Opus gets close to transparent for a shared film.
+  EXPECT_EQ(Config{}.audio.bitrate_kbps, 128);
 }
 
 TEST(Config, TheAudioRedundancyIsOnByDefault) {
@@ -613,6 +613,24 @@ TEST(ConfigIni, ReadsTheNoiseSuppressionLevel) {
     ASSERT_TRUE(parsed.ok()) << level << ": " << parsed.error().message;
     EXPECT_EQ(parsed.value().audio.noise_suppression_level, level);
   }
+}
+
+TEST(ConfigIni, ReadsWhetherTheScreenAudioLimiterIsOn) {
+  // On by default, and the key exists to turn it off: docs/16-audio-plan.md,
+  // step 8.
+  EXPECT_TRUE(Config{}.screen_audio.limiter);
+  const auto off = dv::config::parse_ini("[screen_audio]\nlimiter = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().screen_audio.limiter);
+}
+
+TEST(ConfigIni, TheAdaptiveAudioExperimentIsOffUnlessAskedFor) {
+  // docs/16-audio-plan.md, step 10: an experiment, so the default is the
+  // behaviour every call has, and the key is what opts a server in.
+  EXPECT_FALSE(Config{}.audio.adaptive);
+  const auto on = dv::config::parse_ini("[audio]\nadaptive = true\n", Config{});
+  ASSERT_TRUE(on.ok()) << on.error().message;
+  EXPECT_TRUE(on.value().audio.adaptive);
 }
 
 TEST(ConfigIni, RefusesWhatItCannotApply) {

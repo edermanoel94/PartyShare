@@ -53,7 +53,12 @@ struct AudioConfig {
   ///
   /// 96 rather than 48 because a screen share is stereo and carries music. A
   /// voice never comes near either number.
-  int bitrate_kbps = 96;
+  ///
+  /// 128 since docs/16-audio-plan.md step 7: at 96 kbps stereo Opus is good,
+  /// near 128 it is close to transparent, and a shared film is what the
+  /// ceiling exists for. 32 kbps more per leg, and twice that with the
+  /// redundancy on, next to three megabits of picture.
+  int bitrate_kbps = 128;
   /// Whether the SFU offers RED, RFC 2198, next to Opus. Every audio packet
   /// then carries the previous frame again, so an isolated loss on either leg
   /// is repaired at the receiver without any feedback. It doubles the audio
@@ -67,6 +72,11 @@ struct AudioConfig {
   /// costs nothing while nothing is lost. Server side only. See
   /// docs/16-audio-plan.md, step 2.
   bool retransmission = true;
+  /// Experimental, and off. The SFU tells each sender, once a second, what
+  /// its audio may aim for given the loss the SFU sees; a client started with
+  /// DV_AUDIO_ADAPTIVE set follows it, everybody else ignores it. On a LAN it
+  /// changes nothing. Server side only. See docs/16-audio-plan.md, step 10.
+  bool adaptive = false;
   int frame_duration_ms = 20;
   bool echo_cancellation = true;
   bool noise_suppression = true;
@@ -114,6 +124,11 @@ struct ScreenAudioConfig {
   /// tenth of its scale has no other way back, and telling somebody to go and
   /// turn Windows up is not a volume control.
   int volume_percent = 100;
+  /// Whether the mixer's peak limiter runs on the voice and the screen
+  /// together. On, a moment where the two do not fit a sample has the gain
+  /// turned down for that moment instead of crackling; off gives back the
+  /// plain clamp. See docs/16-audio-plan.md, step 8.
+  bool limiter = true;
 };
 
 struct NetworkConfig {

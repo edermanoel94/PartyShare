@@ -268,7 +268,18 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
 
   // Generates the receiver reports the sender needs to estimate loss and RTT.
   auto audio_receiving = std::make_shared<rtc::RtcpReceivingSession>();
-  if (options_.audio_nack) {
+  if (options_.audio_adaptive) {
+    // The experiment of docs/16-audio-plan.md step 10: the same repair, and a
+    // REMB once a second telling the sender what its audio may aim for,
+    // between the Opus ceiling and a floor a voice is still intelligible at.
+    // A client that has not opted in ignores the REMB for its audio, so this
+    // costs nothing to anybody else.
+    session.audio_feedback = std::make_shared<VideoFeedback>(
+        VideoFeedback::Options{.bandwidth = {.start_kbps = options_.opus_max_bitrate_kbps,
+                                             .min_kbps = options_.audio_adaptive_min_kbps,
+                                             .max_kbps = options_.opus_max_bitrate_kbps}});
+    audio_receiving->addToChain(session.audio_feedback);
+  } else if (options_.audio_nack) {
     // Asks the sender again for what did not arrive, so that what is forwarded
     // is a stream with the holes filled. See sfu/loss_repair.hpp.
     session.audio_repair = std::make_shared<LossRepair>();
@@ -485,12 +496,17 @@ MediaRouter::AudioRepairStats MediaRouter::audio_repair_stats() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   AudioRepairStats total;
   for (const auto& [user_id, session] : sessions_) {
-    if (session.audio_repair == nullptr) {
-      continue;
+    if (session.audio_repair != nullptr) {
+      total.requests_sent += session.audio_repair->requests_sent();
+      total.packets_missing += session.audio_repair->packets_missing();
+      total.packets_repaired += session.audio_repair->packets_repaired();
+    } else if (session.audio_feedback != nullptr) {
+      total.requests_sent += session.audio_feedback->requests_sent();
+      total.packets_missing += session.audio_feedback->packets_missing();
+      total.packets_repaired += session.audio_feedback->packets_repaired();
+      total.bandwidth_reports_sent += session.audio_feedback->bandwidth_reports_sent();
+      total.target_kbps = std::max(total.target_kbps, session.audio_feedback->target_kbps());
     }
-    total.requests_sent += session.audio_repair->requests_sent();
-    total.packets_missing += session.audio_repair->packets_missing();
-    total.packets_repaired += session.audio_repair->packets_repaired();
   }
   return total;
 }

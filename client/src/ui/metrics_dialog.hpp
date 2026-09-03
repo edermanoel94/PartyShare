@@ -74,6 +74,10 @@ class MetricsDialog : public QDialog {
   MetricsChart* round_trip_ = nullptr;
   MetricsChart* jitter_ = nullptr;
   MetricsChart* loss_ = nullptr;
+  /// What the loss above sounded like once the repairs were done: the share of
+  /// audio the jitter buffer had to invent, with the buffer's own depth beside
+  /// it. docs/16-audio-plan.md, step 9.
+  MetricsChart* concealment_ = nullptr;
 
   QLabel* verdict_ = nullptr;
   /// The verdict on screen, so the label is only restyled when it changes.

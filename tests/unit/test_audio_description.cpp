@@ -58,7 +58,7 @@ TEST(AudioDescription, InBandFecIsOffWhileRedIsOn) {
   const auto* opus = media.rtpMap(111);
   ASSERT_NE(opus, nullptr);
   ASSERT_EQ(opus->fmtps.size(), 1U);
-  EXPECT_EQ(opus->fmtps.front(), "minptime=10;maxaveragebitrate=96000;stereo=1;sprop-stereo=1");
+  EXPECT_EQ(opus->fmtps.front(), "minptime=10;maxaveragebitrate=128000;stereo=1;sprop-stereo=1");
 }
 
 TEST(AudioDescription, WithoutRedTheOfferIsWhatItAlwaysWas) {
@@ -71,7 +71,7 @@ TEST(AudioDescription, WithoutRedTheOfferIsWhatItAlwaysWas) {
   ASSERT_NE(opus, nullptr);
   ASSERT_EQ(opus->fmtps.size(), 1U);
   EXPECT_EQ(opus->fmtps.front(),
-            "minptime=10;maxaveragebitrate=96000;stereo=1;sprop-stereo=1;useinbandfec=1");
+            "minptime=10;maxaveragebitrate=128000;stereo=1;sprop-stereo=1;useinbandfec=1");
 }
 
 TEST(AudioDescription, RetransmissionIsAskedForOnOpusAndOnlyOpus) {

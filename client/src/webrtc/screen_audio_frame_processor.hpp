@@ -49,6 +49,11 @@ class ScreenAudioFrameProcessor final : public webrtc::AudioFrameProcessor {
       return;
     }
 
+    // What the device is delivering, before anything is done to it. This is
+    // where a 16 kHz headset becomes visible: the log says it once, and the
+    // settings dialog tells the person what to do about it.
+    mixer_->note_microphone_format(rate, channels);
+
     // A muted frame reads as a buffer of zeros, which is what a silent
     // microphone is. Copying it out costs nothing and keeps one code path.
     microphone_.assign(frame->data(), frame->data() + (frames * channels));

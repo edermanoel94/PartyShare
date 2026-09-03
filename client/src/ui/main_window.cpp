@@ -926,13 +926,29 @@ void MainWindow::wire_session() {
           },
       .on_metrics =
           [this](client::media::AudioStats stats) {
-            QString summary =
-                QStringLiteral("rtt %1 ms · jitter %2 ms · lost %3 · %4 kbps ↑ · %5 kbps ↓")
-                    .arg(stats.round_trip_time_ms, 0, 'f', 0)
-                    .arg(stats.jitter_ms, 0, 'f', 1)
-                    .arg(stats.packets_lost)
-                    .arg(stats.send_bitrate_kbps, 0, 'f', 0)
-                    .arg(stats.receive_bitrate_kbps, 0, 'f', 0);
+            // What the last interval sounded like, next to what it lost: the
+            // share of audio the jitter buffer had to invent since the previous
+            // report. Loss counts the packet whether or not RED or a
+            // retransmission made it good; this is what got through to the ear.
+            double concealed_percent = 0.0;
+            if (stats.concealed_samples >= status_concealed_samples_ &&
+                stats.total_samples_received > status_total_samples_) {
+              concealed_percent =
+                  100.0 * static_cast<double>(stats.concealed_samples - status_concealed_samples_) /
+                  static_cast<double>(stats.total_samples_received - status_total_samples_);
+            }
+            status_concealed_samples_ = stats.concealed_samples;
+            status_total_samples_ = stats.total_samples_received;
+
+            QString summary = QStringLiteral(
+                                  "rtt %1 ms · jitter %2 ms · lost %3 · concealed %4% · "
+                                  "%5 kbps ↑ · %6 kbps ↓")
+                                  .arg(stats.round_trip_time_ms, 0, 'f', 0)
+                                  .arg(stats.jitter_ms, 0, 'f', 1)
+                                  .arg(stats.packets_lost)
+                                  .arg(concealed_percent, 0, 'f', 1)
+                                  .arg(stats.send_bitrate_kbps, 0, 'f', 0)
+                                  .arg(stats.receive_bitrate_kbps, 0, 'f', 0);
 
             // The screen share is the part of the call that gives way when the
             // network does, so while there is one its rate is worth seeing:

@@ -36,6 +36,7 @@
 #include <api/enable_media.h>
 #include <api/environment/environment.h>
 #include <api/environment/environment_factory.h>
+#include <api/field_trials_view.h>
 #include <api/jsep.h>
 #include <api/media_stream_interface.h>
 #include <api/peer_connection_interface.h>
@@ -99,6 +100,10 @@ class Engine {
   /// process wide. A client has one local user, so a second one would have
   /// nothing to mix.
   [[nodiscard]] audio::ScreenAudioMixer& screen_audio() { return screen_audio_; }
+
+  /// True while the experimental adaptive audio bitrate is on for the
+  /// process. See the constructor.
+  [[nodiscard]] bool adaptive_audio() const noexcept { return adaptive_audio_.load(); }
 
   /// The processing module's configuration as it stands, which is the truth
   /// about what runs on the captured audio after everybody had their say: the
@@ -428,7 +433,25 @@ class Engine {
     // connection, and on Linux each cycle re-opens PulseAudio: a call that
     // starts after another one ended waits ten seconds on the audio thread,
     // twice, before it can negotiate.
-    const webrtc::Environment environment = webrtc::CreateEnvironment();
+    // Experimental, and off unless DV_AUDIO_ADAPTIVE is set: step 10 of
+    // docs/16-audio-plan.md. Two trials, and both are needed before the audio
+    // bitrate can move at all. ABWENoTWCC puts the audio send stream into the
+    // bitrate allocation without transport-wide feedback, which this server
+    // never sends; AdaptivePtime is what honours adaptive_ptime on the sender,
+    // and that is the one thing that opens the stream's minimum below its
+    // target - without it the allocator holds the audio at the ceiling however
+    // low the estimate goes. The estimate itself comes from the REMB the SFU
+    // sends on the audio when its own `[audio] adaptive` is on. Trials travel
+    // in the environment, which everything below is built from.
+    std::unique_ptr<const webrtc::FieldTrialsView> trials;
+    if (std::getenv("DV_AUDIO_ADAPTIVE") != nullptr) {
+      trials = std::make_unique<ExperimentTrials>();
+      adaptive_audio_ = true;
+      DV_LOG_INFO("Media: adaptive audio bitrate is on, experimentally");
+    }
+    const webrtc::Environment environment = trials != nullptr
+                                                ? webrtc::CreateEnvironment(std::move(trials))
+                                                : webrtc::CreateEnvironment();
     const auto layer = std::getenv("DV_AUDIO_NULL_DEVICE") != nullptr
                            ? webrtc::AudioDeviceModule::kDummyAudio
                            : webrtc::AudioDeviceModule::kPlatformDefaultAudio;
@@ -557,6 +580,22 @@ class Engine {
   /// a call. Null in the fallback path, where nothing can be moved.
   webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing_;
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
+  std::atomic<bool> adaptive_audio_{false};
+
+  /// The two trials of the experiment, answered by hand: the dist library
+  /// does not carry webrtc::FieldTrials, and a view is only two lookups.
+  /// Everything else is unset, which is what an empty trial string gives.
+  struct ExperimentTrials final : public webrtc::FieldTrialsView {
+    [[nodiscard]] std::string Lookup(absl::string_view key) const override {
+      if (key == "WebRTC-Audio-ABWENoTWCC") {
+        return "Enabled";
+      }
+      if (key == "WebRTC-Audio-AdaptivePtime") {
+        return "enabled:true";
+      }
+      return {};
+    }
+  };
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
   std::string failure_;
 };
@@ -791,6 +830,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // from the options the newest session was built with rather than left at
     // whatever the last one happened to leave behind.
     engine.screen_audio().set_screen_volume(options.screen_audio_volume_percent);
+    engine.screen_audio().set_limiter(options.screen_audio_limiter);
 
     auto source = engine.microphone(Engine::audio_options());
     if (source == nullptr) {
@@ -803,9 +843,24 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
                                              "could not create the microphone track");
     }
 
-    if (auto added = connection_->AddTrack(local_track_, {"dv-local"}); !added.ok()) {
+    auto added = connection_->AddTrack(local_track_, {"dv-local"});
+    if (!added.ok()) {
       return Result<std::monostate>::failure("media_unavailable",
                                              std::string(added.error().message()));
+    }
+    audio_sender_ = added.value();
+    if (engine.adaptive_audio() && audio_sender_ != nullptr) {
+      // The half of the experiment that lives on the sender: adaptive_ptime is
+      // what lets the allocator take the audio below its ceiling, and what
+      // hands the encoder a network adaptor to follow it with. Honoured only
+      // under the AdaptivePtime trial the engine turned on.
+      webrtc::RtpParameters parameters = audio_sender_->GetParameters();
+      if (!parameters.encodings.empty()) {
+        parameters.encodings[0].adaptive_ptime = true;
+        if (const webrtc::RTCError set = audio_sender_->SetParameters(parameters); !set.ok()) {
+          DV_LOG_WARN("Media: adaptive audio could not be asked for: {}", set.message());
+        }
+      }
     }
 
     // The screen track goes in now too, and stays empty until somebody starts
@@ -1097,6 +1152,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     copy.screen_audio_mixed_blocks = mixed.blocks_taken - mixed.blocks_silent;
     copy.screen_audio_starved_blocks = mixed.blocks_silent;
     copy.screen_audio_dropped_frames = mixed.frames_dropped;
+    copy.screen_audio_limited_blocks = mixer.limited_blocks();
+    copy.microphone_sample_rate_hz = mixer.microphone_sample_rate_hz();
     return copy;
   }
 
@@ -1323,6 +1380,12 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       collected.concealment_events += inbound->concealment_events.value_or(0);
       // On an inbound stream, nack_count is what this receiver asked for.
       collected.nacks_sent += inbound->nack_count.value_or(0);
+      // The rest of the jitter buffer's account of itself, for the charts.
+      collected.silent_concealed_samples += inbound->silent_concealed_samples.value_or(0);
+      collected.jitter_buffer_delay_seconds += inbound->jitter_buffer_delay.value_or(0.0);
+      collected.jitter_buffer_emitted_count += inbound->jitter_buffer_emitted_count.value_or(0);
+      collected.packets_discarded += inbound->packets_discarded.value_or(0);
+      collected.fec_packets_received += inbound->fec_packets_received.value_or(0);
     }
 
     for (const auto* outbound : report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>()) {
@@ -1335,6 +1398,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       // sender for, and the retransmissions are the answer.
       collected.nacks_received += outbound->nack_count.value_or(0);
       collected.retransmitted_packets_sent += outbound->retransmitted_packets_sent.value_or(0);
+      collected.audio_target_bitrate_kbps = std::max(collected.audio_target_bitrate_kbps,
+                                                     outbound->target_bitrate.value_or(0) / 1000.0);
     }
 
     // The audio source is where the processing module surfaces: echo return
@@ -1671,6 +1736,9 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   webrtc::scoped_refptr<ScreenTrackSource> video_source_;
   webrtc::scoped_refptr<webrtc::VideoTrackInterface> local_video_track_;
   webrtc::scoped_refptr<webrtc::RtpSenderInterface> video_sender_;
+  /// Kept only for the experimental adaptive audio, which asks it for
+  /// adaptive_ptime once. See Engine::adaptive_audio.
+  webrtc::scoped_refptr<webrtc::RtpSenderInterface> audio_sender_;
 
   MediaSessionOptions options_;
 

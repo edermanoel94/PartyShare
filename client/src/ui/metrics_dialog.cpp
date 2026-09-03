@@ -120,7 +120,16 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   loss_->set_lines({{QStringLiteral("loss"), colours.accent}});
   loss_->set_thresholds(client::app::kFairLossPercent, client::app::kPoorLossPercent);
 
-  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_}) {
+  // Under the loss, because it is the loss after the repairs: what the jitter
+  // buffer still had to invent once RED and retransmission were done. A loss
+  // chart that climbs while this one stays flat is a network being repaired;
+  // both climbing together is a network the repairs cannot keep up with.
+  concealment_ = new MetricsChart(QStringLiteral("Concealment (%)"), QStringLiteral("%"), this);
+  concealment_->set_lines({{QStringLiteral("concealed"), colours.accent}});
+  concealment_->set_thresholds(client::app::kFairConcealmentPercent,
+                               client::app::kPoorConcealmentPercent);
+
+  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_}) {
     chart->set_window(kWindowMs);
   }
 
@@ -137,6 +146,7 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   layout->addWidget(round_trip_, 1);
   layout->addWidget(jitter_, 1);
   layout->addWidget(loss_, 1);
+  layout->addWidget(concealment_, 1);
   layout->addWidget(buttons);
 
   poller_->setInterval(kPollMs);
@@ -196,7 +206,8 @@ void MetricsDialog::hand_over() {
   std::vector<QPointF> round_trip;
   std::vector<QPointF> jitter;
   std::vector<QPointF> loss;
-  for (std::vector<QPointF>* series : {&up, &down, &round_trip, &jitter, &loss}) {
+  std::vector<QPointF> concealment;
+  for (std::vector<QPointF>* series : {&up, &down, &round_trip, &jitter, &loss, &concealment}) {
     series->reserve(count);
   }
 
@@ -206,12 +217,14 @@ void MetricsDialog::hand_over() {
     round_trip.emplace_back(sample.at_ms, sample.round_trip_time_ms);
     jitter.emplace_back(sample.at_ms, sample.jitter_ms);
     loss.emplace_back(sample.at_ms, sample.loss_percent);
+    concealment.emplace_back(sample.at_ms, sample.concealment_percent);
   }
 
   network_->set_points(two_lines(std::move(up), std::move(down)));
   round_trip_->set_points(one_line(std::move(round_trip)));
   jitter_->set_points(one_line(std::move(jitter)));
   loss_->set_points(one_line(std::move(loss)));
+  concealment_->set_points(one_line(std::move(concealment)));
 }
 
 void MetricsDialog::show_verdict(const client::media::AudioStats& stats) {
@@ -255,7 +268,7 @@ void MetricsDialog::animate() {
   drawn_at_ms_ = now;
 
   const auto at = static_cast<double>(now);
-  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_}) {
+  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_}) {
     chart->advance(at, elapsed);
   }
 }

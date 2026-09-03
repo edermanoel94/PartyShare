@@ -59,6 +59,20 @@ struct AudioStats {
   double send_bitrate_kbps = 0;
   double receive_bitrate_kbps = 0;
 
+  /// What the jitter buffer had to invent, summed over every participant's
+  /// incoming audio: the samples received at all, the samples played that
+  /// were never received, and the number of times playout entered such a
+  /// stretch. The first turns the second into a ratio; the third is how many
+  /// holes were heard, which is what a listener actually notices.
+  ///
+  /// Totals since the connection began, like the packet counts. A loss the
+  /// redundancy repaired never reaches these: they measure what the listener
+  /// heard go missing, which `packets_lost` cannot tell from a loss that was
+  /// made good. See docs/16-audio-plan.md, step 1.
+  std::uint64_t total_samples_received = 0;
+  std::uint64_t concealed_samples = 0;
+  std::uint64_t concealment_events = 0;
+
   /// True while the echo canceller is running on the captured audio.
   ///
   /// libwebrtc only reports echo return loss when the echo controller exists,

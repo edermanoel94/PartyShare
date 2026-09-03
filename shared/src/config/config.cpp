@@ -283,6 +283,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
       understood = as_int(config.audio.channels);
     } else if (key == "bitrate_kbps") {
       understood = as_int(config.audio.bitrate_kbps);
+    } else if (key == "redundancy") {
+      understood = as_bool(config.audio.redundancy);
     } else if (key == "frame_duration_ms") {
       understood = as_int(config.audio.frame_duration_ms);
     } else if (key == "echo_cancellation") {
@@ -637,6 +639,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "sample_rate_hz", base.audio.sample_rate_hz);
       read_field(audio, "channels", base.audio.channels);
       read_field(audio, "bitrate_kbps", base.audio.bitrate_kbps);
+      read_field(audio, "redundancy", base.audio.redundancy);
       read_field(audio, "frame_duration_ms", base.audio.frame_duration_ms);
       read_field(audio, "echo_cancellation", base.audio.echo_cancellation);
       read_field(audio, "noise_suppression", base.audio.noise_suppression);
@@ -804,6 +807,7 @@ void apply_environment(Config& config) {
   apply_env_int("DV_AUDIO_SAMPLE_RATE_HZ", config.audio.sample_rate_hz);
   apply_env_int("DV_AUDIO_CHANNELS", config.audio.channels);
   apply_env_int("DV_AUDIO_BITRATE_KBPS", config.audio.bitrate_kbps);
+  apply_env_bool("DV_AUDIO_REDUNDANCY", config.audio.redundancy);
   apply_env_int("DV_AUDIO_FRAME_DURATION_MS", config.audio.frame_duration_ms);
   apply_env_bool("DV_AUDIO_ECHO_CANCELLATION", config.audio.echo_cancellation);
   apply_env_bool("DV_AUDIO_NOISE_SUPPRESSION", config.audio.noise_suppression);
@@ -1081,6 +1085,7 @@ std::string to_json(const Config& config) {
                       {{"sample_rate_hz", config.audio.sample_rate_hz},
                        {"channels", config.audio.channels},
                        {"bitrate_kbps", config.audio.bitrate_kbps},
+                       {"redundancy", config.audio.redundancy},
                        {"frame_duration_ms", config.audio.frame_duration_ms},
                        {"echo_cancellation", config.audio.echo_cancellation},
                        {"noise_suppression", config.audio.noise_suppression},

@@ -363,6 +363,11 @@ int main(int argc, char* argv[]) {
     // and not only a voice, so the default is well above audio.bitrate_kbps's
     // own default of 48.
     options.sfu.opus_max_bitrate_kbps = config.audio.bitrate_kbps;
+    // RED next to Opus, unless the file turned it off. See
+    // sfu/audio_description.hpp and docs/16-audio-plan.md, step 1.
+    if (!config.audio.redundancy) {
+      options.sfu.red_payload_type.reset();
+    }
     if (!config.network.turn_url.empty()) {
       options.sfu.ice_servers.push_back(build_turn_url(config.network));
     }

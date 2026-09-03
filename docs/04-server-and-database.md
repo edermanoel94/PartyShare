@@ -194,8 +194,10 @@ participant for audio.
 A share carrying sound adds no stream and no work to the SFU — it rides inside
 the sharer's own track. What it changes is the size of a stream already there:
 worst case, 96 kbps more inbound for the sharer and 96 kbps outbound per other
-participant. In a room of five that is ~0.1 Mbps in and ~0.4 Mbps out, which next
-to 3.3 Mbps of picture does not change how the machine is sized. The measurements
+participant, and twice that with the audio redundancy on, which it is by default
+([chapter 16](16-audio-plan.md), step 1). In a room of five that is ~0.2 Mbps in
+and ~0.8 Mbps out, which next to 3.3 Mbps of picture does not change how the
+machine is sized. The measurements
 are in [chapter 12](12-requirements.md).
 
 ## Signaling is not encrypted by default

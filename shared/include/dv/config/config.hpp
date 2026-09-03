@@ -54,6 +54,12 @@ struct AudioConfig {
   /// 96 rather than 48 because a screen share is stereo and carries music. A
   /// voice never comes near either number.
   int bitrate_kbps = 96;
+  /// Whether the SFU offers RED, RFC 2198, next to Opus. Every audio packet
+  /// then carries the previous frame again, so an isolated loss on either leg
+  /// is repaired at the receiver without any feedback. It doubles the audio
+  /// bytes, up to twice `bitrate_kbps` per stream, and that is the whole
+  /// price. Server side only. See docs/16-audio-plan.md, step 1.
+  bool redundancy = true;
   int frame_duration_ms = 20;
   bool echo_cancellation = true;
   bool noise_suppression = true;

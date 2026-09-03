@@ -1258,6 +1258,12 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       collected.jitter_ms = std::max(collected.jitter_ms, inbound->jitter.value_or(0) * 1000.0);
       collected.packets_lost +=
           static_cast<std::uint64_t>(std::max(0, inbound->packets_lost.value_or(0)));
+      // What the jitter buffer had to invent. A loss the redundancy made good
+      // never shows up here, which is what makes these the measure of a repair
+      // where packets_lost cannot be: it counts the packet either way.
+      collected.total_samples_received += inbound->total_samples_received.value_or(0);
+      collected.concealed_samples += inbound->concealed_samples.value_or(0);
+      collected.concealment_events += inbound->concealment_events.value_or(0);
     }
 
     for (const auto* outbound : report->GetStatsOfType<webrtc::RTCOutboundRtpStreamStats>()) {

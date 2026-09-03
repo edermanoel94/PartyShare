@@ -495,10 +495,15 @@ void Hub::deliver_notices_written_elsewhere(std::vector<Outgoing>& out) {
     if (!state.user.has_value()) {
       continue;
     }
+    // Bound once, before the store is asked: `hand_over_notice` takes the
+    // connection and could in principle be reasoned to touch the identity,
+    // and reading through the optional again afterwards is what the checker
+    // refuses.
+    const models::User& user = *state.user;
     // The same query the login runs, and the same cap. Somebody handed twenty
     // notices at once on a heartbeat is in the situation the cap exists for,
     // and the rest arrive as these are acknowledged, exactly as at sign-in.
-    const std::vector<models::Notice> pending = notices_->pending_for(state.user->id);
+    const std::vector<models::Notice> pending = notices_->pending_for(user.id);
     std::size_t handed_over = 0;
     for (const models::Notice& notice : pending) {
       if (hand_over_notice(out, state, notice)) {
@@ -510,7 +515,7 @@ void Hub::deliver_notices_written_elsewhere(std::vector<Outgoing>& out) {
       // whoever wrote the notice recorded it, in the server's own vocabulary,
       // and the moment this server noticed is not a fact anybody is after.
       DV_LOG_INFO("Delivered {} notice(s) written outside this server to {}", handed_over,
-                  models::user_label(state.user->id, state.user->display_name, state.username));
+                  models::user_label(user.id, user.display_name, state.username));
     }
   }
 }

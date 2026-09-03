@@ -62,7 +62,14 @@ class Client {
               const std::lock_guard<std::mutex> lock(mutex_);
               participants_ = std::move(list);
             },
-        .on_metrics = [this](media::AudioStats stats) { last_stats_ = stats; },
+        .on_metrics =
+            [this](media::AudioStats stats) {
+              // The report first, then its time: a reader that waits for the
+              // time to move and then reads the report gets this one or a
+              // newer one, never an older one.
+              last_stats_ = stats;
+              last_stats_at_ = std::chrono::steady_clock::now();
+            },
         .on_local_level =
             [this](double level, bool speaking) {
               highest_local_level_ = std::max(highest_local_level_.load(), level);
@@ -139,6 +146,11 @@ class Client {
 
   [[nodiscard]] CallSession& session() { return *session_; }
   [[nodiscard]] media::AudioStats last_stats() const { return last_stats_; }
+  /// When `last_stats()` arrived, so a test can wait for a fresh report and
+  /// measure a rate over the time that really passed between two of them.
+  [[nodiscard]] std::chrono::steady_clock::time_point last_stats_at() const {
+    return last_stats_at_;
+  }
   [[nodiscard]] double highest_local_level() const { return highest_local_level_.load(); }
   [[nodiscard]] bool local_speaking_seen() const { return local_speaking_seen_.load(); }
   [[nodiscard]] std::uint64_t errors() const { return errors_.load(); }
@@ -192,6 +204,7 @@ class Client {
   std::string created_room_;
   std::atomic<CallSession::State> state_{CallSession::State::Idle};
   std::atomic<media::AudioStats> last_stats_{};
+  std::atomic<std::chrono::steady_clock::time_point> last_stats_at_{};
   std::atomic<std::uint64_t> errors_{0};
   std::atomic<double> highest_local_level_{0};
   std::atomic<bool> local_speaking_seen_{false};
@@ -203,6 +216,11 @@ class Client {
 
 class MediaEndToEndTest : public ::testing::Test {
  protected:
+  /// A fixture that needs the server built differently overrides this. It is
+  /// called with the options the server is about to be started with, so a
+  /// derived fixture can turn one thing off and keep everything else.
+  virtual void configure(SignalingServer::Options& /*options*/) {}
+
   void SetUp() override {
     if (!media::media_is_available()) {
       GTEST_SKIP() << "libwebrtc could not start on this machine";
@@ -216,6 +234,7 @@ class MediaEndToEndTest : public ::testing::Test {
     options.hub.heartbeat_timeout = 60000ms;
     options.enable_sfu = true;
     options.sfu.ice_servers.clear();
+    configure(options);
 
     server_ = std::make_unique<SignalingServer>(options);
     // Five accounts, because section 22 of SPEC.md sizes a room at five and the

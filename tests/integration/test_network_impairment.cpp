@@ -25,6 +25,18 @@ using dv::client::media::NetworkImpairment;
 /// per link and around seventy five losses.
 constexpr auto kUnderImpairment = 15000ms;
 
+/// What 5% of loss sounds like, in concealment events per second at the
+/// listener, measured on this machine on 2026-09-03 by the two tests below.
+/// Without any repair the link produced 4.64, with 7.1% of the samples
+/// invented; with RED it produced 0.46, with 0.74%. The remainder is what RED
+/// cannot reach: two packets lost back to back, which at the 10% the two legs
+/// add up to happens about once every two seconds.
+///
+/// Both thresholds sit between the two measurements with room on each side,
+/// so a drift in either direction is caught before it is a regression.
+constexpr double kConcealmentWithoutRepairPerSecond = 2.5;
+constexpr double kConcealmentWithRedundancyPerSecond = 1.5;
+
 class ImpairedNetworkTest : public MediaEndToEndTest {
  protected:
   void TearDown() override {
@@ -57,20 +69,68 @@ class ImpairedNetworkTest : public MediaEndToEndTest {
   [[nodiscard]] Client& bruno() { return *clients_.at(1); }
 
   std::string room_;
+
+  /// A statistics report newer than the last one seen, with the moment it
+  /// arrived. Reports come every few seconds and carry totals, so a rate is
+  /// only honest between two reports and over the time that really passed
+  /// between them.
+  struct Report {
+    media::AudioStats stats;
+    std::chrono::steady_clock::time_point at;
+  };
+  [[nodiscard]] static Report fresh_report(Client& client) {
+    const auto previous = client.last_stats_at();
+    EXPECT_TRUE(wait_until([&] { return client.last_stats_at() > previous; }))
+        << "no statistics report arrived";
+    return Report{client.last_stats(), client.last_stats_at()};
+  }
+
+  /// What a loss sounds like, per second: every stretch the jitter buffer had
+  /// to invent is one event. packets_lost cannot tell repair from damage - a
+  /// packet the redundancy replaced still counts as lost - so this is the
+  /// number that says whether a repair works.
+  [[nodiscard]] static double concealment_events_per_second(const Report& before,
+                                                            const Report& after) {
+    const double seconds = std::chrono::duration<double>(after.at - before.at).count();
+    return static_cast<double>(after.stats.concealment_events - before.stats.concealment_events) /
+           seconds;
+  }
+
+  static void print_concealment(const Report& before, const Report& after) {
+    std::printf("concealment      %.2f events/s, %llu of %llu samples invented\n",
+                concealment_events_per_second(before, after),
+                static_cast<unsigned long long>(after.stats.concealed_samples -
+                                                before.stats.concealed_samples),
+                static_cast<unsigned long long>(after.stats.total_samples_received -
+                                                before.stats.total_samples_received));
+    std::fflush(stdout);
+  }
+};
+
+/// The same fixture with the redundancy turned off on the server: the offer as
+/// it was before RED existed, and what `[audio] redundancy = false` gives back.
+class ImpairedNetworkWithoutRedundancyTest : public ImpairedNetworkTest {
+ protected:
+  void configure(SignalingServer::Options& options) override {
+    options.sfu.red_payload_type.reset();
+  }
 };
 
 TEST_F(ImpairedNetworkTest, ACallSurvivesFivePercentPacketLoss) {
   start_a_call();
 
-  const std::uint64_t received_before = bruno().last_stats().packets_received;
+  const Report before = fresh_report(bruno());
+  const std::uint64_t received_before = before.stats.packets_received;
   const std::uint64_t forwarded_before = server_->media_router()->audio_packets_forwarded();
+  const std::uint64_t red_before = server_->media_router()->audio_red_packets_received();
 
   dv::client::media::reset_network_impairment_counters();
   dv::client::media::set_network_impairment({.loss = 0.05});
   std::this_thread::sleep_for(kUnderImpairment);
 
   const auto counters = network_impairment_counters();
-  const auto stats = bruno().last_stats();
+  const Report after = fresh_report(bruno());
+  const auto stats = after.stats;
 
   std::printf("\n--- audio on a link losing 5%% of packets, for %llu s ---\n",
               static_cast<unsigned long long>(kUnderImpairment.count() / 1000));
@@ -122,6 +182,39 @@ TEST_F(ImpairedNetworkTest, ACallSurvivesFivePercentPacketLoss) {
                           static_cast<double>(stats.packets_received + stats.packets_lost);
   EXPECT_LT(observed, 0.15) << "the receiver lost far more than was injected, which means "
                                "something downstream amplified the loss";
+
+  // The repair. packets_lost above counts every packet the injector took,
+  // repaired or not; what the listener heard is the concealment, and with the
+  // previous frame riding in every packet an isolated loss leaves none.
+  print_concealment(before, after);
+  EXPECT_GT(server_->media_router()->audio_red_packets_received() - red_before, 0U)
+      << "no RED reached the SFU, so whatever was measured above was measured without "
+         "the redundancy";
+  EXPECT_LT(concealment_events_per_second(before, after), kConcealmentWithRedundancyPerSecond)
+      << "the redundancy is negotiated and the listener still hears the loss";
+}
+
+TEST_F(ImpairedNetworkWithoutRedundancyTest, FivePercentLossIsHeardWithoutRedundancy) {
+  // The instrument, calibrated. With Opus alone every lost packet is a hole
+  // the jitter buffer has to paper over, and this is how many per second the
+  // link above produces. It is the number the test above is measured against:
+  // if this ever stops being audible, that test proves nothing.
+  start_a_call();
+
+  const Report before = fresh_report(bruno());
+  dv::client::media::reset_network_impairment_counters();
+  dv::client::media::set_network_impairment({.loss = 0.05});
+  std::this_thread::sleep_for(kUnderImpairment);
+  const Report after = fresh_report(bruno());
+
+  std::printf("\n--- the same link, Opus alone ---\n");
+  print_concealment(before, after);
+
+  EXPECT_EQ(server_->media_router()->audio_red_packets_received(), 0U)
+      << "RED arrived with the redundancy turned off, so the key does not turn it off";
+  EXPECT_GT(concealment_events_per_second(before, after), kConcealmentWithoutRepairPerSecond)
+      << "5% loss left no audible mark without any repair, so the redundancy test cannot "
+         "tell a repair from nothing";
 }
 
 TEST_F(ImpairedNetworkTest, ACallSurvivesHalfASecondOfLatencyAndJitter) {

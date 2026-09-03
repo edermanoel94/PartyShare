@@ -144,6 +144,7 @@ form, and `DV_SECTION_KEY` in the environment.
 | `input_device`, `output_device` | empty | Empty means the system default. The name has to be the one the system shows |
 | `sample_rate_hz`, `channels` | 48000, 1 | |
 | `bitrate_kbps` | 96 | The ceiling the SFU's offer puts on Opus. 96 rather than 48 because a screen share is stereo and carries music |
+| `redundancy` | true | Server only. RED next to Opus in every audio offer: each packet carries the previous frame again, so an isolated loss on either leg is repaired at the receiver without any feedback. Costs up to twice `bitrate_kbps` per audio stream. Off gives back the offer as it was before, Opus alone. [Chapter 16](16-audio-plan.md), step 1 |
 | `frame_duration_ms` | 20 | |
 | `noise_suppression` | true | Tuned for one voice in a room and treats everything else as the room. Turn it off for an instrument or a record playing behind you |
 | `echo_cancellation` | true | Turning it off only makes sense with headphones, and not always |

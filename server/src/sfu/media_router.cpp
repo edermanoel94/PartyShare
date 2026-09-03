@@ -16,16 +16,12 @@ namespace {
 /// Opus is always 48 kHz on the wire, section 9 of SPEC.md.
 constexpr int kOpusClockRate = 48000;
 
-/// The Opus fmtp this server offers, which is what decides what a participant
-/// encodes: their answer describes what they accept to receive, and every audio
-/// m-line here is one directional.
-///
-/// libdatachannel's own DEFAULT_OPUS_AUDIO_PROFILE, with the ceiling made
-/// configurable. Stereo is not decoration: it is what lets a screen share carry
-/// the two channels of whatever is playing rather than the average of them.
-[[nodiscard]] std::string opus_profile(int max_bitrate_kbps) {
-  return "minptime=10;maxaveragebitrate=" + std::to_string(max_bitrate_kbps * 1000) +
-         ";stereo=1;sprop-stereo=1;useinbandfec=1";
+/// What every audio m-line this server offers is made of. The shape itself
+/// lives in sfu/audio_description.hpp, where it is tested away from a network.
+[[nodiscard]] AudioCodecs audio_codecs(const MediaRouter::Options& options) {
+  return AudioCodecs{.opus_payload_type = options.opus_payload_type,
+                     .opus_max_bitrate_kbps = options.opus_max_bitrate_kbps,
+                     .red_payload_type = options.red_payload_type};
 }
 
 /// RFC 6464. Senders put the loudness of each packet in the RTP header, and
@@ -264,7 +260,7 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
   // The participant's own microphone.
   rtc::Description::Audio inbound(std::to_string(session.next_mid++),
                                   rtc::Description::Direction::RecvOnly);
-  inbound.addOpusCodec(options_.opus_payload_type, opus_profile(options_.opus_max_bitrate_kbps));
+  add_audio_codecs(inbound, audio_codecs(options_));
   inbound.addExtMap(
       rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
   session.inbound = session.connection->addTrack(inbound);
@@ -517,7 +513,7 @@ void MediaRouter::add_outbound_track(Session& session, const std::string& source
 
   rtc::Description::Audio media(std::to_string(session.next_mid++),
                                 rtc::Description::Direction::SendOnly);
-  media.addOpusCodec(options_.opus_payload_type, opus_profile(options_.opus_max_bitrate_kbps));
+  add_audio_codecs(media, audio_codecs(options_));
   media.addExtMap(rtc::Description::Entry::ExtMap(kAudioLevelExtensionId, kAudioLevelExtensionUri));
 
   // The msid is how the receiver learns whose voice this is. Without it a
@@ -746,6 +742,11 @@ void MediaRouter::forward_audio(const std::string& from_user_id, const std::stri
     return;
   }
   audio_packets_received_.fetch_add(1, std::memory_order_relaxed);
+  const std::optional<int>& red_payload_type = options_.red_payload_type;
+  if (red_payload_type.has_value() &&
+      reinterpret_cast<const rtc::RtpHeader*>(packet.data())->payloadType() == *red_payload_type) {
+    audio_red_packets_received_.fetch_add(1, std::memory_order_relaxed);
+  }
 
   // No lock here, on purpose. See RoutingTable: this runs on a libdatachannel
   // thread that already holds a lock inside the peer connection, and taking
@@ -763,10 +764,13 @@ void MediaRouter::forward_audio(const std::string& from_user_id, const std::stri
 
     // One copy per destination: each carries a different SSRC, which is what
     // keeps the receiver from seeing several participants as one stream.
+    //
+    // The payload type is left as it came. Every offer is written here, so a
+    // number means the same thing on every leg, and a packet that arrived as
+    // RED has to leave as RED or the receiver decodes redundancy as speech.
     rtc::binary copy = packet;
     auto* header = reinterpret_cast<rtc::RtpHeader*>(copy.data());
     header->setSsrc(destination.ssrc);
-    header->setPayloadType(static_cast<std::uint8_t>(destination.payload_type));
 
     destination.track->send(std::move(copy));
     audio_packets_forwarded_.fetch_add(1, std::memory_order_relaxed);

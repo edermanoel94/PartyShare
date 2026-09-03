@@ -159,6 +159,12 @@ TEST_F(MediaEndToEndTest, TwoClientsShareARoomAndTheSfuForwardsTheirAudio) {
       << "no audio reached the SFU";
   EXPECT_TRUE(wait_until([&] { return router->audio_packets_forwarded() > 0; }))
       << "the SFU received audio but forwarded none";
+  // And it arrives as RED: the offer carries it, and libwebrtc pairs it with
+  // Opus only when every detail of that offer is right. A client that quietly
+  // fell back to Opus alone would pass every other line of this test.
+  EXPECT_TRUE(wait_until([&] { return router->audio_red_packets_received() > 0; }))
+      << "the audio reached the SFU without redundancy, so the RED in the offer was not "
+         "accepted";
 }
 
 TEST_F(MediaEndToEndTest, MetricsAreCollectedFromTheRealConnection) {

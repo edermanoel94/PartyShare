@@ -22,7 +22,10 @@ Three things made it possible:
   ride on that person's track without a new one.
 - The SFU's offer already announces `stereo=1` and `maxaveragebitrate=96000`,
   inherited from libdatachannel's default Opus profile. The network path for
-  music was already negotiated; there was simply no music entering it.
+  music was already negotiated; there was simply no music entering it. (The
+  offer has since gained RED next to Opus and lost `useinbandfec=1`, for the
+  reasons in [chapter 16](16-audio-plan.md), step 1; neither changes anything
+  on this page.)
 - libwebrtc has an official hook at exactly the right place.
 
 ### Why not a second track
@@ -233,8 +236,9 @@ that matters: a capture delivering only silence is indistinguishable, from
 outside, from one that is working.
 
 The bandwidth arithmetic is in [chapter 12](12-requirements.md). In short: worst
-case, 96 kbps more inbound for the sharer and 96 kbps outbound per viewer, which
-next to 3.3 Mbps of picture does not change how the machine is sized.
+case, 96 kbps more inbound for the sharer and 96 kbps outbound per viewer, twice
+that with the audio redundancy on, which next to 3.3 Mbps of picture does not
+change how the machine is sized.
 
 ## 7. The defect this was written to catch
 

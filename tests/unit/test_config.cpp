@@ -561,6 +561,25 @@ TEST(Config, TheOpusCeilingDescribesWhatTheOfferAlreadyCarried) {
   EXPECT_EQ(Config{}.audio.bitrate_kbps, 96);
 }
 
+TEST(Config, TheAudioRedundancyIsOnByDefault) {
+  // Off is the offer the server made before RED existed, which repaired
+  // nothing. On is what repairs an isolated loss without any feedback, and it
+  // costs bandwidth, not quality. docs/16-audio-plan.md, step 1.
+  EXPECT_TRUE(Config{}.audio.redundancy);
+}
+
+TEST(ConfigIni, ReadsWhetherTheAudioRedundancyIsOn) {
+  // The key exists to turn the redundancy off without a rebuild, so a build
+  // that cannot read it back has no way back.
+  const auto off = dv::config::parse_ini("[audio]\nredundancy = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().audio.redundancy);
+
+  const auto on = dv::config::parse_ini("[audio]\nredundancy = true\n", Config{});
+  ASSERT_TRUE(on.ok()) << on.error().message;
+  EXPECT_TRUE(on.value().audio.redundancy);
+}
+
 TEST(ConfigIni, RefusesWhatItCannotApply) {
   // Every one of these would otherwise be a line that looks applied and is not,
   // which is the failure this format exists to make impossible.

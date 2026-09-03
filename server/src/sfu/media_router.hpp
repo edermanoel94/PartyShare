@@ -18,6 +18,7 @@
 #include <dv/protocol/message.hpp>
 
 #include "sfu/atomic_shared_ptr.hpp"
+#include "sfu/audio_description.hpp"
 #include "sfu/video_feedback.hpp"
 #include "sfu/video_stitcher.hpp"
 #include "signaling/hub.hpp"
@@ -45,9 +46,10 @@ namespace dv::server::sfu {
 ///     audio, with the msid set to their user id so the client knows whose
 ///     voice it is
 ///
-/// Nothing is transcoded. Opus packets are forwarded as they arrive, with the
-/// SSRC and the payload type rewritten to the ones negotiated on the outgoing
-/// track.
+/// Nothing is transcoded. Audio packets are forwarded as they arrive, with the
+/// SSRC rewritten to the one negotiated on the outgoing track. The payload
+/// type travels untouched: this server writes every offer, so the numbers are
+/// the same on every leg, and a packet that arrived as RED has to leave as RED.
 class MediaRouter : public MediaSignals {
  public:
   struct Options {
@@ -71,6 +73,11 @@ class MediaRouter : public MediaSignals {
     /// Music is not voice, and a share is stereo. See
     /// docs/09-screen-audio.md, section 5.
     int opus_max_bitrate_kbps = 96;
+    /// RED next to Opus on every audio m-line, RFC 2198, or nothing for Opus
+    /// alone. See sfu/audio_description.hpp for what it buys and what it
+    /// costs; `[audio] redundancy = false` in the server's config is what
+    /// empties it.
+    std::optional<int> red_payload_type = 63;
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.
     int h264_payload_type = 96;
@@ -120,6 +127,12 @@ class MediaRouter : public MediaSignals {
   /// forwarded packet per other participant in the room.
   [[nodiscard]] std::uint64_t audio_packets_forwarded() const noexcept {
     return audio_packets_forwarded_.load();
+  }
+  /// Of the audio packets received, those that arrived as RED. It is the only
+  /// place the redundancy is observable from outside: a client's statistics
+  /// name the codec RED carries, never RED itself.
+  [[nodiscard]] std::uint64_t audio_red_packets_received() const noexcept {
+    return audio_red_packets_received_.load();
   }
   /// Video packets received from whoever is sharing a screen.
   [[nodiscard]] std::uint64_t video_packets_received() const noexcept {
@@ -325,6 +338,7 @@ class MediaRouter : public MediaSignals {
 
   std::atomic<std::uint64_t> audio_packets_received_{0};
   std::atomic<std::uint64_t> audio_packets_forwarded_{0};
+  std::atomic<std::uint64_t> audio_red_packets_received_{0};
   std::atomic<std::uint64_t> video_packets_received_{0};
   std::atomic<std::uint64_t> video_packets_forwarded_{0};
   std::atomic<std::uint64_t> keyframe_requests_forwarded_{0};

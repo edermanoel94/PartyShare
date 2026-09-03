@@ -220,7 +220,8 @@ class FakeMediaSession : public media::MediaSession {
   }
 
   void set_audio_processing(bool echo_cancellation, bool noise_suppression,
-                            bool automatic_gain_control) override {
+                            bool automatic_gain_control,
+                            media::NoiseSuppressionLevel /*noise_suppression_level*/) override {
     state_->echo_cancellation = echo_cancellation;
     state_->noise_suppression = noise_suppression;
     state_->automatic_gain_control = automatic_gain_control;

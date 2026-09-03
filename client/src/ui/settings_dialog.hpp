@@ -78,7 +78,7 @@ class SettingsDialog : public QDialog {
   void on_auto_bitrate_changed(bool automatic);
   void on_quality_changed();
   void on_screen_audio_changed();
-  void on_noise_suppression_changed(bool on);
+  void on_noise_suppression_changed();
   void on_screen_volume_changed(int percent);
   void on_room_sounds_changed(bool on);
   void on_update_checks_changed(bool on);
@@ -198,8 +198,9 @@ class SettingsDialog : public QDialog {
   /// treats everything else as the room: an instrument, a record playing
   /// behind somebody, a hiss that is actually part of what they meant to send.
   /// Off is the right answer often enough that reaching it should not need a
-  /// text editor and a restart.
-  QCheckBox* noise_suppression_ = nullptr;
+  /// text editor and a restart, and since docs/16-audio-plan.md step 5 the
+  /// same box holds how hard it bites: off, then the four levels.
+  QComboBox* noise_suppression_ = nullptr;
   /// The chime when somebody joins or leaves a room.
   ///
   /// Beside the devices rather than under the screen settings, because it is

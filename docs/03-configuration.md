@@ -148,11 +148,14 @@ form, and `DV_SECTION_KEY` in the environment.
 | `retransmission` | true | Server only. `nack` in every audio offer, a retransmission cache on every outgoing audio track and a repair on every incoming one: what the redundancy cannot cover, two packets lost back to back, is asked for again on both legs. Costs nothing while nothing is lost. [Chapter 16](16-audio-plan.md), step 2 |
 | `frame_duration_ms` | 20 | |
 | `noise_suppression` | true | Tuned for one voice in a room and treats everything else as the room. Turn it off for an instrument or a record playing behind you |
+| `noise_suppression_level` | `high` | How hard it bites: `low`, `moderate`, `high` or `very_high`, which take 6, 12, 18 and 21 dB off the noise. `high` is what Chrome ships and what every call had before the level was a setting, so it stays the default until somebody has listened to `moderate`, which spares consonants and instruments. [Chapter 16](16-audio-plan.md), step 5 |
 | `echo_cancellation` | true | Turning it off only makes sense with headphones, and not always |
 | `automatic_gain_control` | true | Off leaves your voice the size the microphone caught it, which is better for an instrument and worse for conversation. On is libwebrtc's second generation controller, AGC2, since [chapter 16](16-audio-plan.md) step 4: it drives the microphone volume and adds a digital gain that only moves on speech and stops at a noise floor |
 
-Only `noise_suppression` appears in the settings dialog, and it applies at once,
-mid-call included. The other two are this file only.
+Only noise suppression appears in the settings dialog, as one selector holding
+both keys: off, then the four levels. It applies at once, mid-call included, and
+"off" keeps the level the file had, so turning it back on returns to it. The
+other two blocks are this file only.
 
 ### `[screen_audio]`
 

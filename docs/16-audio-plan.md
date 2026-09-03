@@ -300,6 +300,11 @@ step 4: the option stays unset and the level goes through `ApplyConfig`.
 The level changes mid-call, and the default is decided and written into
 chapter 3 with the reason.
 
+**Landed on 3 September 2026 with the default left at `high`**, the level every
+call had until then, because nobody had listened to `moderate` yet. The
+listening test decides; if `moderate` wins it is one line in `config.hpp` and
+one row in chapter 3.
+
 ### Risk and way back
 
 Low. `noise_suppression_level = high`.

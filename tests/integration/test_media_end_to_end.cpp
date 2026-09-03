@@ -261,16 +261,62 @@ TEST_F(MediaEndToEndTest, TheGainControlIsTheSecondGenerationAndTurnsOffWithTheS
   EXPECT_FALSE(ana.session().stats().legacy_gain_control_active)
       << "the first generation gain control is running, so the voice engine's defaults won";
 
-  ASSERT_TRUE(
-      ana.session().set_audio_processing(true, true, /*automatic_gain_control=*/false).ok());
+  ASSERT_TRUE(ana.session()
+                  .set_audio_processing(true, true, /*automatic_gain_control=*/false,
+                                        media::NoiseSuppressionLevel::High)
+                  .ok());
   EXPECT_TRUE(wait_until([&] { return !ana.session().stats().gain_control_active; }, 5000ms))
       << "the gain control kept running after being turned off";
   EXPECT_FALSE(ana.session().stats().legacy_gain_control_active);
 
   // Back on, because the module is shared by every session in the process.
-  ASSERT_TRUE(ana.session().set_audio_processing(true, true, /*automatic_gain_control=*/true).ok());
+  ASSERT_TRUE(ana.session()
+                  .set_audio_processing(true, true, /*automatic_gain_control=*/true,
+                                        media::NoiseSuppressionLevel::High)
+                  .ok());
   EXPECT_TRUE(wait_until([&] { return ana.session().stats().gain_control_active; }, 5000ms))
       << "the gain control did not come back";
+}
+
+TEST_F(MediaEndToEndTest, TheNoiseSuppressionLevelFollowsTheSelectorMidCall) {
+  // The level used to be forced to high by the voice engine whenever the
+  // suppressor was on, which is why it is read back from the module and not
+  // from what was asked for: the assertion is that what was asked for is what
+  // runs, including after the voice engine has had its say.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  const auto level_is = [&](media::NoiseSuppressionLevel level) {
+    return [&ana, level] {
+      const media::AudioStats stats = ana.session().stats();
+      return stats.noise_suppression_active && stats.noise_suppression_level == level;
+    };
+  };
+
+  EXPECT_TRUE(wait_until(level_is(media::NoiseSuppressionLevel::High), 5000ms))
+      << "the suppressor did not start at the configured level";
+
+  ASSERT_TRUE(
+      ana.session().set_audio_processing(true, true, true, media::NoiseSuppressionLevel::Low).ok());
+  EXPECT_TRUE(wait_until(level_is(media::NoiseSuppressionLevel::Low), 5000ms))
+      << "the level chosen mid-call did not reach the module";
+
+  ASSERT_TRUE(ana.session()
+                  .set_audio_processing(true, false, true, media::NoiseSuppressionLevel::Low)
+                  .ok());
+  EXPECT_TRUE(wait_until([&] { return !ana.session().stats().noise_suppression_active; }, 5000ms))
+      << "the suppressor kept running after being turned off";
+
+  // Back to where every other case in this process expects it.
+  ASSERT_TRUE(ana.session()
+                  .set_audio_processing(true, true, true, media::NoiseSuppressionLevel::High)
+                  .ok());
+  EXPECT_TRUE(wait_until(level_is(media::NoiseSuppressionLevel::High), 5000ms))
+      << "the suppressor did not come back at the level asked for";
 }
 
 TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {

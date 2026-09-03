@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -45,6 +46,41 @@ struct AudioLevel {
 
   friend bool operator==(const AudioLevel&, const AudioLevel&) = default;
 };
+
+/// How hard the noise suppressor bites, in the four steps libwebrtc offers.
+/// They take 6, 12, 18 and 21 dB off the noise, in that order. See
+/// docs/16-audio-plan.md, step 5.
+enum class NoiseSuppressionLevel : std::uint8_t { Low, Moderate, High, VeryHigh };
+
+/// The spelling `audio.noise_suppression_level` uses for each level, and back.
+/// Nothing for a word that is not one of the four; the configuration refuses
+/// those before they get here, so a caller may treat nothing as impossible and
+/// still have to pick an answer for it.
+[[nodiscard]] constexpr std::string_view to_string(NoiseSuppressionLevel level) noexcept {
+  switch (level) {
+    case NoiseSuppressionLevel::Low:
+      return "low";
+    case NoiseSuppressionLevel::Moderate:
+      return "moderate";
+    case NoiseSuppressionLevel::High:
+      return "high";
+    case NoiseSuppressionLevel::VeryHigh:
+      return "very_high";
+  }
+  return "high";
+}
+
+[[nodiscard]] constexpr std::optional<NoiseSuppressionLevel> parse_noise_suppression_level(
+    std::string_view text) noexcept {
+  for (const NoiseSuppressionLevel level :
+       {NoiseSuppressionLevel::Low, NoiseSuppressionLevel::Moderate, NoiseSuppressionLevel::High,
+        NoiseSuppressionLevel::VeryHigh}) {
+    if (text == to_string(level)) {
+      return level;
+    }
+  }
+  return std::nullopt;
+}
 
 /// What section 22 of SPEC.md asks to be measured, read from the WebRTC stats.
 struct AudioStats {
@@ -99,6 +135,10 @@ struct AudioStats {
   /// so that a test can say so.
   bool gain_control_active = false;
   bool legacy_gain_control_active = false;
+  /// The noise suppressor, read back the same way: whether it runs, and how
+  /// hard, since docs/16-audio-plan.md step 5 made the level a setting.
+  bool noise_suppression_active = false;
+  NoiseSuppressionLevel noise_suppression_level = NoiseSuppressionLevel::High;
 
   /// True while what the screen is playing is being mixed into this
   /// participant's audio. See `start_screen_audio`.
@@ -356,8 +396,13 @@ class MediaSession {
   /// so options carried by a session only ever describe the state at the moment
   /// the first one was built. The module is the thing that is actually
   /// processing, and it takes a new configuration at any time.
+  ///
+  /// The level says how hard the suppressor bites while it is on; it is
+  /// remembered while it is off, so turning the suppressor back on returns to
+  /// the level it had.
   virtual void set_audio_processing(bool echo_cancellation, bool noise_suppression,
-                                    bool automatic_gain_control) = 0;
+                                    bool automatic_gain_control,
+                                    NoiseSuppressionLevel noise_suppression_level) = 0;
 
   /// The range the screen encoder may use, in kbps. Section 6 of SPEC.md puts
   /// it between 1.5 and 3 Mbps by default, and makes it configurable.
@@ -407,6 +452,7 @@ struct MediaSessionOptions {
 
   bool echo_cancellation = true;
   bool noise_suppression = true;
+  NoiseSuppressionLevel noise_suppression_level = NoiseSuppressionLevel::High;
   bool automatic_gain_control = true;
 
   /// How loud a screen share's sound starts, as a percentage. See

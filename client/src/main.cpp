@@ -297,6 +297,12 @@ int run(int argc, char* argv[]) {
   session_options.media.frame_duration_ms = config.audio.frame_duration_ms;
   session_options.media.echo_cancellation = config.audio.echo_cancellation;
   session_options.media.noise_suppression = config.audio.noise_suppression;
+  // The configuration refused any spelling but the four before this runs, so
+  // the fallback is the impossible case answered the way the file's default
+  // would be.
+  session_options.media.noise_suppression_level =
+      dv::client::media::parse_noise_suppression_level(config.audio.noise_suppression_level)
+          .value_or(dv::client::media::NoiseSuppressionLevel::High);
   session_options.media.automatic_gain_control = config.audio.automatic_gain_control;
   session_options.media.input_device = config.audio.input_device;
   session_options.media.output_device = config.audio.output_device;

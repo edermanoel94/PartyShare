@@ -652,19 +652,21 @@ int CallSession::screen_audio_volume() const {
   return options_.media.screen_audio_volume_percent;
 }
 
-Result<std::monostate> CallSession::set_audio_processing(bool echo_cancellation,
-                                                         bool noise_suppression,
-                                                         bool automatic_gain_control) {
+Result<std::monostate> CallSession::set_audio_processing(
+    bool echo_cancellation, bool noise_suppression, bool automatic_gain_control,
+    media::NoiseSuppressionLevel noise_suppression_level) {
   std::shared_ptr<media::MediaSession> session;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     options_.media.echo_cancellation = echo_cancellation;
     options_.media.noise_suppression = noise_suppression;
+    options_.media.noise_suppression_level = noise_suppression_level;
     options_.media.automatic_gain_control = automatic_gain_control;
     session = audio_;
   }
   if (session) {
-    session->set_audio_processing(echo_cancellation, noise_suppression, automatic_gain_control);
+    session->set_audio_processing(echo_cancellation, noise_suppression, automatic_gain_control,
+                                  noise_suppression_level);
   }
   // Remembered even with no call running, which is the half that matters
   // outside one: the next session is built from these options, and building it
@@ -685,6 +687,11 @@ bool CallSession::noise_suppression() const {
 bool CallSession::automatic_gain_control() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return options_.media.automatic_gain_control;
+}
+
+media::NoiseSuppressionLevel CallSession::noise_suppression_level() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.noise_suppression_level;
 }
 
 std::string CallSession::input_device() const {

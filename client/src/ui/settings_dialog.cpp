@@ -125,12 +125,23 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   auto* audio_form = new QFormLayout(audio);
   input_ = new QComboBox(audio);
   output_ = new QComboBox(audio);
-  // Named for what turning it off does rather than for the module, because
-  // "Noise suppression" as a bare label leaves somebody guessing which
-  // direction the tick means.
-  noise_suppression_ =
-      new QCheckBox(QStringLiteral("Remove background noise from the microphone"), audio);
-  noise_suppression_->setChecked(session_.noise_suppression());
+  // Off first, then the four levels libwebrtc offers, each named with what it
+  // takes off the noise. The data is what the configuration and CallSession
+  // call these, so nothing is translated between the box, the file and the
+  // module; "off" is the one word the file spells as a separate key.
+  noise_suppression_ = new QComboBox(audio);
+  noise_suppression_->addItem(QStringLiteral("Off"), QStringLiteral("off"));
+  noise_suppression_->addItem(QStringLiteral("Low, 6 dB"), QStringLiteral("low"));
+  noise_suppression_->addItem(QStringLiteral("Moderate, 12 dB"), QStringLiteral("moderate"));
+  noise_suppression_->addItem(QStringLiteral("High, 18 dB"), QStringLiteral("high"));
+  noise_suppression_->addItem(QStringLiteral("Very high, 21 dB"), QStringLiteral("very_high"));
+  {
+    const QString current = session_.noise_suppression()
+                                ? QString::fromUtf8(std::string(
+                                      client::media::to_string(session_.noise_suppression_level())))
+                                : QStringLiteral("off");
+    noise_suppression_->setCurrentIndex(std::max(0, noise_suppression_->findData(current)));
+  }
 
   // Its state comes from ui::chimes_enabled and not from the configuration
   // that was read at startup: main() has already put one into the other, and
@@ -141,7 +152,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
 
   audio_form->addRow(QStringLiteral("Microphone"), input_);
   audio_form->addRow(QStringLiteral("Output"), output_);
-  audio_form->addRow(QStringLiteral("Noise"), noise_suppression_);
+  audio_form->addRow(QStringLiteral("Noise suppression"), noise_suppression_);
   audio_form->addRow(QStringLiteral("Room sounds"), room_sounds_);
 
   auto* video = new QGroupBox(QStringLiteral("Screen"), this);
@@ -332,7 +343,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   connect(frame_rate_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_quality_changed);
   connect(screen_audio_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_screen_audio_changed);
-  connect(noise_suppression_, &QCheckBox::toggled, this,
+  connect(noise_suppression_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_noise_suppression_changed);
   // valueChanged and not sliderReleased, so that dragging is audible while it
   // happens. That is the whole way this control can be got right: nobody knows
@@ -494,18 +505,31 @@ void SettingsDialog::on_screen_volume_changed(int percent) {
       .section = "screen_audio", .key = "volume_percent", .value = std::to_string(percent)}});
 }
 
-void SettingsDialog::on_noise_suppression_changed(bool on) {
+void SettingsDialog::on_noise_suppression_changed() {
+  const std::string choice = noise_suppression_->currentData().toString().toStdString();
+  const bool on = choice != "off";
+  // "Off" keeps the level the session had, so that turning the suppressor
+  // back on returns to it rather than to whatever the box happened to say.
+  const client::media::NoiseSuppressionLevel level =
+      on ? client::media::parse_noise_suppression_level(choice).value_or(
+               session_.noise_suppression_level())
+         : session_.noise_suppression_level();
   // The other two blocks are passed through as they stand rather than as the
   // values this dialog was opened with. They are not on this page, so anything
   // that moved them moved them elsewhere, and sending a stale copy back would
   // turn a change of one setting into a quiet revert of two.
   if (const auto applied = session_.set_audio_processing(session_.echo_cancellation(), on,
-                                                         session_.automatic_gain_control());
+                                                         session_.automatic_gain_control(), level);
       !applied) {
     DV_LOG_WARN("Could not set noise suppression: {}", applied.error().message);
   }
-  stage({config::IniSetting{
-      .section = "audio", .key = "noise_suppression", .value = on ? "true" : "false"}});
+  std::vector<config::IniSetting> settings{config::IniSetting{
+      .section = "audio", .key = "noise_suppression", .value = on ? "true" : "false"}};
+  if (on) {
+    settings.push_back(
+        config::IniSetting{.section = "audio", .key = "noise_suppression_level", .value = choice});
+  }
+  stage(settings);
 }
 
 void SettingsDialog::load_devices() {

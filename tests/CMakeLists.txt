@@ -95,6 +95,7 @@ if(TARGET dv::client_core)
     unit/test_metrics_history.cpp
     unit/test_smoothing.cpp
     unit/test_chat_links.cpp
+    unit/test_noise_suppression_level.cpp
   )
   list(APPEND dv_integration_sources
     integration/test_signaling_client.cpp

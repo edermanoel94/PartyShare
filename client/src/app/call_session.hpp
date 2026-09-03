@@ -401,11 +401,15 @@ class CallSession {
   /// tuned for a voice in a room, and it is what makes a guitar sound like it
   /// is being played through a telephone. Somebody who wants their microphone
   /// carried faithfully needs a way to say so.
-  [[nodiscard]] Result<std::monostate> set_audio_processing(bool echo_cancellation,
-                                                            bool noise_suppression,
-                                                            bool automatic_gain_control);
+  ///
+  /// The level is how hard the suppressor bites while it is on. It is kept
+  /// while the suppressor is off, so that turning it back on returns to it.
+  [[nodiscard]] Result<std::monostate> set_audio_processing(
+      bool echo_cancellation, bool noise_suppression, bool automatic_gain_control,
+      media::NoiseSuppressionLevel noise_suppression_level);
   [[nodiscard]] bool echo_cancellation() const;
   [[nodiscard]] bool noise_suppression() const;
+  [[nodiscard]] media::NoiseSuppressionLevel noise_suppression_level() const;
   [[nodiscard]] bool automatic_gain_control() const;
   /// Who is sharing right now, empty when nobody is.
   [[nodiscard]] std::string screen_sharer() const;

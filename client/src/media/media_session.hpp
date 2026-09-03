@@ -91,6 +91,14 @@ struct AudioStats {
   /// How much of the echo the canceller is removing, in dB. Zero when it is
   /// not running, or when there is no echo to remove.
   double echo_return_loss_db = 0;
+  /// True while the gain control runs on the captured audio, read back from
+  /// the processing module rather than measured: the gain control has no
+  /// statistic of its own. It is libwebrtc's second generation controller,
+  /// AGC2, since docs/16-audio-plan.md step 4. `legacy_gain_control_active`
+  /// is the first generation, which that step retired and which stays false
+  /// so that a test can say so.
+  bool gain_control_active = false;
+  bool legacy_gain_control_active = false;
 
   /// True while what the screen is playing is being mixed into this
   /// participant's audio. See `start_screen_audio`.

@@ -90,10 +90,13 @@ Deleting an account removes every notice ever sent to it. These are messages
 written to a named person, and a record with a subject and no owner is not one
 worth keeping.
 
-`dbadmin` cannot send one. A notice needs to be delivered to whoever is
-connected and needs an identifier the moment it is written, and both of those
-are a running server's job — see [what it deliberately does not
-do](../tools/dbadmin/README.md).
+`dbadmin` can send one too, from the users screen, with no server running. It
+writes the document and nothing else; a running server hands it over on its
+next heartbeat if the person is connected, and their next sign-in does if they
+are not, exactly as for one sent from the panel while they were away. What
+differs is the sender: there is no account behind a terminal, so the notice
+arrives from "an administrator", and the audit entry is where the operator's
+name is - the same two facts as for a restriction written from there.
 
 A forced mute holds until an administrator releases it: a participant sending
 `unmute` about themselves while one is in place is refused. Muting themselves
@@ -172,12 +175,18 @@ server to talk to:
   no account to name; clients render it as "an administrator". The audit entry is
   where the name is, attributed to `dbadmin:<name>`.
 
+It can also sign somebody out, from the sessions screen. That is a mark on the
+account, `session_end_requested_at`, which the server reads on the same
+heartbeat pass and answers with the same exit a ban takes - out of the room,
+tokens revoked, everybody told - without the ban: nothing is taken from the
+account and the person may sign in again at once. The server zeroes the mark
+once it has acted, and a login discards one written before it, so a request
+made a heartbeat too late cannot end a session nobody asked about.
+
 It deliberately does not create collections or indexes, create rooms, close a
-room on a running server, kick one participant out of one room, or send a
-notice. The first because the schema belongs to the server; the next three
-because they are about a room in a running process's memory, which a database
-tool has no connection to; the last because a notice has to be delivered to
-whoever is connected and needs an identifier at the moment it is written, and
+room on a running server, or kick one participant out of one room. The first
+because the schema belongs to the server; the other three because they name a
+room in a running process's memory, which a database tool has no connection to,
 both of those are the server's job.
 
 What it does have that the panel does not is **who is online, and from where**.

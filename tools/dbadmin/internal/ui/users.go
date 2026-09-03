@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 	usersRestrict
 	usersDelete
 	usersDetail
+	usersNotice
 )
 
 // The fields of the create form, by position. Named because the form is read
@@ -57,6 +59,10 @@ const (
 	restrictMuted
 	restrictSilenced
 	restrictScreenShare
+)
+
+const (
+	noticeText = iota
 )
 
 type usersModel struct {
@@ -368,6 +374,12 @@ func (m *usersModel) updateList(key tea.KeyMsg) tea.Cmd {
 			return textinput.Blink
 		}
 		return nil
+	case "s":
+		if account, ok := m.selected(); ok {
+			m.openNotice(account)
+			return textinput.Blink
+		}
+		return nil
 	case "d":
 		if account, ok := m.selected(); ok {
 			m.target = account
@@ -523,6 +535,28 @@ func (m *usersModel) openRestrict(account store.Account) {
 	m.mode = usersRestrict
 }
 
+// openNotice is the form behind the s key: one message to one account.
+//
+// One field, because that is what a notice is - see dv::models::Notice for
+// why it is not a chat line. The form does not ask who it is from: a shell is
+// not an account, so the document carries no sender and the recipient's
+// client says "an administrator", exactly as it does for a restriction
+// written from here. The audit entry is where the operator's name goes.
+func (m *usersModel) openNotice(account store.Account) {
+	m.form = newForm("Notice to "+account.Username,
+		"Shown to them as a box they have to dismiss, and to nobody else. A "+
+			"running server hands it over within a heartbeat if they are connected, "+
+			"and at their next sign in if they are not. It arrives from \"an "+
+			"administrator\": there is no account to name from here, and the audit "+
+			"entry carries yours.", "send",
+		noticeField("Message", "Up to "+strconv.Itoa(store.MaxNoticeTextBytes)+
+			" characters. Longer than a few lines is a conversation, and that is what the chat is for."),
+	)
+	m.form.width = m.width
+	m.target = account
+	m.mode = usersNotice
+}
+
 // The two values every restriction takes. A closed choice and not a text
 // field, for the reason the role is one: a field that accepts "ys" and stores
 // a restriction nobody asked for is a worse way to say no.
@@ -553,9 +587,39 @@ func (m *usersModel) submit() tea.Cmd {
 		return m.submitPassword()
 	case usersRestrict:
 		return m.submitRestrict()
+	case usersNotice:
+		return m.submitNotice()
 	case usersList, usersDelete, usersDetail:
 	}
 	return nil
+}
+
+func (m *usersModel) submitNotice() tea.Cmd {
+	text := m.form.value(noticeText)
+	if text == "" {
+		m.form.failure = "A message is required."
+		return nil
+	}
+	if len(text) > store.MaxNoticeTextBytes {
+		// Bytes and not characters, because that is the limit the server
+		// enforces, and a message that fits the field and not the server is
+		// one that would be refused later by something with no form to say
+		// so in.
+		m.form.failure = "The message has to fit in " +
+			strconv.Itoa(store.MaxNoticeTextBytes) + " bytes."
+		return nil
+	}
+
+	target := m.target
+	m.mode = usersList
+	return func() tea.Msg {
+		if _, err := m.store.SendNotice(context.Background(), target.UserID, text); err != nil {
+			return outcomeFor(err, "A notice was sent to \""+target.Username+"\"")
+		}
+		// "Sent" and not "delivered": the document is written, and the server
+		// that hands it over is not here to say it did.
+		return doneMsg{text: "A notice was sent to \"" + target.Username + "\"", focus: target.UserID}
+	}
 }
 
 func (m *usersModel) submitCreate() tea.Cmd {
@@ -674,7 +738,7 @@ func (m *usersModel) submitRestrict() tea.Cmd {
 
 func (m *usersModel) View() string {
 	switch m.mode {
-	case usersCreate, usersEdit, usersPassword, usersRestrict:
+	case usersCreate, usersEdit, usersPassword, usersRestrict, usersNotice:
 		m.form.width = m.width
 		return centre(m.form.View(), m.width, m.height)
 	case usersDelete:
@@ -776,8 +840,19 @@ func (m *usersModel) detailView() string {
 		// The salt and the hash are read by this program and shown by nothing.
 		// A credential on a screen is a credential in a screenshot.
 		cardLabelStyle.Render("Password     ") + metaStyle.Render("stored as scrypt, not shown"),
-		cardFooterStyle.Render(helpLine(content, keyHint("esc", "close"))),
 	}
+	if m.target.SessionEndRequestedAt != 0 {
+		// Normally gone within a heartbeat of being written. One that is still
+		// here is one no server has seen, which is worth a line: either
+		// nothing is running, or the request is older than this login and the
+		// next one clears it.
+		// Short enough for the card at its narrowest, so the line does not
+		// wrap and grow the card by a line nobody asked for.
+		lines = append(lines, cardLabelStyle.Render("Sign out     ")+
+			warningStyle.Render("requested "+timeLabel(m.target.SessionEndRequestedAt))+
+			metaStyle.Render(" · pending"))
+	}
+	lines = append(lines, cardFooterStyle.Render(helpLine(content, keyHint("esc", "close"))))
 	return cardStyle.Width(cardWidth(m.width)).Render(strings.Join(lines, "\n"))
 }
 
@@ -797,7 +872,8 @@ func roleLabel(role store.Role) string {
 
 func (m *usersModel) help() string {
 	switch m.mode {
-	case usersCreate, usersEdit, usersPassword, usersRestrict, usersDelete, usersDetail:
+	case usersCreate, usersEdit, usersPassword, usersRestrict, usersNotice, usersDelete,
+		usersDetail:
 		return ""
 	case usersList:
 	}
@@ -812,6 +888,7 @@ func (m *usersModel) help() string {
 		keyHint("e", "edit"),
 		keyHint("p", "password"),
 		keyHint("m", "restrictions"),
+		keyHint("s", "notice"),
 		keyHint("d", "delete"),
 		keyHint("/", "filter"),
 		keyHint("r", "refresh"),

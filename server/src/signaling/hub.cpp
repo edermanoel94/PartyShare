@@ -435,6 +435,7 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
       stale->user.reset();
       stale->room_id.reset();
       stale->username.clear();
+      stale->delivered_notice_ids.clear();
     }
   }
 
@@ -442,6 +443,9 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
   // What was typed, which is what the account is called: both stores match a
   // username exactly, so a login that got this far got it letter for letter.
   connection.username = message.username;
+  // A new identity is owed everything its account has pending, whatever an
+  // earlier identity on this socket was handed.
+  connection.delivered_notice_ids.clear();
   user_to_connection_[value.user.id] = connection.id;
 
   DV_LOG_INFO("User {} authenticated on connection {}",
@@ -458,22 +462,89 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
   // expected to make sense of a message about its account before it has been
   // told which account it is.
   deliver_pending_notices(out, connection);
+
+  // A request to end this account's session that was written before this
+  // login was about a session that has already ended on its own. Left
+  // standing, the next heartbeat would end this one, which nobody asked for.
+  (void)discard_session_end_request(value.user.id,
+                                    "it was written before this login and is about a session that "
+                                    "had already ended");
 }
 
-void Hub::deliver_pending_notices(std::vector<Outgoing>& out, const Connection& connection) {
+void Hub::deliver_pending_notices(std::vector<Outgoing>& out, Connection& connection) {
   if (!connection.user.has_value()) {
     return;
   }
 
   const std::vector<models::Notice> pending = notices_->pending_for(connection.user->id);
+  std::size_t handed_over = 0;
   for (const models::Notice& notice : pending) {
-    out.push_back(Outgoing{.connection = connection.id, .message = protocol::Notice{notice}});
+    if (hand_over_notice(out, connection, notice)) {
+      ++handed_over;
+    }
   }
-  if (!pending.empty()) {
-    DV_LOG_INFO("Delivered {} outstanding notice(s) to {}", pending.size(),
+  if (handed_over > 0) {
+    DV_LOG_INFO("Delivered {} outstanding notice(s) to {}", handed_over,
                 models::user_label(connection.user->id, connection.user->display_name,
                                    connection.username));
   }
+}
+
+void Hub::deliver_notices_written_elsewhere(std::vector<Outgoing>& out) {
+  for (auto& [id, state] : connections_) {
+    if (!state.user.has_value()) {
+      continue;
+    }
+    // Bound once, before the store is asked: `hand_over_notice` takes the
+    // connection and could in principle be reasoned to touch the identity,
+    // and reading through the optional again afterwards is what the checker
+    // refuses.
+    const models::User& user = *state.user;
+    // The same query the login runs, and the same cap. Somebody handed twenty
+    // notices at once on a heartbeat is in the situation the cap exists for,
+    // and the rest arrive as these are acknowledged, exactly as at sign-in.
+    const std::vector<models::Notice> pending = notices_->pending_for(user.id);
+    std::size_t handed_over = 0;
+    for (const models::Notice& notice : pending) {
+      if (hand_over_notice(out, state, notice)) {
+        ++handed_over;
+      }
+    }
+    if (handed_over > 0) {
+      // No actor and no audit entry, as with a restriction written elsewhere:
+      // whoever wrote the notice recorded it, in the server's own vocabulary,
+      // and the moment this server noticed is not a fact anybody is after.
+      DV_LOG_INFO("Delivered {} notice(s) written outside this server to {}", handed_over,
+                  models::user_label(user.id, user.display_name, state.username));
+    }
+  }
+}
+
+bool Hub::hand_over_notice(std::vector<Outgoing>& out, Connection& connection,
+                           const models::Notice& notice) {
+  if (!connection.delivered_notice_ids.insert(notice.id).second) {
+    return false;
+  }
+  out.push_back(Outgoing{.connection = connection.id, .message = protocol::Notice{notice}});
+  return true;
+}
+
+bool Hub::discard_session_end_request(const std::string& user_id, std::string_view why) {
+  auto account = users_->find_by_id(user_id);
+  if (!account.has_value() || account->session_end_requested_at == 0) {
+    return false;
+  }
+  account->session_end_requested_at = 0;
+  if (const auto failure = users_->update(*account)) {
+    // Warning and not error: the session the request was about is over
+    // either way. What is at stake is the next one, and the login that opens
+    // it runs this again.
+    DV_LOG_WARN("The request to end the session of {} could not be cleared: {}",
+                user_label(user_id), failure->message);
+    return true;
+  }
+  DV_LOG_INFO("Discarded the request to end the session of {}: {}", user_label(user_id), why);
+  return true;
 }
 
 models::User* Hub::authenticated(std::vector<Outgoing>& out, Connection& connection) {
@@ -1035,9 +1106,13 @@ void Hub::handle_send_notice(std::vector<Outgoing>& out, Connection& connection,
   // which is allowed and is a reasonable way to leave oneself a note. Two
   // copies of one row would be two boxes to dismiss and only one of them
   // acknowledgeable.
+  // Through `hand_over_notice`, which is what tells the heartbeat's pass not
+  // to hand it over a second time five seconds from now.
   const std::optional<ConnectionId> target_connection = connection_of_user(notice.user_id);
   if (target_connection.has_value()) {
-    out.push_back(Outgoing{.connection = *target_connection, .message = delivered});
+    if (Connection* recipient = find_connection(*target_connection)) {
+      (void)hand_over_notice(out, *recipient, notice);
+    }
   }
   if (target_connection != connection.id) {
     out.push_back(Outgoing{.connection = connection.id, .message = delivered});
@@ -1178,6 +1253,7 @@ std::vector<Outgoing> Hub::tick(Clock::time_point now, std::vector<ConnectionId>
   // and would be looked up for nothing. That is a lookup, not a bug, and it
   // costs less than the alternative of walking the map twice.
   apply_restrictions_written_elsewhere(out);
+  deliver_notices_written_elsewhere(out);
   return out;
 }
 
@@ -1241,6 +1317,26 @@ void Hub::apply_restrictions_written_elsewhere(std::vector<Outgoing>& out) {
     const std::string label = user_label(user_id);
     DV_LOG_INFO("Account {} was removed outside this server, ending the session it held", label);
     end_session_of(out, user_id, "the account was removed");
+  }
+
+  // An operator asking, from the terminal, for somebody to be signed out.
+  //
+  // The same call a ban makes and nothing else: the account is left exactly
+  // as it is, and the person may sign in again the moment they like. That is
+  // the whole difference between this and `banned`, and it is why the request
+  // is spent here rather than left on the account - a mark that stayed would
+  // end the next session as well, and "until an administrator says
+  // otherwise" is what a ban is for.
+  for (const std::string& user_id : found.session_end_requested) {
+    // A ban found on the same pass has already done this. Ending twice would
+    // be harmless, but the log line would say something happened when it did
+    // not.
+    if (connection_of_user(user_id).has_value()) {
+      DV_LOG_INFO("An operator asked outside this server for the session of {} to end",
+                  user_label(user_id));
+      end_session_of(out, user_id, "the session was ended by an administrator");
+    }
+    (void)discard_session_end_request(user_id, "the session it was about has been ended");
   }
 }
 
@@ -1492,6 +1588,7 @@ void Hub::end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
       state->user.reset();
       state->room_id.reset();
       state->username.clear();
+      state->delivered_notice_ids.clear();
     }
     user_to_connection_.erase(user_id);
   }

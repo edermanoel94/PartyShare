@@ -79,8 +79,36 @@ class HubNoticeTest : public ::testing::Test {
     return found.empty() ? std::nullopt : std::optional<T>{found.front()};
   }
 
+  /// Notices to anybody at all, for the tests that say nobody was given one.
+  static std::size_t count_notices(const std::vector<Outgoing>& out) {
+    std::size_t total = 0;
+    for (const Outgoing& outgoing : out) {
+      if (std::holds_alternative<proto::Notice>(outgoing.message)) {
+        ++total;
+      }
+    }
+    return total;
+  }
+
   /// What the audit log holds, newest first, as it is read back.
   [[nodiscard]] std::vector<dv::models::AuditEntry> entries() const { return audit_.list(0, {}); }
+
+  /// One turn of the loop the server runs on its own. The only thing that
+  /// happens to a Hub nobody is talking to, and therefore the only way a
+  /// notice written by another program can reach somebody already here.
+  std::vector<Outgoing> tick() {
+    std::vector<ConnectionId> timed_out;
+    return hub_.tick(now_, timed_out);
+  }
+
+  /// What tools/dbadmin does: the document, and no message. No sender, for
+  /// the reason a restriction written the same way names nobody - a shell is
+  /// not an account.
+  dv::models::Notice write_behind_the_back(const std::string& user_id, const std::string& text) {
+    auto written = notices_.append(dv::models::Notice{.user_id = user_id, .text = text});
+    EXPECT_TRUE(written.ok()) << written.error().message;
+    return written.ok() ? std::move(written).take() : dv::models::Notice{};
+  }
 
   dv::server::store::MemoryNoticeStore notices_;
   dv::server::store::MemoryAuditLog audit_;
@@ -199,6 +227,93 @@ TEST_F(HubNoticeTest, AnAdministratorMayWriteToThemselvesAndIsToldOnce) {
   // One copy and not two: the delivery and the confirmation are the same
   // message going to the same place.
   EXPECT_EQ(all<proto::Notice>(out, admin_connection).size(), 1U);
+}
+
+// --- delivery on the heartbeat, for the writer that cannot send ---------------
+
+TEST_F(HubNoticeTest, OneWrittenElsewhereReachesSomebodyAlreadySignedIn) {
+  const auto [user_connection, user] = login("bruno", Role::User);
+
+  const dv::models::Notice written = write_behind_the_back(user.id, "please use a headset");
+  const auto out = tick();
+
+  const auto delivered = all<proto::Notice>(out, user_connection);
+  ASSERT_EQ(delivered.size(), 1U);
+  EXPECT_EQ(delivered.front().notice.id, written.id);
+  EXPECT_EQ(delivered.front().notice.text, "please use a headset");
+  // Exactly what was written, sender included: the client already says "an
+  // administrator" for an empty name, so nothing is invented here.
+  EXPECT_TRUE(delivered.front().notice.from_user_id.empty());
+  EXPECT_TRUE(delivered.front().notice.from_display_name.empty());
+
+  // Nothing recorded on this side. Whoever wrote it wrote the entry, and the
+  // moment this server noticed is not a fact anybody is looking for.
+  EXPECT_TRUE(entries().empty());
+}
+
+TEST_F(HubNoticeTest, OneDeliveredOnAHeartbeatIsNotDeliveredAgainOnTheNext) {
+  const auto [user_connection, user] = login("bruno", Role::User);
+  (void)write_behind_the_back(user.id, "read this");
+  ASSERT_EQ(all<proto::Notice>(tick(), user_connection).size(), 1U);
+
+  // Still pending: nobody has acknowledged it. A pass that handed over
+  // whatever is pending would be a box on the screen every five seconds.
+  ASSERT_EQ(notices_.pending_for(user.id).size(), 1U);
+  for (int pass = 0; pass < 3; ++pass) {
+    EXPECT_TRUE(all<proto::Notice>(tick(), user_connection).empty()) << "pass " << pass;
+  }
+}
+
+TEST_F(HubNoticeTest, OneTheServerDeliveredItselfIsNotRepeatedByTheHeartbeat) {
+  const auto [admin_connection, admin] = login("ana", Role::Admin);
+  const auto [user_connection, user] = login("bruno", Role::User);
+
+  const auto sent = send(admin_connection, proto::SendNotice{user.id, "the meeting moved"});
+  ASSERT_EQ(all<proto::Notice>(sent, user_connection).size(), 1U);
+
+  const auto out = tick();
+  EXPECT_TRUE(all<proto::Notice>(out, user_connection).empty());
+  EXPECT_TRUE(all<proto::Notice>(out, admin_connection).empty());
+}
+
+TEST_F(HubNoticeTest, OneHandedOverAtSignInIsNotRepeatedByTheHeartbeat) {
+  const auto [first_connection, user] = login("bruno", Role::User);
+  (void)hub_.on_disconnect(first_connection, now_);
+  (void)write_behind_the_back(user.id, "while you were out");
+
+  const auto [second_connection, again] = sign_in("bruno");
+  ASSERT_EQ(again.id, user.id);
+  const auto out = tick();
+  EXPECT_TRUE(all<proto::Notice>(out, second_connection).empty());
+}
+
+TEST_F(HubNoticeTest, ANewSignInIsOwedWhatTheLastOneWasShown) {
+  const auto [first_connection, user] = login("bruno", Role::User);
+  (void)write_behind_the_back(user.id, "read this");
+  ASSERT_EQ(all<proto::Notice>(tick(), first_connection).size(), 1U);
+
+  // Shown and not answered, then gone. The next session is handed it again
+  // at sign-in, as it is handed everything pending - what the last
+  // connection remembered about deliveries went with that connection.
+  (void)hub_.on_disconnect(first_connection, now_);
+  const ConnectionId second_connection = connect();
+  const auto out = send(second_connection, proto::Authenticate{"bruno", "password"});
+  EXPECT_EQ(all<proto::Notice>(out, second_connection).size(), 1U);
+}
+
+TEST_F(HubNoticeTest, OneWrittenElsewhereForSomebodyAwayWaitsForTheirSignIn) {
+  const auto [admin_connection, admin] = login("ana", Role::Admin);
+  const auto [first_connection, user] = login("bruno", Role::User);
+  (void)hub_.on_disconnect(first_connection, now_);
+
+  (void)write_behind_the_back(user.id, "while you were out");
+  // Nobody to give it to, and nobody else is given it.
+  EXPECT_EQ(count_notices(tick()), 0U);
+
+  const ConnectionId second_connection = connect();
+  const auto out = send(second_connection, proto::Authenticate{"bruno", "password"});
+  ASSERT_EQ(all<proto::Notice>(out, second_connection).size(), 1U);
+  EXPECT_EQ(all<proto::Notice>(out, second_connection).front().notice.text, "while you were out");
 }
 
 // --- delivery to somebody who was not there ----------------------------------

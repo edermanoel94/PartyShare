@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <dv/models/audit.hpp>
@@ -173,6 +174,17 @@ class Hub {
     /// exact: the row this connection opened is closed, and not "the open row
     /// for this account", which after a second login would be somebody else's.
     std::string session_id;
+    /// The notices this connection has already been handed, by identifier.
+    ///
+    /// What keeps the heartbeat from handing them over again. A notice stays
+    /// pending in the store until the person acknowledges it, and the pass in
+    /// `deliver_notices_written_elsewhere` asks the store for exactly that
+    /// set every interval; without this, somebody with a box on their screen
+    /// would be given the same box every five seconds until they clicked.
+    /// Cleared with the identity, because a session that ends and starts
+    /// again is owed everything still pending, which is what the login hands
+    /// over.
+    std::unordered_set<std::string> delivered_notice_ids;
     Clock::time_point last_seen;
     Clock::time_point last_ping;
   };
@@ -303,12 +315,42 @@ class Hub {
 
   /// Hands a connection whatever its account has not answered yet.
   ///
-  /// Called at the end of a successful login and nowhere else. A notice
-  /// written while somebody was away has no other moment to arrive in, and a
-  /// notice they were shown and did not acknowledge arrives again next time,
-  /// which is the whole reason the store keeps a timestamp rather than
-  /// deleting the row.
-  void deliver_pending_notices(std::vector<Outgoing>& out, const Connection& connection);
+  /// Called at the end of a successful login. A notice written while somebody
+  /// was away has no other moment to arrive in, and a notice they were shown
+  /// and did not acknowledge arrives again next time, which is the whole
+  /// reason the store keeps a timestamp rather than deleting the row.
+  void deliver_pending_notices(std::vector<Outgoing>& out, Connection& connection);
+
+  /// Hands every connected account the notices written to it since it was
+  /// last looked at.
+  ///
+  /// The other writer again: tools/dbadmin appends to the notices collection
+  /// with no server to hand the notice to, and `handle_send_notice` is never
+  /// called for it. Run from `tick`, once per heartbeat, for the same reason
+  /// and at the same cost as `apply_restrictions_written_elsewhere`: one
+  /// store lookup per connected participant per interval. What each
+  /// connection has already been given is remembered on it, so a notice
+  /// arrives once and not once per heartbeat until it is acknowledged.
+  void deliver_notices_written_elsewhere(std::vector<Outgoing>& out);
+
+  /// Gives one connection one notice, unless it already has it.
+  ///
+  /// The single place a notice is handed to its recipient, so that the three
+  /// moments it can happen - the login, an administrator sending it now, and
+  /// the heartbeat finding one written elsewhere - cannot disagree about what
+  /// "already delivered" means. Returns whether anything was sent.
+  static bool hand_over_notice(std::vector<Outgoing>& out, Connection& connection,
+                               const models::Notice& notice);
+
+  /// Zeroes `Account::session_end_requested_at` for one account, and says
+  /// whether there was one to zero.
+  ///
+  /// Two callers: the heartbeat, which has just ended the session the
+  /// request was about, and the login, which is arriving after it. In both
+  /// the request has been answered, and a request left standing would end
+  /// the next session too. `why` goes in the log line, because the two are
+  /// different facts about what happened.
+  bool discard_session_end_request(const std::string& user_id, std::string_view why);
 
   /// Records that this connection's account is present, and from where.
   ///
@@ -375,8 +417,12 @@ class Hub {
   /// into the database hold for the account's *next* message, which is what
   /// tools/dbadmin's README promises; this is what makes it hold for the
   /// microphone that is already on, the share that is already running and the
-  /// session that is already open, which is what that README says it does not
-  /// do.
+  /// session that is already open.
+  ///
+  /// The same pass answers the two other things that tool can only say by
+  /// writing: an account it deleted loses the session it was holding, and an
+  /// account it marked with `session_end_requested_at` is signed out, as a
+  /// ban would sign it out, without the ban.
   ///
   /// Run from `tick`, so the loop the server already turns is the only thing
   /// driving it, and no second thread reaches a UserStore that is documented

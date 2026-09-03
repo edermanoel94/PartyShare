@@ -25,7 +25,7 @@ and that collection is written for this reader and for nobody else.
   bruno                Bruno Lima            user     mic chat      aa11bb22cc33…   2026-08-20 09:40
 
  12 accounts · 2 administrators
- ↑↓ move · enter details · n new · e edit · p password · m restrictions · d delete · / filter
+ ↑↓ move · enter details · n new · e edit · p password · m restrictions · s notice · d delete
 ```
 
 ```text
@@ -39,7 +39,7 @@ and that collection is written for this reader and for nobody else.
   carla                ended     198.51.100.4      2026-09-01 18:22:10   2026-09-01 16:40:55
 
  1 account online · reading the newest 200 of 1482 sessions
- ↑↓ move · enter details · l read more · / filter · r refresh · tab next screen · q quit
+ ↑↓ move · enter details · k end session · l read more · / filter · r refresh · tab next screen
 ```
 
 ## Running
@@ -84,6 +84,7 @@ A terminal program that clears the screen and then says it cannot reach the data
 | `e` | edit the username, display name, avatar and role |
 | `p` | set a password |
 | `m` | restrictions: what the account may no longer do |
+| `s` | send the account a notice |
 | `d` | delete, after a confirmation |
 | `/` | filter by username, display name or identifier |
 | `r` | read everything again |
@@ -110,14 +111,15 @@ A room whose owner has been deleted shows the identifier instead of a blank, bec
 This is the screen for "is Bruno online", "which address was he on", and "when
 was he last here at all". The server writes one document per sign-in and
 refreshes it on its heartbeat; nothing in this program writes to that collection
-and nothing ever will, which is the same reason there is no key here that
-changes anything. A presence history an administrator can edit is not evidence
-of anything.
+and nothing ever will. A presence history an administrator can edit is not
+evidence of anything. The one key here that changes something, `k`, writes to
+the account and not to the row: see below.
 
 | Key | |
 | --- | --- |
 | `↑` `↓` | move |
 | `enter` | the session as a card, with the identifier in full |
+| `k` | end the session, after a confirmation |
 | `l` | read more: 200, 500, 1000, 2000 |
 | `/` | filter by account, address or state |
 | `r` | read everything again |
@@ -155,6 +157,18 @@ The users screen carries the same answer for one account, on the card behind
 that does not come from the account document, and it is there because it is what
 somebody looking at an account most often wants next.
 
+`k` asks a running server to sign the person out. It is offered only on a row
+that is online: a stale row's server is dead and an ended row's session is
+over, and both are refused on the spot with a sentence saying so. What it
+writes is one field on the account, `session_end_requested_at`, and the server
+reads it on the same heartbeat pass that finds a restriction written here:
+within five seconds by default the person is out of their room, their tokens
+are revoked, everybody in the room is told, and the field is zeroed. Nothing is
+taken from the account and they may sign in again at once - a ban is the lasting
+form, and that is the `m` form on the users screen. A request written while
+nobody was signed in is discarded by their next login, so an operator who was a
+heartbeat out of date cannot end a session nobody asked about.
+
 **Audit** lists what administrators did, newest first.
 
 | Key | |
@@ -181,7 +195,17 @@ A session is one document of the `sessions` collection: `user_id`, `ip`, `connec
 Nothing here writes one either, and unlike the rooms this program does not remove them: the collection is what the server saw, and the only thing to be done with it is read it.
 It grows one row per connection and nothing prunes it, as nothing prunes the chat or the audit log — how much history to keep is an operator's policy, and a deployment that wants a year and not five will want a `deleteMany({ended_at: {$lt: …}})` in whatever already runs its backups.
 
-Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user`, `restrict_user` and `delete_room`, with the detail naming what actually moved.
+Ending a session writes `session_end_requested_at` on the account, the one field of that document this program writes and the server only reads.
+The server zeroes it when it has acted, so the field is normally gone within a heartbeat; one still there is one no server has seen, and the account card says so.
+
+A notice is one document of the `notices` collection, with the fields `server/src/store/mongo_store.cpp` reads: `user_id`, `from_user_id`, `from_display_name`, `text`, `created_at` and `acknowledged_at`.
+The two sender fields are written empty.
+A shell is not an account, so there is no identifier to put there, and the client already says "an administrator" for an empty name - exactly what it says for a restriction written from here.
+The text is trimmed and has to fit in 500 bytes, which is the server's own limit; a longer one is refused rather than cut.
+The server assigns nothing to it afterwards: the object identifier MongoDB gives the document is what the person acknowledges by, the same as for a notice the server wrote itself.
+
+Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user`, `restrict_user`, `delete_room`, `send_notice` and `end_session`, with the detail naming what actually moved.
+`end_session` is the one the server never writes for itself: from the panel, signing somebody out is a `kick` from a room or a ban, and a program with no room to name needed a third word.
 A `delete_room` entry carries the room in both `target_id` and `room_id`, which is what the server writes for its own: an entry the two programs disagree on is one somebody has to know the origin of before they can read it.
 When the change succeeds and the entry cannot be written, the change stands and the status line says so in the colour of a warning rather than a success.
 Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/13-security.md](../../docs/13-security.md) already states for the server.
@@ -238,25 +262,23 @@ Deleting the document means the room does not come back at the next start; it do
 The confirmation screen says so.
 With the server up, close it from the client's admin panel instead, where all of it takes effect at once.
 
-It does not kick anybody out of a room, and it does not force-mute one participant of one room.
-Both are about a room, and a room is memory in a process this program has no connection to.
-Banning and muting an *account* is the lasting half of the same thing, and that is what the restrictions above are — those a running server does pick up and act on, microphone included, within a heartbeat.
+It does not kick anybody out of one room, and it does not force-mute one participant of one room.
+Both name a room, and a room is memory in a process this program has no connection to.
+What it can say is the account-sized version of each: banning and muting an *account* are the restrictions above, and signing an account out is the `k` key on the sessions screen - all three written as documents, and all three picked up by a running server within a heartbeat.
 
-It does not send anybody a notice.
-That one is not about a room, so the argument above does not cover it, and it is worth saying why separately.
-A notice has to reach whoever is connected at the moment it is written, and it has to have an identifier from that moment so the person can acknowledge it — the server does both in one step, and a document written here would be a message nobody was handed and a receipt nobody could send.
-Restrictions work from here precisely because they need neither: a flag on an account is true whether or not anybody was told.
-With the server up, send it from the client's admin panel, where the recipient gets it at once and the audit log records both halves.
-
-It does not close a session, and there is no key here that tries.
+It does not close a session row, and there is no key here that tries.
 A row in that collection is what the server saw, and an operator who could edit it could edit away the evidence of who was on the platform.
-A session that is open and stale is closed by the next server to start against the database, which is the one program entitled to say the connection is over.
+Ending a session is a mark on the account that the server answers by closing the row itself, which keeps the collection the server's alone; a session that is open and stale is closed by the next server to start against the database, which is the one program entitled to say the connection is over.
+
+It does not confirm that a notice arrived.
+A notice sent from the panel comes back to the administrator with the row the store assigned, because the server handed it over and can say so.
+One written here is handed over by a server this program is not talking to - within a heartbeat if the person is connected, at their next sign-in if not - so the status line says "sent" and not "delivered", and the acknowledgement, when it comes, is in the audit log as `acknowledge_notice` like any other.
 
 It does not decide *when* a running server acts, only that it eventually does.
-Removing an account and banning one both reach a live server on its next pass rather than at the moment the form is submitted, so there is up to a heartbeat interval — five seconds by default — between the write and the room emptying.
+Removing an account, banning one, signing one out and sending one a notice all reach a live server on its next pass rather than at the moment the form is submitted, so there is up to a heartbeat interval - five seconds by default - between the write and the room emptying or the box appearing.
 The confirmation screen says so.
 There is no version of this that is instant: this program's whole contract is that it works with no server to talk to.
-With the server up, remove or restrict the account from the client panel instead, where all of it takes effect at once.
+With the server up, the client's admin panel does all of it at once.
 
 ## Tests
 

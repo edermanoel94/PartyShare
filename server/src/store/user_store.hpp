@@ -26,6 +26,22 @@ struct Account {
   /// the caller leaves it at zero, which is what keeps the wall clock out of
   /// the Hub and lets a test pin it.
   std::int64_t created_at = 0;
+  /// When an operator asked for whatever session this account is holding to
+  /// be ended, and zero while nobody has.
+  ///
+  /// The one field of the account that is written by tools/dbadmin and read
+  /// by the server, and never the other way round. dbadmin has no connection
+  /// to a running server, so "end this person's session" cannot be a message;
+  /// it is a mark on the account, and the Hub finds it on the same pass that
+  /// finds a restriction written the same way. A request is consumed by the
+  /// server that acts on it and discarded by a login that arrives after it,
+  /// because a request written before somebody signed in was about a session
+  /// that has already ended on its own.
+  ///
+  /// Here and not in `Restrictions`, because it is not one. A restriction is
+  /// a lasting statement about the account that every session inherits; this
+  /// is an instruction about one session, spent the moment it is followed.
+  std::int64_t session_end_requested_at = 0;
 };
 
 /// Where accounts live.

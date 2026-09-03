@@ -306,3 +306,112 @@ func TestTheDocumentTheFormWritesIsTheServersDocument(t *testing.T) {
 			document["display_name"])
 	}
 }
+
+// A notice typed on the screen has to land as the document the server's
+// notice_from reads, or it is a message nobody is ever handed. Sender fields
+// present and empty, because the server reads them and the client says "an
+// administrator" for an empty one.
+func TestANoticeTypedOnTheScreenIsTheServersDocument(t *testing.T) {
+	database, screen := open(t)
+
+	created, err := database.CreateAccount(context.Background(), store.NewAccount{
+		Username: "bruno", Password: "one",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	screen.press("r")
+	screen.awaits(t, "bruno")
+
+	screen.press("s")
+	screen.awaits(t, "Notice to bruno")
+	screen.model.Type("please use a headset")
+	screen.press("enter")
+	screen.awaits(t, `A notice was sent to "bruno"`)
+
+	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv(uriVariable)))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+
+	var document bson.M
+	err = client.Database(database.Database()).Collection("notices").
+		FindOne(context.Background(), bson.D{}).Decode(&document)
+	if err != nil {
+		t.Fatalf("could not read the notice: %v", err)
+	}
+	for field, want := range map[string]any{
+		"user_id": created.UserID, "from_user_id": "", "from_display_name": "",
+		"text": "please use a headset", "acknowledged_at": int64(0),
+	} {
+		if document[field] != want {
+			t.Errorf("%s is %#v, want %#v", field, document[field], want)
+		}
+	}
+	if _, ok := document["created_at"].(int64); !ok {
+		t.Errorf("created_at is %#v, want an int64", document["created_at"])
+	}
+
+	// And the log says who, from the keyboard and not from an account.
+	screen.press("4")
+	screen.awaits(t, "send_notice")
+	screen.awaits(t, "e2e (dbadmin)")
+}
+
+// The k key writes to the account and never to the session row, and only
+// when the row it is pressed on is somebody a running server is holding.
+func TestEndingASessionFromTheScreenMarksTheAccount(t *testing.T) {
+	database, screen := open(t)
+
+	created, err := database.CreateAccount(context.Background(), store.NewAccount{
+		Username: "bruno", Password: "one",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv(uriVariable)))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+	sessions := client.Database(database.Database()).Collection("sessions")
+	now := time.Now().Unix()
+	// The row the server writes for somebody who is here right now.
+	if _, err := sessions.InsertOne(context.Background(), bson.D{
+		{Key: "user_id", Value: created.UserID}, {Key: "ip", Value: "203.0.113.8"},
+		{Key: "connected_at", Value: now - 600}, {Key: "last_seen_at", Value: now - 1},
+		{Key: "ended_at", Value: int64(0)},
+	}); err != nil {
+		t.Fatalf("could not write the session: %v", err)
+	}
+
+	screen.press("r")
+	screen.press("3")
+	screen.awaits(t, "203.0.113.8")
+	screen.press("k")
+	screen.awaits(t, "End the session of bruno?")
+	screen.press("y")
+	screen.awaits(t, `The session of "bruno" ends within a heartbeat`)
+
+	var account bson.M
+	err = client.Database(database.Database()).Collection("users").
+		FindOne(context.Background(), bson.D{{Key: "user_id", Value: created.UserID}}).
+		Decode(&account)
+	if err != nil {
+		t.Fatalf("could not read the account: %v", err)
+	}
+	if requested, ok := account["session_end_requested_at"].(int64); !ok || requested < now {
+		t.Errorf("session_end_requested_at is %#v, want an int64 stamped now",
+			account["session_end_requested_at"])
+	}
+
+	var row bson.M
+	if err := sessions.FindOne(context.Background(), bson.D{}).Decode(&row); err != nil {
+		t.Fatalf("could not read the session back: %v", err)
+	}
+	if row["ended_at"] != int64(0) || row["last_seen_at"] != now-1 {
+		t.Errorf("the session row was written: %v", row)
+	}
+}

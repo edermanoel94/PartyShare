@@ -27,6 +27,11 @@ var (
 
 	// ErrRoomNotFound is a room identifier nothing in the collection matches.
 	ErrRoomNotFound = errors.New("no room with that identifier")
+	// ErrNotConnected is an account with no session a running server is
+	// holding: nothing open, or open and not heard from for longer than a
+	// heartbeat allows. There is nobody to sign out, and a request written
+	// anyway would only be discarded at their next login.
+	ErrNotConnected = errors.New("the account is not connected, so there is no session to end")
 	// ErrEmptyCredentials matches the server's own refusal.
 	ErrEmptyCredentials = errors.New("username and password must not be empty")
 	// ErrAuditNotWritten wraps the result of an action that happened and was
@@ -94,7 +99,8 @@ type Config struct {
 	Actor Actor
 }
 
-// Store is the users, rooms and audit collections of one PartyShare database.
+// Store is the users, rooms, sessions, notices and audit collections of one
+// PartyShare database.
 //
 // The rooms collection used to be deliberately left out, on the grounds that a
 // room was something the server made and destroyed while people were inside
@@ -111,6 +117,7 @@ type Store struct {
 	users    *mongo.Collection
 	rooms    *mongo.Collection
 	sessions *mongo.Collection
+	notices  *mongo.Collection
 	audit    *mongo.Collection
 	actor    Actor
 	timeout  time.Duration
@@ -155,6 +162,7 @@ func Open(ctx context.Context, config Config) (*Store, error) {
 		users:    database.Collection("users"),
 		rooms:    database.Collection("rooms"),
 		sessions: database.Collection("sessions"),
+		notices:  database.Collection("notices"),
 		audit:    database.Collection("audit"),
 		actor:    config.Actor,
 		timeout:  config.Timeout,
@@ -640,6 +648,60 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) error {
 	}
 
 	return s.record(scopedContext, ActionDeleteUser, userID, "username="+account.Username)
+}
+
+// EndSession asks a running server to sign one account out, and records it.
+//
+// The request is one field on the account, `session_end_requested_at`, and
+// nothing about the session row: that collection is what the server saw and
+// stays untouched, as the README promises. The server reads the field on the
+// same heartbeat pass that finds a restriction written here, ends the session
+// it is holding for the account - out of its room, tokens revoked, everybody
+// in the room told - and zeroes the field. Nothing is taken from the account,
+// and the person may sign in again the moment they like; a ban is the lasting
+// form, and it is the restrictions form and not this.
+//
+// Refused when nobody is connected as the account. A request with no session
+// to end is not harmful - the server discards one at the next login precisely
+// so that it cannot end a session nobody asked about - but it is not an
+// action either, and the status line should say so rather than "done".
+func (s *Store) EndSession(ctx context.Context, userID string) error {
+	scopedContext, cancel := s.scoped(ctx)
+	defer cancel()
+
+	if _, err := s.findAccount(scopedContext, userID); err != nil {
+		return err
+	}
+
+	// The newest open row, measured the way the sessions screen measures it:
+	// open and heard from within SessionStaleAfter. A row a killed server
+	// left behind is open and is nobody.
+	open, err := s.findSessions(scopedContext,
+		bson.D{{Key: "user_id", Value: userID}, {Key: "ended_at", Value: 0}},
+		bson.D{{Key: "last_seen_at", Value: -1}}, 1)
+	if err != nil {
+		return err
+	}
+	if len(open) == 0 || !open[0].Online(time.Now()) {
+		return ErrNotConnected
+	}
+
+	result, err := s.users.UpdateOne(scopedContext,
+		bson.D{{Key: "user_id", Value: userID}},
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "session_end_requested_at", Value: time.Now().Unix()},
+		}}})
+	if err != nil {
+		return fmt.Errorf("could not request the session end: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return ErrUserNotFound
+	}
+
+	// The address, because it is what tells this session apart from the next
+	// one the same account opens, and it is the half of the row an operator
+	// was looking at when they decided.
+	return s.record(scopedContext, ActionEndSession, userID, "address="+open[0].IP)
 }
 
 // AuditQuery is what the audit screen asks for.

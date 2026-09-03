@@ -623,3 +623,89 @@ func TestARefusedRestrictionIsReported(t *testing.T) {
 		t.Errorf("a refused restriction reached the list:\n%s", final)
 	}
 }
+
+// --- notices -------------------------------------------------------------------
+
+func TestSendingANoticeSendsWhatTheFormHolds(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("down") // bruno
+	screen.press("s")
+	screen.awaits(t, "Notice to bruno")
+	// The form says where it comes from, because that is the one thing about
+	// a notice from a terminal that differs from one from the panel.
+	screen.awaits(t, `"an administrator"`)
+	screen.typeText("please use a headset")
+	screen.press("enter")
+
+	screen.awaits(t, `A notice was sent to "bruno"`)
+	final := screen.finish(t)
+
+	if len(database.notices) != 1 {
+		t.Fatalf("the screen sent %d notices, want 1", len(database.notices))
+	}
+	call := database.notices[0]
+	if call.userID != "id-bruno" {
+		t.Errorf("the notice names %q, want the selected account", call.userID)
+	}
+	if call.text != "please use a headset" {
+		t.Errorf("the notice arrived as %q", call.text)
+	}
+	if strings.Contains(final, "Notice to bruno") {
+		t.Errorf("the form is still open:\n%s", final)
+	}
+}
+
+func TestAnEmptyNoticeIsRefusedByTheForm(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("s")
+	screen.awaits(t, "Notice to ana")
+	screen.typeText("   ")
+	screen.press("enter")
+	screen.awaits(t, "A message is required.")
+	screen.press("esc")
+	screen.finish(t)
+
+	if len(database.notices) != 0 {
+		t.Fatalf("a blank notice was sent: %+v", database.notices)
+	}
+}
+
+func TestARefusedNoticeIsReported(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+	database.setFailure(errDatabaseUnreachable)
+
+	screen.press("s")
+	screen.awaits(t, "Notice to ana")
+	screen.typeText("hello")
+	screen.press("enter")
+	screen.awaits(t, "could not reach the database")
+	screen.finish(t)
+}
+
+// A request the server has not yet spent is worth a line on the card: it is
+// either a server that is not running, or a request older than this login
+// that the next one clears.
+func TestTheUserCardShowsAPendingSignOut(t *testing.T) {
+	t.Parallel()
+	database := twoAccounts()
+	database.accounts[1].SessionEndRequestedAt = time.Now().Unix()
+	screen := start(t, database)
+	screen.awaits(t, "Ana Souza")
+
+	screen.press("down")
+	screen.press("enter")
+	screen.awaits(t, "Sign out")
+	screen.awaits(t, "· pending")
+	screen.finish(t)
+}

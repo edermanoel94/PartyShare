@@ -49,6 +49,18 @@ func textField(label, value, placeholder, hint string) field {
 	return field{label: label, hint: hint, kind: fieldText, input: input}
 }
 
+// noticeField is a text field the size of a notice rather than of a name.
+//
+// The limit is in characters, which is what a text input counts, and the
+// server's is in bytes; the form's submit handler checks the second, so a
+// message of five hundred accented characters is refused there with a
+// sentence rather than by the server with none.
+func noticeField(label, hint string) field {
+	created := textField(label, "", "", hint)
+	created.input.CharLimit = 500
+	return created
+}
+
 func secretField(label, hint string) field {
 	input := textinput.New()
 	input.Prompt = ""

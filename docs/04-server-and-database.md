@@ -88,11 +88,11 @@ the outbound media is.
 
 | Collection | Written by |
 | --- | --- |
-| `users` | The server, and [tools/dbadmin](../tools/dbadmin/README.md) |
+| `users` | The server, and [tools/dbadmin](../tools/dbadmin/README.md). One field, `session_end_requested_at`, goes the other way: written by `dbadmin`, read and zeroed by the server |
 | `rooms` | The server only |
 | Chat | The server only, and deleted with its room |
-| Notices | The server only, and deleted with the account they were sent to |
-| Sessions | The server only. Read by `dbadmin`, written by nothing else |
+| Notices | The server, and `dbadmin`, and deleted with the account they were sent to. Only the server ever acknowledges one |
+| Sessions | The server only. Read by `dbadmin`, written by nothing else; ending one is a mark on the account, above |
 | Audit | The server, and `dbadmin`, in the same vocabulary |
 
 The sessions collection is the one here that exists for a reader rather than for

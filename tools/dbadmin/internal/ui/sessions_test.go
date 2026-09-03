@@ -167,24 +167,119 @@ func TestAnEmptySessionsCollectionSaysWhatWritesIt(t *testing.T) {
 // a test rather than a comment: the collection records what the server saw,
 // and a presence history an administrator can edit is not evidence of
 // anything.
-func TestTheSessionsScreenChangesNothing(t *testing.T) {
+// The keys the other screens use for their writes do nothing here. The one
+// write this screen has, k, goes to the account and is covered below; the
+// session rows themselves are never written by anything in this program.
+func TestTheSessionsScreenChangesNothingButTheAccount(t *testing.T) {
 	t.Parallel()
 	database := sessionsAndAccounts()
 	screen := start(t, database)
 	screen.press("3")
 	screen.awaits(t, "203.0.113.7")
 
-	for _, key := range []string{"d", "n", "e", "p", "m", "y"} {
+	for _, key := range []string{"d", "n", "e", "p", "m", "s", "y"} {
 		screen.press(key)
 	}
 	screen.finish(t)
 
 	if len(database.deleted) != 0 || len(database.deletedRooms) != 0 ||
 		len(database.created) != 0 || len(database.updated) != 0 ||
-		len(database.restricted) != 0 || len(database.passwords) != 0 {
+		len(database.restricted) != 0 || len(database.passwords) != 0 ||
+		len(database.notices) != 0 || len(database.ended) != 0 {
 		t.Fatalf("the sessions screen wrote something: deleted %v, rooms %v, created %v, "+
-			"updated %v, restricted %v, passwords %v",
+			"updated %v, restricted %v, passwords %v, notices %v, ended %v",
 			database.deleted, database.deletedRooms, database.created,
-			database.updated, database.restricted, database.passwords)
+			database.updated, database.restricted, database.passwords,
+			database.notices, database.ended)
 	}
+}
+
+// --- ending a session ----------------------------------------------------------
+
+func TestEndingASessionAsksFirstAndMarksTheAccount(t *testing.T) {
+	t.Parallel()
+	database := sessionsAndAccounts()
+	screen := start(t, database)
+	screen.press("3")
+	screen.awaits(t, "203.0.113.7")
+
+	screen.press("k") // ana, the online row, is first
+	screen.awaits(t, "End the session of ana?")
+	// What the card promises, because it is the one thing the operator has
+	// to know before pressing y: nothing lasting happens to the account.
+	screen.awaits(t, "Nothing is taken from the account")
+	screen.press("y")
+	screen.awaits(t, `The session of "ana" ends within a heartbeat`)
+	screen.finish(t)
+
+	if len(database.ended) != 1 || database.ended[0] != "id-ana" {
+		t.Fatalf("the screen asked to end %v, want the selected account", database.ended)
+	}
+	// The request went to the account, not to the row: the fake mirrors the
+	// store, and the sessions it holds are untouched.
+	for _, session := range database.sessions {
+		if session.UserID == "id-ana" && !session.Open() {
+			t.Error("the session row was closed by the screen")
+		}
+	}
+}
+
+func TestDecliningToEndASessionWritesNothing(t *testing.T) {
+	t.Parallel()
+	database := sessionsAndAccounts()
+	screen := start(t, database)
+	screen.press("3")
+	screen.awaits(t, "203.0.113.7")
+
+	screen.press("k")
+	screen.awaits(t, "End the session of ana?")
+	screen.press("n")
+	final := screen.finish(t)
+
+	if strings.Contains(final, "End the session of") {
+		t.Errorf("the confirmation is still open:\n%s", final)
+	}
+	if len(database.ended) != 0 {
+		t.Errorf("declining still asked to end %v", database.ended)
+	}
+}
+
+// Only somebody who is here can be signed out. The two other rows are refused
+// on the spot with a sentence about that row, and nothing is written.
+func TestAStaleOrEndedSessionCannotBeEnded(t *testing.T) {
+	t.Parallel()
+	database := sessionsAndAccounts()
+	screen := start(t, database)
+	screen.press("3")
+	screen.awaits(t, "203.0.113.7")
+
+	screen.press("down") // bruno: open, and not heard from for two hours
+	screen.press("k")
+	screen.awaits(t, "not answering")
+
+	screen.press("down") // the visit that finished
+	screen.press("k")
+	screen.awaits(t, "already ended")
+	screen.finish(t)
+
+	if len(database.ended) != 0 {
+		t.Fatalf("a row nobody is holding was asked to end: %v", database.ended)
+	}
+}
+
+func TestARefusedSessionEndIsReported(t *testing.T) {
+	t.Parallel()
+	database := sessionsAndAccounts()
+	screen := start(t, database)
+	screen.press("3")
+	// After the rows are on the screen, so that the write is what fails and
+	// not the read that would have put them there.
+	screen.awaits(t, "203.0.113.7")
+	database.setFailure(errDatabaseUnreachable)
+
+	screen.press("k")
+	screen.awaits(t, "End the session of ana?")
+	screen.press("y")
+	screen.awaits(t, "could not reach the database")
+	screen.finish(t)
 }

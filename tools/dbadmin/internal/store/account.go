@@ -114,6 +114,16 @@ type Account struct {
 	// before restrictions existed, which decodes to the zero value and is
 	// exactly right: nothing taken away.
 	Restrictions Restrictions `bson:"restrictions"`
+	// When an operator asked, from here, for the session this account is
+	// holding to end, and zero while nobody has. The one field of the account
+	// this program writes and the server only reads: a running server ends
+	// the session on its next heartbeat and zeroes it, and a login that
+	// arrives after it zeroes it too, because a request written before
+	// somebody signed in was about a session that had already ended.
+	//
+	// Omitted when zero so that an account created here is the document the
+	// server's own create writes, field for field.
+	SessionEndRequestedAt int64 `bson:"session_end_requested_at,omitempty"`
 }
 
 // IsAdmin reports whether the account holds the administrator role.
@@ -139,7 +149,7 @@ type AuditEntry struct {
 	ActorUsername string `bson:"actor_username"`
 	// What was done: "kick", "force_mute", "force_unmute", "restrict_user",
 	// "create_user", "update_user", "delete_user", "delete_room",
-	// "create_room".
+	// "create_room", "send_notice", "acknowledge_notice", "end_session".
 	Action string `bson:"action"`
 	// Who or what it was done to: a user id, or a room id for room actions.
 	TargetID string `bson:"target_id"`
@@ -171,15 +181,20 @@ type Actor struct {
 	Username string
 }
 
-// The five actions this program is allowed to record. They are the server's
+// The seven actions this program is allowed to record. They are the server's
 // own names on purpose: a reader of the audit log should not have to learn a
-// second vocabulary to understand an entry written from a terminal.
+// second vocabulary to understand an entry written from a terminal. The last
+// is the one the server never writes itself - from the panel, signing
+// somebody out is a `kick` from a room or a ban, and `end_session` is the
+// third thing, which only a program with no room to name has any use for.
 const (
 	ActionCreateUser   = "create_user"
 	ActionUpdateUser   = "update_user"
 	ActionDeleteUser   = "delete_user"
 	ActionRestrictUser = "restrict_user"
 	ActionDeleteRoom   = "delete_room"
+	ActionSendNotice   = "send_notice"
+	ActionEndSession   = "end_session"
 )
 
 // Summary is the count line at the top of the screen.

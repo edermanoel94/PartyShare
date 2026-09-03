@@ -14,6 +14,12 @@ RestrictionPoll StoreRestrictionSource::poll(const std::vector<WatchedAccount>& 
       found.gone.push_back(account.user_id);
       continue;
     }
+    if (stored->session_end_requested_at != 0) {
+      // Reported whatever else moved: an operator who banned somebody and
+      // asked for their session to end in the same minute wants both, and the
+      // Hub is what makes the second harmless after the first.
+      found.session_end_requested.push_back(account.user_id);
+    }
     if (stored->user.restrictions == account.known) {
       continue;
     }

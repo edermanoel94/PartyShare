@@ -45,6 +45,17 @@ type fakeDatabase struct {
 	// The limits the sessions screen asked for, so that a test can say the l
 	// key changed the query rather than only the help line.
 	sessionLimits []int
+	// The accounts the sessions screen asked to sign out, and the notices the
+	// users screen sent, each kept whole so that a test can say what was
+	// written rather than that something was.
+	ended   []string
+	notices []noticeCall
+}
+
+// noticeCall is one SendNotice as the screen made it.
+type noticeCall struct {
+	userID string
+	text   string
 }
 
 // restrictionCall is one SetRestrictions, kept whole so that a test can say
@@ -53,6 +64,14 @@ type fakeDatabase struct {
 type restrictionCall struct {
 	userID       string
 	restrictions store.Restrictions
+}
+
+// setFailure is how a test makes the next change fail once the screen is
+// already up. Under the lock, because the reads the screen started at launch
+// are still running on their own goroutines and look at the same field.
+func (f *fakeDatabase) setFailure(err error) {
+	defer f.lock()()
+	f.failure = err
 }
 
 func (f *fakeDatabase) Database() string   { return "partyshare_test" }
@@ -224,6 +243,34 @@ func (f *fakeDatabase) DeleteAccount(_ context.Context, userID string) error {
 	}
 	f.accounts = kept
 	f.append(store.ActionDeleteUser, userID, "username=gone")
+	return nil
+}
+
+func (f *fakeDatabase) SendNotice(_ context.Context, userID, text string) (store.Notice, error) {
+	defer f.lock()()
+	f.notices = append(f.notices, noticeCall{userID: userID, text: text})
+	if f.failure != nil {
+		return store.Notice{}, f.failure
+	}
+	notice := store.Notice{
+		ID: "notice-" + userID, UserID: userID, Text: text, CreatedAt: time.Now().Unix(),
+	}
+	f.append(store.ActionSendNotice, userID, "notice="+notice.ID+" "+text)
+	return notice, nil
+}
+
+func (f *fakeDatabase) EndSession(_ context.Context, userID string) error {
+	defer f.lock()()
+	f.ended = append(f.ended, userID)
+	if f.failure != nil {
+		return f.failure
+	}
+	for i, account := range f.accounts {
+		if account.UserID == userID {
+			f.accounts[i].SessionEndRequestedAt = time.Now().Unix()
+		}
+	}
+	f.append(store.ActionEndSession, userID, "address=203.0.113.7")
 	return nil
 }
 

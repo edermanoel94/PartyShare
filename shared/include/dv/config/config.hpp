@@ -70,6 +70,12 @@ struct AudioConfig {
   int frame_duration_ms = 20;
   bool echo_cancellation = true;
   bool noise_suppression = true;
+  /// How hard the suppressor bites: `low`, `moderate`, `high` or `very_high`,
+  /// which take 6, 12, 18 and 21 dB off the noise. `high` is what Chrome
+  /// ships and what this client always used, so it stays the default until
+  /// somebody has listened to `moderate`, which spares consonants and
+  /// instruments. See docs/16-audio-plan.md, step 5.
+  std::string noise_suppression_level = "high";
   bool automatic_gain_control = true;
   /// Empty means the system default device.
   std::string input_device;

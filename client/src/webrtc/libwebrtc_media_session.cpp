@@ -111,20 +111,49 @@ class Engine {
     return audio_processing_->GetConfig();
   }
 
-  /// Moves the three audio processing switches, now, for every session in the
-  /// process.
-  ///
-  /// Both halves matter. The remembered flags are what the next session's
-  /// AudioOptions are built from, so a call started after this agrees with it;
-  /// ApplyConfig is what makes the call already running agree with it too.
-  /// Doing only the first is a setting that takes effect when you next join a
-  /// room, and this dialog promises otherwise.
-  void set_audio_processing(bool echo_cancellation, bool noise_suppression,
-                            bool automatic_gain_control) {
-    echo_cancellation_.store(echo_cancellation);
-    noise_suppression_.store(noise_suppression);
-    automatic_gain_control_.store(automatic_gain_control);
+  /// The four levels, in the module's own enumeration and back.
+  [[nodiscard]] static webrtc::AudioProcessing::Config::NoiseSuppression::Level to_webrtc(
+      NoiseSuppressionLevel level) noexcept {
+    using Level = webrtc::AudioProcessing::Config::NoiseSuppression::Level;
+    switch (level) {
+      case NoiseSuppressionLevel::Low:
+        return Level::kLow;
+      case NoiseSuppressionLevel::Moderate:
+        return Level::kModerate;
+      case NoiseSuppressionLevel::High:
+        return Level::kHigh;
+      case NoiseSuppressionLevel::VeryHigh:
+        return Level::kVeryHigh;
+    }
+    return Level::kHigh;
+  }
+  [[nodiscard]] static NoiseSuppressionLevel from_webrtc(
+      webrtc::AudioProcessing::Config::NoiseSuppression::Level level) noexcept {
+    using Level = webrtc::AudioProcessing::Config::NoiseSuppression::Level;
+    switch (level) {
+      case Level::kLow:
+        return NoiseSuppressionLevel::Low;
+      case Level::kModerate:
+        return NoiseSuppressionLevel::Moderate;
+      case Level::kHigh:
+        return NoiseSuppressionLevel::High;
+      case Level::kVeryHigh:
+        return NoiseSuppressionLevel::VeryHigh;
+    }
+    return NoiseSuppressionLevel::High;
+  }
 
+  /// Moves the three audio processing switches, and the suppressor's level,
+  /// now, for every session in the process.
+  ///
+  /// The module is the only place these live. Nothing here remembers them,
+  /// because nothing else reads them: every session is built through this,
+  /// from CallSession's copy of the options, which the settings dialog keeps
+  /// current - so the module always carries the newest answer, and a session
+  /// started later cannot reinstate what the file said an hour ago.
+  void set_audio_processing(bool echo_cancellation, bool noise_suppression,
+                            bool automatic_gain_control,
+                            NoiseSuppressionLevel noise_suppression_level) {
     if (audio_processing_ == nullptr) {
       return;
     }
@@ -136,6 +165,7 @@ class Engine {
     webrtc::AudioProcessing::Config config = audio_processing_->GetConfig();
     config.echo_canceller.enabled = echo_cancellation;
     config.noise_suppression.enabled = noise_suppression;
+    config.noise_suppression.level = to_webrtc(noise_suppression_level);
     // The first gain controller is switched off here and not only in the
     // constructor, because the voice engine switches it on behind our back:
     // its Init applies a default set of options with auto_gain_control on
@@ -198,11 +228,15 @@ class Engine {
   /// (webrtc_voice_engine.cc, ApplyOptions), which is the one this engine
   /// retired. The second is only reachable through ApplyConfig, and
   /// set_audio_processing is the hand on it.
-  [[nodiscard]] webrtc::AudioOptions audio_options() const {
-    webrtc::AudioOptions options;
-    options.noise_suppression = noise_suppression_.load();
-    return options;
-  }
+  ///
+  /// Noise suppression is left unset since the level became a setting. A set
+  /// value makes ApplyOptions force the level to high every time it runs
+  /// (webrtc_voice_engine.cc, ApplyOptions), which is at engine start and
+  /// whenever a send stream takes its options, and the level chosen in the
+  /// dialog would be gone by the next call.
+  ///
+  /// So nothing is set, and every switch goes through set_audio_processing.
+  [[nodiscard]] static webrtc::AudioOptions audio_options() { return webrtc::AudioOptions{}; }
 
   /// One microphone source for the whole process, created on first use.
   ///
@@ -414,12 +448,13 @@ class Engine {
     // tuning below lives: the high pass filter, the width of the pipeline and
     // the rate it runs at.
     //
-    // Whether each block is on stays with AudioOptions, which the media engine
-    // folds into this config for every session, so a user turning noise
-    // suppression off still turns it off. Note that the module belongs to the
-    // factory rather than to a peer connection: sessions in the same process
-    // share it, and the last options applied win. A client process has one
-    // local user, so that is a distinction without a difference here.
+    // None of the switches goes through AudioOptions any more; audio_options
+    // below says what each would cost. set_audio_processing, called by every
+    // session as it is built and by the settings dialog mid-call, is the one
+    // hand on them. Note that the module belongs to the factory rather than to
+    // a peer connection: sessions in the same process share it, and the last
+    // call wins. A client process has one local user, so that is a distinction
+    // without a difference here.
     webrtc::AudioProcessing::Config processing;
     // AEC3, which is what the built-in echo canceller is when no custom
     // EchoControlFactory is injected.
@@ -521,15 +556,6 @@ class Engine {
   /// The processing module, kept so that the three switches can be moved during
   /// a call. Null in the fallback path, where nothing can be moved.
   webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing_;
-  /// What the three switches are set to right now, for the whole process.
-  ///
-  /// Authoritative, and read by every session when it builds its AudioOptions.
-  /// The alternative - each session using the options it was constructed with -
-  /// is how a setting changed in the dialog gets quietly undone by the next
-  /// call to start, applying a copy of what the file said an hour ago.
-  std::atomic<bool> echo_cancellation_{true};
-  std::atomic<bool> noise_suppression_{true};
-  std::atomic<bool> automatic_gain_control_{true};
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
   std::string failure_;
@@ -759,14 +785,14 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // CallSession, which keeps its options in step with the dialog. The last
     // one built therefore carries the newest answer, not an older one.
     engine.set_audio_processing(options.echo_cancellation, options.noise_suppression,
-                                options.automatic_gain_control);
+                                options.automatic_gain_control, options.noise_suppression_level);
     // The same round trip, for the same reason. The mixer is process wide and
     // survives every session, so the level a share goes out at has to be seeded
     // from the options the newest session was built with rather than left at
     // whatever the last one happened to leave behind.
     engine.screen_audio().set_screen_volume(options.screen_audio_volume_percent);
 
-    auto source = engine.microphone(engine.audio_options());
+    auto source = engine.microphone(Engine::audio_options());
     if (source == nullptr) {
       return Result<std::monostate>::failure("media_unavailable", "could not open an audio source");
     }
@@ -986,9 +1012,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
   }
 
   void set_audio_processing(bool echo_cancellation, bool noise_suppression,
-                            bool automatic_gain_control) override {
+                            bool automatic_gain_control,
+                            NoiseSuppressionLevel noise_suppression_level) override {
     Engine::instance().set_audio_processing(echo_cancellation, noise_suppression,
-                                            automatic_gain_control);
+                                            automatic_gain_control, noise_suppression_level);
   }
 
   Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
@@ -1340,6 +1367,8 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     if (const auto config = Engine::instance().audio_processing_config()) {
       collected.gain_control_active = config->gain_controller2.enabled;
       collected.legacy_gain_control_active = config->gain_controller1.enabled;
+      collected.noise_suppression_active = config->noise_suppression.enabled;
+      collected.noise_suppression_level = Engine::from_webrtc(config->noise_suppression.level);
     }
 
     // Round trip time is only known from the other end's receiver reports.

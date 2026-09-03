@@ -597,6 +597,24 @@ TEST(ConfigIni, ReadsWhetherTheAudioRetransmissionIsOn) {
   EXPECT_TRUE(on.value().audio.retransmission);
 }
 
+TEST(Config, TheNoiseSuppressionLevelDefaultsToWhatEveryCallHad) {
+  // High is what libwebrtc forced whenever the suppressor was on, and what
+  // Chrome ships. Moderate is the candidate; the listening test of
+  // docs/16-audio-plan.md step 5 decides, not this file.
+  EXPECT_EQ(Config{}.audio.noise_suppression_level, "high");
+}
+
+TEST(ConfigIni, ReadsTheNoiseSuppressionLevel) {
+  // The settings dialog writes this key, so a build that cannot read it back
+  // is a selector that forgets itself between runs.
+  for (const char* level : {"low", "moderate", "high", "very_high"}) {
+    const auto parsed = dv::config::parse_ini(
+        std::string("[audio]\nnoise_suppression_level = ") + level + "\n", Config{});
+    ASSERT_TRUE(parsed.ok()) << level << ": " << parsed.error().message;
+    EXPECT_EQ(parsed.value().audio.noise_suppression_level, level);
+  }
+}
+
 TEST(ConfigIni, RefusesWhatItCannotApply) {
   // Every one of these would otherwise be a line that looks applied and is not,
   // which is the failure this format exists to make impossible.
@@ -606,6 +624,7 @@ TEST(ConfigIni, RefusesWhatItCannotApply) {
       {"[video]\nfps = many\n", "a number that is not one"},
       {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
       {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
+      {"[audio]\nnoise_suppression_level = loud\n", "a suppression level that is not one"},
       {"[screen_audio]\nmodo = system\n", "a misspelled screen audio key"},
       {"[video]\nauto_bitrate = sometimes\n", "a mode that is not a boolean"},
       {"[server]\nport = 70000\n", "a port out of range"},

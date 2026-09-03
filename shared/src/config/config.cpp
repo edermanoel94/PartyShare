@@ -209,6 +209,12 @@ std::vector<std::string> split_list(std::string_view text) {
   return items;
 }
 
+/// The four steps the noise suppressor offers, spelled the way
+/// `audio.noise_suppression_level` spells them.
+bool is_noise_suppression_level(std::string_view text) {
+  return text == "low" || text == "moderate" || text == "high" || text == "very_high";
+}
+
 /// Writes one key into `config`.
 ///
 /// Returns nothing on success, and the reason otherwise. The two failures are
@@ -293,6 +299,9 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
       understood = as_bool(config.audio.echo_cancellation);
     } else if (key == "noise_suppression") {
       understood = as_bool(config.audio.noise_suppression);
+    } else if (key == "noise_suppression_level") {
+      understood =
+          is_noise_suppression_level(value) && as_text(config.audio.noise_suppression_level);
     } else if (key == "automatic_gain_control") {
       understood = as_bool(config.audio.automatic_gain_control);
     } else if (key == "input_device") {
@@ -646,6 +655,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "frame_duration_ms", base.audio.frame_duration_ms);
       read_field(audio, "echo_cancellation", base.audio.echo_cancellation);
       read_field(audio, "noise_suppression", base.audio.noise_suppression);
+      read_field(audio, "noise_suppression_level", base.audio.noise_suppression_level);
       read_field(audio, "automatic_gain_control", base.audio.automatic_gain_control);
       read_field(audio, "input_device", base.audio.input_device);
       read_field(audio, "output_device", base.audio.output_device);
@@ -815,6 +825,7 @@ void apply_environment(Config& config) {
   apply_env_int("DV_AUDIO_FRAME_DURATION_MS", config.audio.frame_duration_ms);
   apply_env_bool("DV_AUDIO_ECHO_CANCELLATION", config.audio.echo_cancellation);
   apply_env_bool("DV_AUDIO_NOISE_SUPPRESSION", config.audio.noise_suppression);
+  apply_env_string("DV_AUDIO_NOISE_SUPPRESSION_LEVEL", config.audio.noise_suppression_level);
   apply_env_bool("DV_AUDIO_AUTOMATIC_GAIN_CONTROL", config.audio.automatic_gain_control);
   apply_env_string("DV_AUDIO_INPUT_DEVICE", config.audio.input_device);
   apply_env_string("DV_AUDIO_OUTPUT_DEVICE", config.audio.output_device);
@@ -1013,6 +1024,10 @@ std::optional<Error> validate(const Config& config) {
   if (config.audio.bitrate_kbps < 6 || config.audio.bitrate_kbps > 510) {
     return invalid_value("audio.bitrate_kbps", "must be between 6 and 510");
   }
+  if (!is_noise_suppression_level(config.audio.noise_suppression_level)) {
+    return invalid_value("audio.noise_suppression_level",
+                         "must be low, moderate, high or very_high");
+  }
   if (config.screen_audio.mode != "none" && config.screen_audio.mode != "system" &&
       config.screen_audio.mode != "process") {
     return invalid_value("screen_audio.mode", "must be none, system or process");
@@ -1094,6 +1109,7 @@ std::string to_json(const Config& config) {
                        {"frame_duration_ms", config.audio.frame_duration_ms},
                        {"echo_cancellation", config.audio.echo_cancellation},
                        {"noise_suppression", config.audio.noise_suppression},
+                       {"noise_suppression_level", config.audio.noise_suppression_level},
                        {"automatic_gain_control", config.audio.automatic_gain_control},
                        {"input_device", config.audio.input_device},
                        {"output_device", config.audio.output_device}}},

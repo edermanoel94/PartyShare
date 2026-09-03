@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/edermanoel94/PartyShare/tools/dbadmin/internal/store"
 )
@@ -16,7 +19,21 @@ type sessionsMode int
 const (
 	sessionsList sessionsMode = iota
 	sessionsDetail
+	// sessionsEnd is the confirmation behind the k key: the one thing this
+	// screen can ask for, and it asks first, because the person on the other
+	// end is mid-sentence.
+	sessionsEnd
 )
+
+// errNotAnswering is the refusal for a row that is open and stale: the server
+// that held it is gone, so there is nobody to sign out. Its own sentence and
+// not the store's, because the store never sees this row - the screen has the
+// row in hand and can say what is wrong with it.
+var errNotAnswering = errors.New(
+	"this session is not answering, so no server is holding it; nobody is signed out by ending it")
+
+// errAlreadyEnded is the refusal for a row the server has closed.
+var errAlreadyEnded = errors.New("this session has already ended")
 
 // How many sessions the l key steps through, the same ladder the audit screen
 // offers and for the same reason: the first number answers "who is here" and
@@ -265,6 +282,9 @@ func (m *sessionsModel) Update(message tea.Msg) tea.Cmd {
 		}
 		return nil
 	}
+	if m.mode == sessionsEnd {
+		return m.updateEnd(key)
+	}
 
 	if m.filtering {
 		return m.updateFilter(key)
@@ -291,9 +311,62 @@ func (m *sessionsModel) Update(message tea.Msg) tea.Cmd {
 	case "l":
 		m.limit = nextLimit(sessionLimits, m.limit, store.DefaultSessionLimit)
 		return loadSessions(m.store, m.limit)
+	case "k":
+		return m.openEnd()
 	}
 
 	m.table, _ = m.table.Update(key)
+	return nil
+}
+
+// openEnd is the k key: ask for the selected session to be ended.
+//
+// Only a row that is online gets as far as the confirmation. The other two
+// states are refused on the spot with a sentence about that row, because
+// the request is about a session a running server is holding and neither of
+// them is one: a stale row's server is dead, and an ended row's session is
+// over. The store makes the same check against the database, for the second
+// terminal; this one is for the operator who can already see the state.
+func (m *sessionsModel) openEnd() tea.Cmd {
+	session, ok := m.selected()
+	if !ok {
+		return nil
+	}
+	if !session.Open() {
+		return refuse(errAlreadyEnded)
+	}
+	if !session.Online(m.now()) {
+		return refuse(errNotAnswering)
+	}
+	m.target = session
+	m.mode = sessionsEnd
+	return nil
+}
+
+// refuse is a status line for something the screen would not send, in the
+// same colour and through the same message as a refusal from the database,
+// because to the operator they are the same kind of answer.
+func refuse(err error) tea.Cmd {
+	return func() tea.Msg { return failureMsg{err: err} }
+}
+
+func (m *sessionsModel) updateEnd(key tea.KeyMsg) tea.Cmd {
+	switch key.String() {
+	case "y":
+		target := m.target
+		label := m.accountLabel(target)
+		m.mode = sessionsList
+		return func() tea.Msg {
+			if err := m.store.EndSession(context.Background(), target.UserID); err != nil {
+				return outcomeFor(err, "The session of \""+label+"\" ends within a heartbeat")
+			}
+			// "Ends" and not "ended": this program wrote a request, and the
+			// server that acts on it is not here to say it did.
+			return doneMsg{text: "The session of \"" + label + "\" ends within a heartbeat"}
+		}
+	case "n", "esc", "q":
+		m.mode = sessionsList
+	}
 	return nil
 }
 
@@ -322,6 +395,8 @@ func (m *sessionsModel) View() string {
 	switch m.mode {
 	case sessionsDetail:
 		return centre(m.detailView(), m.width, m.height)
+	case sessionsEnd:
+		return centre(m.endView(), m.width, m.height)
 	case sessionsList:
 	}
 
@@ -381,6 +456,34 @@ func (m *sessionsModel) detailView() string {
 	return cardStyle.Width(cardWidth(m.width)).Render(strings.Join(lines, "\n"))
 }
 
+// endView is the confirmation behind k. It says what will happen, when, and
+// what will not: the account is untouched, and the person may come straight
+// back. An operator who wanted them kept out is sent to the restrictions
+// form, which is the lasting form of the same thing.
+func (m *sessionsModel) endView() string {
+	content := cardContent(m.width)
+	ip := m.target.IP
+	if ip == "" {
+		ip = "an address the server did not record"
+	}
+	lines := []string{
+		cardTitleStyle.Render("End the session of " + m.accountLabel(m.target) + "?"),
+		cardLabelStyle.Render("Identifier ") + cardValueStyle.Render(m.target.UserID),
+		cardLabelStyle.Render("Address    ") + cardValueStyle.Render(ip),
+		cardLabelStyle.Render("Connected  ") + cardValueStyle.Render(timeLabel(m.target.ConnectedAt)),
+		"",
+		lipgloss.NewStyle().Width(content).Render(
+			"The account is marked, and a running server signs this session out " +
+				"within a heartbeat, five seconds by default: out of its room, tokens " +
+				"revoked, and everybody in the room told. Nothing is taken from the " +
+				"account, and they may sign in again at once. To keep them out, " +
+				"restrict the account on the users screen instead."),
+		"",
+		helpLine(content, keyHint("y", "end it"), keyHint("n", "keep")),
+	}
+	return dangerCard().Width(cardWidth(m.width)).Render(strings.Join(lines, "\n"))
+}
+
 // stateBadge is the state with a colour on it, for the one place there is room
 // to spend on that. The table stays plain: a column of coloured words is a
 // column somebody has to read twice.
@@ -397,7 +500,7 @@ func stateBadge(session store.Session, now time.Time) string {
 
 func (m *sessionsModel) help() string {
 	switch m.mode {
-	case sessionsDetail:
+	case sessionsDetail, sessionsEnd:
 		return ""
 	case sessionsList:
 	}
@@ -408,6 +511,7 @@ func (m *sessionsModel) help() string {
 		m.width,
 		keyHint("↑↓", "move"),
 		keyHint("enter", "details"),
+		keyHint("k", "end session"),
 		keyHint("l", "read more"),
 		keyHint("/", "filter"),
 		keyHint("r", "refresh"),

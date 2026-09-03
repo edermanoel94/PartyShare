@@ -368,6 +368,8 @@ A `user_restricted` can also arrive with no `by_user_id` at all, and that is not
 A server that *is* running notices within one heartbeat interval and enforces exactly what a `restrict_user` would have, announcements included, but nobody sent it anything, so there is no account to name as the actor.
 Clients render the missing name as "an administrator", which is as much as the server knows; the audit log is where the name is.
 Nothing else about the message differs, so a client needs no special case beyond the one it already has for an absent optional field.
+The same pass answers a session end requested the same way: `tools/dbadmin` marks the account, and the server signs that account out on its next heartbeat exactly as a ban would, `user_kicked` with the reason "the session was ended by an administrator" and `user_left` included, without changing the account.
+The person may sign in again at once; a client needs nothing new for it, because everything it receives is a message it already handles.
 
 `kick_user` and `restrict_user` are different tools and neither replaces the other.
 A kick ends one visit to one room and the account can come straight back; a restriction stays with the account until an administrator lifts it.
@@ -534,6 +536,11 @@ An administrator who writes to their own account gets one copy, and it is a noti
 The recipient is sent the `notice` at once if they are connected, and again at the start of every session that still owes an answer, immediately after `authenticated`.
 A client that was closed when it was written is told the next time it opens; one that was shown a notice and did not answer is shown it again.
 A sign-in hands over at most twenty outstanding notices, oldest first, and the rest arrive at the next one as those are acknowledged.
+
+A `notice` can also arrive in the middle of a session with nobody having sent `send_notice`.
+`tools/dbadmin` writes the notices collection directly, for the reason it writes the accounts collection directly, and a running server checks what each connected account has outstanding once per heartbeat interval and hands over whatever it has not handed over on that connection yet.
+Such a notice carries an empty `from_user_id` and `from_display_name`, which a client already renders as "an administrator"; nothing else about the message differs, and it is acknowledged like any other.
+The heartbeat does not repeat a notice the connection was already shown, acknowledged or not: the store keeps it pending until the answer, and the connection keeps what it has delivered.
 Nothing is dropped: what the cap buys is that somebody who was away for a month signs in to a screen they can get through.
 
 **Acknowledging.**

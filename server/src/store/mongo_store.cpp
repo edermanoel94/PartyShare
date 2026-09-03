@@ -157,6 +157,7 @@ Account account_from(const bsoncxx::document::view& document) {
   account.user.avatar = string_field(document, "avatar");
   account.user.role = models::role_from_string(string_field(document, "role"));
   account.user.restrictions = restrictions_from(document);
+  account.session_end_requested_at = int_field(document, "session_end_requested_at");
   return account;
 }
 
@@ -370,7 +371,12 @@ class MongoUserStore final : public UserStore {
                   kvp("role", std::string(models::to_string(account.user.role))),
                   kvp("salt_hex", account.salt_hex),
                   kvp("password_hash_hex", account.password_hash_hex),
-                  kvp("restrictions", restrictions_to_document(account.user.restrictions))))));
+                  kvp("restrictions", restrictions_to_document(account.user.restrictions)),
+                  // Written back so that the Hub can spend a request it has
+                  // acted on. Every caller of `update` writes an account it
+                  // read moments ago, so what lands here is what was there,
+                  // or the zero the Hub put in its place.
+                  kvp("session_end_requested_at", account.session_end_requested_at)))));
       if (!result || result->matched_count() == 0) {
         return Error{.code = "user_not_found", .message = "no such account"};
       }

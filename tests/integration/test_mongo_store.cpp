@@ -183,6 +183,30 @@ TEST_F(MongoStoreTest, UpdatingKeepsTheCreationTime) {
   EXPECT_EQ(after->user.display_name, "Ana Maria");
 }
 
+TEST_F(MongoStoreTest, ASessionEndRequestIsReadBackAndCanBeSpent) {
+  ASSERT_FALSE(stores_->users().create(account("ana")).has_value());
+  auto created = stores_->users().find_by_username("ana");
+  ASSERT_TRUE(created.has_value());
+  // A document written before the field existed reads as no request, which
+  // is the reading that takes nothing away from anybody.
+  EXPECT_EQ(created->session_end_requested_at, 0);
+
+  // What tools/dbadmin writes is the field alone; through `update` here
+  // because the point is the round trip, and update is what the Hub uses to
+  // spend the request afterwards.
+  created->session_end_requested_at = 1'756'860'000;
+  ASSERT_FALSE(stores_->users().update(*created).has_value());
+  auto requested = stores_->users().find_by_id(created->user.id);
+  ASSERT_TRUE(requested.has_value());
+  EXPECT_EQ(requested->session_end_requested_at, 1'756'860'000);
+
+  requested->session_end_requested_at = 0;
+  ASSERT_FALSE(stores_->users().update(*requested).has_value());
+  const auto spent = stores_->users().find_by_id(created->user.id);
+  ASSERT_TRUE(spent.has_value());
+  EXPECT_EQ(spent->session_end_requested_at, 0);
+}
+
 TEST_F(MongoStoreTest, CountsTheAccountsHoldingARole) {
   ASSERT_FALSE(stores_->users().create(account("ana", Role::Admin)).has_value());
   ASSERT_FALSE(stores_->users().create(account("bruno", Role::User)).has_value());

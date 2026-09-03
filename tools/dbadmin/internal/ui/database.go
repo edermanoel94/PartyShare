@@ -29,6 +29,7 @@ type Database interface {
 	// has a write beside its read, because an operator reaches for this
 	// program to change something; this one records what the server saw, and a
 	// presence history an administrator can edit is not evidence of anything.
+	// Ending one is a write to the account, below, and never to a row here.
 	Sessions(ctx context.Context, limit int) ([]store.Session, error)
 	Audit(ctx context.Context, query store.AuditQuery) ([]store.AuditEntry, error)
 
@@ -38,6 +39,10 @@ type Database interface {
 	SetRestrictions(ctx context.Context, userID string, restrictions store.Restrictions) error
 	DeleteAccount(ctx context.Context, userID string) error
 	DeleteRoom(ctx context.Context, roomID string) error
+	// The two things a running server does on this program's behalf, from a
+	// document alone: hand somebody a notice, and sign somebody out.
+	SendNotice(ctx context.Context, userID, text string) (store.Notice, error)
+	EndSession(ctx context.Context, userID string) error
 }
 
 // The store is the implementation this program ships with. Checked here, at

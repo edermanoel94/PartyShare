@@ -49,9 +49,20 @@ struct RestrictionPoll {
   /// nothing done about it, and one deleted mid-session is a person still in a
   /// room, still holding a token, still transmitting.
   std::vector<std::string> gone;
+  /// Accounts an operator has asked to be signed out, through
+  /// `Account::session_end_requested_at`.
+  ///
+  /// A third list and not a flag on the first, for the reason `gone` is not:
+  /// nothing about the restrictions moved. The account is exactly as it was,
+  /// and the person is welcome back the moment they log in again; what has
+  /// to end is the session they are holding now, which is the same call a
+  /// ban makes without the ban.
+  std::vector<std::string> session_end_requested;
 };
 
-/// Where a restriction written outside this process is noticed.
+/// Where a restriction written outside this process is noticed, and with it
+/// the two other things tools/dbadmin can only say by writing: that an account
+/// is gone, and that its session should end.
 ///
 /// Two programs write the accounts collection. This server does, through
 /// `restrict_user`, and it enforces in the same breath because it is the one

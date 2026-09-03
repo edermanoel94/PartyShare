@@ -74,6 +74,32 @@ TEST(AudioDescription, WithoutRedTheOfferIsWhatItAlwaysWas) {
             "minptime=10;maxaveragebitrate=96000;stereo=1;sprop-stereo=1;useinbandfec=1");
 }
 
+TEST(AudioDescription, RetransmissionIsAskedForOnOpusAndOnlyOpus) {
+  // libwebrtc reads the feedback off the codec it encodes with. On RED it
+  // would be ignored; on Opus it turns on both the send history and the
+  // jitter buffer's requests, even though the answer never echoes it.
+  rtc::Description::Audio media("0", rtc::Description::Direction::RecvOnly);
+  add_audio_codecs(media, AudioCodecs{});
+  const auto* opus = media.rtpMap(111);
+  ASSERT_NE(opus, nullptr);
+  EXPECT_EQ(opus->rtcpFbs, (std::vector<std::string>{"nack"}));
+  const auto* red = media.rtpMap(63);
+  ASSERT_NE(red, nullptr);
+  EXPECT_TRUE(red->rtcpFbs.empty());
+
+  const std::string sdp = media.generateSdp("\n", "0.0.0.0", 9);
+  EXPECT_NE(sdp.find("a=rtcp-fb:111 nack\n"), std::string::npos) << sdp;
+}
+
+TEST(AudioDescription, RetransmissionCanBeTurnedOff) {
+  // The key to go back: the offer as it was before, with nothing asked for.
+  rtc::Description::Audio media("0", rtc::Description::Direction::RecvOnly);
+  add_audio_codecs(media, AudioCodecs{.nack = false});
+  const auto* opus = media.rtpMap(111);
+  ASSERT_NE(opus, nullptr);
+  EXPECT_TRUE(opus->rtcpFbs.empty());
+}
+
 TEST(AudioDescription, TheCeilingReachesTheProfile) {
   EXPECT_EQ(opus_profile(128, false),
             "minptime=10;maxaveragebitrate=128000;stereo=1;sprop-stereo=1");

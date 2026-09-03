@@ -33,6 +33,13 @@ void add_audio_codecs(rtc::Description::Audio& media, const AudioCodecs& codecs)
   }
   media.addOpusCodec(codecs.opus_payload_type,
                      opus_profile(codecs.opus_max_bitrate_kbps, !red_payload_type.has_value()));
+  if (codecs.nack) {
+    // On Opus and not on RED: libwebrtc reads the feedback off the codec it
+    // encodes with, and RED is the wrapping, not the codec.
+    if (auto* opus = media.rtpMap(codecs.opus_payload_type); opus != nullptr) {
+      opus->addFeedback("nack");
+    }
+  }
 }
 
 }  // namespace dv::server::sfu

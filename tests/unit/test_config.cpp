@@ -580,6 +580,23 @@ TEST(ConfigIni, ReadsWhetherTheAudioRedundancyIsOn) {
   EXPECT_TRUE(on.value().audio.redundancy);
 }
 
+TEST(Config, TheAudioRetransmissionIsOnByDefault) {
+  // It costs nothing while nothing is lost, and it is what repairs the loss
+  // the redundancy cannot: two packets gone back to back.
+  // docs/16-audio-plan.md, step 2.
+  EXPECT_TRUE(Config{}.audio.retransmission);
+}
+
+TEST(ConfigIni, ReadsWhetherTheAudioRetransmissionIsOn) {
+  const auto off = dv::config::parse_ini("[audio]\nretransmission = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().audio.retransmission);
+
+  const auto on = dv::config::parse_ini("[audio]\nretransmission = true\n", Config{});
+  ASSERT_TRUE(on.ok()) << on.error().message;
+  EXPECT_TRUE(on.value().audio.retransmission);
+}
+
 TEST(ConfigIni, RefusesWhatItCannotApply) {
   // Every one of these would otherwise be a line that looks applied and is not,
   // which is the failure this format exists to make impossible.

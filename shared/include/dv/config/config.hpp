@@ -60,6 +60,13 @@ struct AudioConfig {
   /// bytes, up to twice `bitrate_kbps` per stream, and that is the whole
   /// price. Server side only. See docs/16-audio-plan.md, step 1.
   bool redundancy = true;
+  /// Whether the SFU asks for lost audio packets again, and answers when a
+  /// listener asks it: `nack` in every audio offer, a retransmission cache on
+  /// every outgoing audio track and a repair on every incoming one. What the
+  /// redundancy does not cover, two packets lost back to back, this does. It
+  /// costs nothing while nothing is lost. Server side only. See
+  /// docs/16-audio-plan.md, step 2.
+  bool retransmission = true;
   int frame_duration_ms = 20;
   bool echo_cancellation = true;
   bool noise_suppression = true;

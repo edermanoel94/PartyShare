@@ -19,6 +19,7 @@
 
 #include "sfu/atomic_shared_ptr.hpp"
 #include "sfu/audio_description.hpp"
+#include "sfu/loss_repair.hpp"
 #include "sfu/video_feedback.hpp"
 #include "sfu/video_stitcher.hpp"
 #include "signaling/hub.hpp"
@@ -78,6 +79,11 @@ class MediaRouter : public MediaSignals {
     /// costs; `[audio] redundancy = false` in the server's config is what
     /// empties it.
     std::optional<int> red_payload_type = 63;
+    /// Retransmission on every audio leg: `nack` in the offer, a NACK
+    /// responder on every outgoing audio track and a sfu::LossRepair on every
+    /// incoming one. `[audio] retransmission = false` in the server's config
+    /// is what turns it off. See docs/16-audio-plan.md, step 2.
+    bool audio_nack = true;
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.
     int h264_payload_type = 96;
@@ -134,6 +140,22 @@ class MediaRouter : public MediaSignals {
   [[nodiscard]] std::uint64_t audio_red_packets_received() const noexcept {
     return audio_red_packets_received_.load();
   }
+  /// NACKs that listeners sent back on outgoing audio tracks, which
+  /// libdatachannel answers out of its cache. The other half of the audio
+  /// repair: `audio_repair_stats` is what this server asks senders for, this
+  /// is what listeners ask this server for.
+  [[nodiscard]] std::uint64_t audio_nacks_received() const noexcept {
+    return audio_nacks_received_.load();
+  }
+
+  /// What the repair of the incoming audio is doing, summed over every
+  /// participant. See sfu/loss_repair.hpp.
+  struct AudioRepairStats {
+    std::uint64_t requests_sent = 0;
+    std::uint64_t packets_missing = 0;
+    std::uint64_t packets_repaired = 0;
+  };
+  [[nodiscard]] AudioRepairStats audio_repair_stats() const;
   /// Video packets received from whoever is sharing a screen.
   [[nodiscard]] std::uint64_t video_packets_received() const noexcept {
     return video_packets_received_.load();
@@ -238,6 +260,9 @@ class MediaRouter : public MediaSignals {
     std::string room_label;
     std::shared_ptr<rtc::PeerConnection> connection;
     std::shared_ptr<rtc::Track> inbound;
+    /// Asks this participant for the audio packets that did not arrive. Null
+    /// while `Options::audio_nack` is off. See sfu/loss_repair.hpp.
+    std::shared_ptr<LossRepair> audio_repair;
     /// Keyed by the user whose audio the track carries.
     std::unordered_map<std::string, Outbound> outbound;
 
@@ -339,6 +364,7 @@ class MediaRouter : public MediaSignals {
   std::atomic<std::uint64_t> audio_packets_received_{0};
   std::atomic<std::uint64_t> audio_packets_forwarded_{0};
   std::atomic<std::uint64_t> audio_red_packets_received_{0};
+  std::atomic<std::uint64_t> audio_nacks_received_{0};
   std::atomic<std::uint64_t> video_packets_received_{0};
   std::atomic<std::uint64_t> video_packets_forwarded_{0};
   std::atomic<std::uint64_t> keyframe_requests_forwarded_{0};

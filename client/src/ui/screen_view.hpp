@@ -36,8 +36,23 @@ class ScreenView : public QWidget {
   /// Safe to call from any thread. Takes the frame and returns immediately.
   void submit(const client::video::VideoFrame& frame);
 
-  /// Drops what is on screen and goes back to the placeholder.
-  void clear();
+  /// Whether a share is running and its frames are worth drawing.
+  ///
+  /// Turning it off drops what is on screen and goes back to the placeholder,
+  /// and - the reason this is a gate rather than a clear() - refuses whatever
+  /// the decoder still has in hand. The remote video track is not taken down
+  /// when a share ends: it carries whoever holds the floor rather than one
+  /// participant, so it stays for the length of the call, and the frames
+  /// buffered before the share stopped are decoded after it. Without the gate
+  /// the last of them repaints the panel a moment after it was cleared, and
+  /// that picture then stays there for the rest of the call with nothing
+  /// coming to replace it.
+  ///
+  /// Read under the same mutex that submit() writes the frame under, so a
+  /// frame is either drawn before the share ends or not at all. A clear()
+  /// alone cannot promise that: it is a moment, and the media thread is free
+  /// to arrive one instruction later.
+  void set_receiving(bool receiving);
 
   /// What to say when nothing is being shared.
   void set_placeholder(QString text);
@@ -67,6 +82,10 @@ class ScreenView : public QWidget {
   std::mutex mutex_;
   QImage pending_;
   QImage current_;
+  /// False until a share somebody else is running is announced. Guarded by
+  /// `mutex_` rather than atomic, because the point of it is to be read in the
+  /// same critical section that takes the frame.
+  bool receiving_ = false;
   /// True while an invocation is already on its way to the interface thread.
   /// Without it a busy event loop would collect one queued call per frame.
   std::atomic<bool> delivery_pending_{false};

@@ -332,6 +332,9 @@ class Client {
                 levels_ = [raw = fake.get()](std::vector<media::AudioLevel> levels) {
                   raw->report_levels(std::move(levels));
                 };
+                remote_video_ = [raw = fake.get()](int width, int height) {
+                  raw->report_remote_video(width, height);
+                };
               }
               return std::unique_ptr<media::MediaSession>(std::move(fake));
             })) {
@@ -462,6 +465,21 @@ class Client {
     }
   }
 
+  /// Reports a decoded frame of somebody else's screen, the way libwebrtc's
+  /// decode thread does.
+  ///
+  /// Only valid while the media session exists: leave() destroys it.
+  void report_remote_video(int width, int height) {
+    std::function<void(int, int)> handler;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handler = remote_video_;
+    }
+    if (handler) {
+      handler(width, height);
+    }
+  }
+
   [[nodiscard]] std::uint64_t remote_frames() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return remote_frames_;
@@ -536,6 +554,7 @@ class Client {
   std::string sharer_;
   std::function<void(std::string, bool)> remote_audio_;
   std::function<void(std::vector<media::AudioLevel>)> levels_;
+  std::function<void(int, int)> remote_video_;
   /// Declared before the session so that it outlives it.
   std::shared_ptr<FakeMediaState> media_state_;
   std::unique_ptr<CallSession> session_;
@@ -1052,6 +1071,37 @@ TEST_F(CallSessionTest, AnImpossibleScreenQualityNeverReachesTheMediaLayer) {
   EXPECT_FALSE(ana.session().set_video_quality({0, 0}, 60).ok());
   EXPECT_FALSE(ana.session().set_video_quality({1920, 1080}, 0).ok());
   EXPECT_EQ(ana.audio().capture_changes.load(), 0);
+}
+
+TEST_F(CallSessionTest, FramesDecodedAfterTheSharerLeavesAreNotDrawn) {
+  Client& ana = add("ana");
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(bruno.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.session().start_screen_share().ok());
+  ASSERT_TRUE(wait_until([&] { return bruno.sharer() == ana.session().local_user().id; }));
+
+  bruno.report_remote_video(1280, 720);
+  ASSERT_TRUE(wait_until([&] { return bruno.remote_frames() == 1; }));
+
+  // Out of the room with the share still running, which is what the server
+  // turns into a screen_share_stopped of its own. See Hub::handle_leave_room.
+  ASSERT_TRUE(ana.session().leave().ok());
+  ASSERT_TRUE(wait_until([&] { return bruno.sharer().empty(); }));
+
+  // What the decoder had in hand when the share stopped, arriving after it.
+  // The remote video track is not taken down between shares, so there is
+  // nothing else to stop these: unless the session drops them, the last one
+  // repaints the panel and freezes there for the rest of the call.
+  bruno.report_remote_video(1280, 720);
+  bruno.report_remote_video(1280, 720);
+  std::this_thread::sleep_for(100ms);
+  EXPECT_EQ(bruno.remote_frames(), 1U);
 }
 
 TEST_F(CallSessionTest, LevelsMarkWhoIsSpeaking) {

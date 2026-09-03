@@ -979,6 +979,7 @@ void CallSession::handle_signal(protocol::Message message) {
     std::string user_id;
     bool rejoin_muted = false;
     std::shared_ptr<media::MediaSession> stale;
+    Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       local_user_ = authenticated->user;
@@ -1008,10 +1009,20 @@ void CallSession::handle_signal(protocol::Message message) {
       // ensure_media_session. Leaving the room did this already, which is why
       // leaving and coming back was the only way out of it.
       stale.swap(audio_);
+      handlers = callbacks_;
     }
     if (stale) {
       // Outside the lock: closing waits for media callbacks, and those take it.
       stale->close();
+    }
+    // Said out loud, and not only cleared above. The panel holds the last
+    // frame of whatever was being shared when the connection dropped, and
+    // nothing else would ever take it down: the server re-announces a share
+    // that is still running when we walk back in, and says nothing at all
+    // about one that has ended in the meantime. The interface would keep that
+    // picture, and the name beside it, for the rest of the call.
+    if (handlers.on_screen_share) {
+      handlers.on_screen_share(std::string{});
     }
     set_state(State::Authenticated, authenticated->user.id);
 
@@ -1064,9 +1075,32 @@ void CallSession::handle_signal(protocol::Message message) {
   }
 
   if (const auto* left = std::get_if<protocol::UserLeft>(&message)) {
+    Callbacks handlers;
+    bool floor_freed = false;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       participants_.erase(left->user_id);
+      handlers = callbacks_;
+
+      // Walking out while holding the screen share floor releases it, the same
+      // way being removed does - see the user_kicked handler below, which has
+      // carried this since before this one did. The server says so too, with a
+      // screen_share_stopped of its own ahead of this message, so the usual
+      // answer here is that the floor is already empty and nothing happens.
+      //
+      // It is here for the case where it is not: a client that missed the stop
+      // would go on believing the floor is taken, refuse its own next share,
+      // and - because the video track carries whoever is sharing rather than
+      // one participant, and is never taken down between shares - go on
+      // drawing whatever the decoder still had in hand. That is the frozen
+      // screen this pair of guards exists to stop.
+      if (left->user_id == screen_sharer_) {
+        screen_sharer_.clear();
+        floor_freed = true;
+      }
+    }
+    if (floor_freed && handlers.on_screen_share) {
+      handlers.on_screen_share({});
     }
     publish_participants();
     return;
@@ -1513,6 +1547,16 @@ Result<std::monostate> CallSession::ensure_media_session() {
     Callbacks handlers;
     {
       const std::lock_guard<std::mutex> lock(mutex_);
+      // Nothing is drawn while nobody holds the floor. The remote video track
+      // is never taken down between shares - it carries whoever is sharing
+      // rather than one participant, so it lives for the length of the call -
+      // and whatever libwebrtc had already buffered when the share stopped is
+      // decoded and handed over after it. Read under the lock that
+      // screen_share_stopped clears the floor under, so a frame is either
+      // ahead of the stop or dropped by it.
+      if (screen_sharer_.empty()) {
+        return;
+      }
       handlers = callbacks_;
     }
     if (handlers.on_remote_video) {

@@ -35,6 +35,13 @@ void ScreenView::submit(const client::video::VideoFrame& frame) {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
 
+    // Taken before the copy, so that a frame the decoder delivers after the
+    // share ended costs nothing at all rather than three and a half megabytes
+    // of memcpy on its way to being thrown away.
+    if (!receiving_) {
+      return;
+    }
+
     // BGRA in memory is exactly what Format_ARGB32 is on a little endian
     // machine, so this is a copy and not a conversion. The copy is needed: the
     // frame belongs to the media layer and is gone when this returns.
@@ -80,9 +87,16 @@ void ScreenView::submit(const client::video::VideoFrame& frame) {
   }
 }
 
-void ScreenView::clear() {
+void ScreenView::set_receiving(bool receiving) {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
+    receiving_ = receiving;
+    if (receiving) {
+      // What is on screen is left alone. A share that is starting has its own
+      // first frame on the way, and blanking the panel to wait for it is a
+      // flash of placeholder that says nothing.
+      return;
+    }
     pending_ = QImage();
     current_ = QImage();
   }

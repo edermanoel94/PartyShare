@@ -92,9 +92,11 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   verdict_->setFont(strong);
 
   auto* note = new QLabel(
-      QStringLiteral("The worst of the three below is what the indicator in the status bar "
-                     "reports. Loss is charted per reading, while the verdict weighs the whole "
-                     "call, so a short burst shows up here without moving it."),
+      QStringLiteral("The worst of round trip, jitter and loss is what the indicator in the "
+                     "status bar reports. Loss is charted per reading, while the verdict weighs "
+                     "the whole call, so a short burst shows up here without moving it. "
+                     "Concealment is the loss the repairs did not cover; it has its own guide "
+                     "lines and no say in the verdict."),
       this);
   note->setWordWrap(true);
   note->setProperty("hint", true);

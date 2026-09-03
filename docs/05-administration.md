@@ -136,8 +136,10 @@ way to enumerate accounts.
 ### From the client
 
 An administrator gets a panel: accounts, rooms, restrictions and the audit log,
-plus a per-participant menu inside a room. Everything takes effect at once, and
-every change is announced to the room and to the account it is about.
+behind the `Admin` button inside a room, beside `Network status`. The call
+carries on while it is open, and `Back` returns to it. The same room offers a
+per-participant menu. Everything takes effect at once, and every change is
+announced to the room and to the account it is about.
 
 The per-participant menu sends one flag and leaves the rest alone, so silencing
 somebody does not lift a ban a colleague applied a minute earlier.

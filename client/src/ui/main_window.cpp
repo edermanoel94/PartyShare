@@ -54,6 +54,7 @@
 #include "ui/admin_panel.hpp"
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
+#include "ui/elided_label.hpp"
 #include "ui/metrics_dialog.hpp"
 #include "ui/participant_delegate.hpp"
 #include "ui/password_dialog.hpp"
@@ -308,7 +309,7 @@ MainWindow::MainWindow(client::app::CallSession& session, UpdateChecker& updates
 
   status_ = new QLabel(QStringLiteral("disconnected"), this);
   quality_ = new QLabel(QString{}, this);
-  metrics_ = new QLabel(QString{}, this);
+  metrics_ = new ElidedLabel(this);
   QFont small = metrics_->font();
   small.setPointSize(small.pointSize() - 1);
   metrics_->setFont(small);
@@ -563,13 +564,6 @@ void MainWindow::build_home_page() {
   join_button_ = new QPushButton(QStringLiteral("Join room"), box);
   join_button_->setMinimumHeight(44);
 
-  // Hidden rather than disabled until somebody signs in as an administrator.
-  // A greyed out button that most people can never use is a permanent
-  // reminder of a feature that is not theirs.
-  admin_button_ = new QPushButton(QStringLiteral("Administration"), box);
-  admin_button_->setMinimumHeight(36);
-  admin_button_->setVisible(false);
-
   // The way back to the login screen, and the reason it exists is the server
   // address in the settings dialog. A new address is adopted at the next
   // sign-in, and without a way to sign out, "the next sign-in" would mean
@@ -600,7 +594,6 @@ void MainWindow::build_home_page() {
   column->addWidget(room_id_);
   column->addWidget(join_button_);
   column->addSpacing(16);
-  column->addWidget(admin_button_);
   column->addWidget(change_password);
   column->addWidget(sign_out);
 
@@ -642,7 +635,6 @@ void MainWindow::build_home_page() {
   connect(room_name_, &QLineEdit::returnPressed, this, &MainWindow::on_create_room);
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
-  connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
   connect(change_password, &QPushButton::clicked, this, &MainWindow::on_change_password);
   connect(sign_out, &QPushButton::clicked, this, &MainWindow::on_sign_out);
 
@@ -795,11 +787,21 @@ void MainWindow::build_room_page() {
   settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
   network_status_button_ = new QPushButton(QStringLiteral("Network status"), page);
   network_status_button_->setToolTip(
-      QStringLiteral("What the call is carrying, and the three measurements behind the network "
-                     "indicator in the status bar."));
+      QStringLiteral("What the call is carrying, the three measurements behind the network "
+                     "indicator in the status bar, and how much audio had to be concealed."));
+  // Accounts, rooms, restrictions and the audit log, reached from inside the
+  // call: what an administrator reaches for is nearly always about somebody
+  // who is in the room with them at that moment. Hidden rather than disabled
+  // from everybody else - a greyed out button that most people can never use
+  // is a permanent reminder of a feature that is not theirs.
+  admin_button_ = new QPushButton(QStringLiteral("Admin"), page);
+  admin_button_->setToolTip(
+      QStringLiteral("Accounts, rooms, restrictions and the audit log. The call carries on "
+                     "behind it."));
+  admin_button_->setVisible(false);
   leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
-  for (QPushButton* button :
-       {mute_button_, share_button_, settings_button_, network_status_button_, leave_button_}) {
+  for (QPushButton* button : {mute_button_, share_button_, settings_button_, network_status_button_,
+                              admin_button_, leave_button_}) {
     button->setMinimumHeight(38);
   }
   // What each toggle looks like when it is on. Sharing is the good state and
@@ -811,6 +813,7 @@ void MainWindow::build_room_page() {
   controls->addWidget(share_button_);
   controls->addWidget(settings_button_);
   controls->addWidget(network_status_button_);
+  controls->addWidget(admin_button_);
   controls->addStretch();
   controls->addWidget(leave_button_);
 
@@ -841,6 +844,7 @@ void MainWindow::build_room_page() {
   connect(share_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_share);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(network_status_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
+  connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
   connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
@@ -940,9 +944,13 @@ void MainWindow::wire_session() {
             status_concealed_samples_ = stats.concealed_samples;
             status_total_samples_ = stats.total_samples_received;
 
+            // One "kbps" for both directions. The line shares the bar with
+            // the verdict on its left and the version on its right, and a
+            // share with sound adds two more segments to it; the units it
+            // does not repeat are what keep the last of them on screen.
             QString summary = QStringLiteral(
                                   "rtt %1 ms · jitter %2 ms · lost %3 · concealed %4% · "
-                                  "%5 kbps ↑ · %6 kbps ↓")
+                                  "↑ %5 ↓ %6 kbps")
                                   .arg(stats.round_trip_time_ms, 0, 'f', 0)
                                   .arg(stats.jitter_ms, 0, 'f', 1)
                                   .arg(stats.packets_lost)
@@ -957,10 +965,10 @@ void MainWindow::wire_session() {
             const client::media::VideoStats video = session_.video_stats();
             if (video.frames_sent > 0) {
               summary +=
-                  QStringLiteral(" · screen %1 kbps ↑").arg(video.send_bitrate_kbps, 0, 'f', 0);
+                  QStringLiteral(" · screen ↑ %1 kbps").arg(video.send_bitrate_kbps, 0, 'f', 0);
             } else if (video.frames_received > 0) {
               summary +=
-                  QStringLiteral(" · screen %1 kbps ↓").arg(video.receive_bitrate_kbps, 0, 'f', 0);
+                  QStringLiteral(" · screen ↓ %1 kbps").arg(video.receive_bitrate_kbps, 0, 'f', 0);
             }
 
             // While the share carries sound, the audio number above stops being
@@ -2077,7 +2085,6 @@ void MainWindow::build_admin_page() {
 }
 
 void MainWindow::on_open_administration() {
-  previous_page_ = pages_->currentIndex();
   go_to_page(kAdminPage);
   // Asked for on the way in, never cached from last time: the accounts and the
   // rooms belong to the server and other people change them.
@@ -2085,9 +2092,10 @@ void MainWindow::on_open_administration() {
 }
 
 void MainWindow::on_close_administration() {
-  // Back where they came from, which is the home page unless they opened the
-  // panel during a call.
-  go_to_page(previous_page_ == kAdminPage ? kHomePage : previous_page_);
+  // Back to the call, or to the home page if the call ended while the panel
+  // was up: show_page() reads that off the state, so nothing here has to
+  // remember where the panel was opened from.
+  show_page();
 }
 
 void MainWindow::on_participant_menu(const QPoint& where) {
@@ -2411,8 +2419,9 @@ void MainWindow::refresh_controls() {
   create_button_->setEnabled(authenticated);
   join_button_->setEnabled(authenticated);
   // The server is what actually decides, and it re-reads the role on every
-  // administrative message. This only decides whether the door is visible.
-  admin_button_->setVisible(authenticated && session_.is_admin());
+  // administrative message. This only decides whether the door is visible,
+  // and the door is in the room.
+  admin_button_->setVisible(in_call && session_.is_admin());
 
   // What an administrator has taken away from this account, which the session
   // keeps in step with the server. The server refuses each of these anyway;

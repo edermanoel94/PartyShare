@@ -238,6 +238,8 @@ qt_add_executable(dv_client
   src/ui/chat_view.hpp
   src/ui/chimes.cpp
   src/ui/chimes.hpp
+  src/ui/elided_label.cpp
+  src/ui/elided_label.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
   src/ui/metrics_chart.cpp

@@ -23,9 +23,9 @@ Three things made it possible:
 - The SFU's offer already announces `stereo=1` and `maxaveragebitrate=96000`,
   inherited from libdatachannel's default Opus profile. The network path for
   music was already negotiated; there was simply no music entering it. (The
-  offer has since gained RED next to Opus and lost `useinbandfec=1`, for the
-  reasons in [chapter 16](16-audio-plan.md), step 1; neither changes anything
-  on this page.)
+  offer has since gained RED next to Opus, lost `useinbandfec=1` and raised the
+  ceiling to 128 kbps, for the reasons in [chapter 16](16-audio-plan.md), steps
+  1 and 7; none of it changes anything on this page.)
 - libwebrtc has an official hook at exactly the right place.
 
 ### Why not a second track
@@ -152,10 +152,15 @@ integer. Eight bits rather than sixteen because the product has to fit in an
 `int32`: a full-scale sample at the 200% ceiling is `32767 * 512`, which fits;
 Q16 would not.
 
-The ceiling is 200%. A boost clips in `saturate`, so the worst it does is sound
-bad, and the alternative is worse: an application playing at a tenth of its scale
-has no other way back, and telling somebody to go and turn Windows up is not a
-volume control.
+The ceiling is 200%. A boost that does not fit a sample is caught by the peak
+limiter (step 8 of [chapter 16](16-audio-plan.md)): the gain drops, for that
+moment and for both channels together, to exactly what fits, and climbs back one
+step per sample over about a third of a second. `saturate` stays underneath as
+the net, so the worst a boost can do is sound compressed, and the alternative is
+worse: an application playing at a tenth of its scale has no other way back, and
+telling somebody to go and turn Windows up is not a volume control. The limiter
+only runs while a share carries sound; the microphone on its own never meets it,
+and `[screen_audio] limiter = false` gives back the plain clamp.
 
 **The curve is linear, and that is a choice.** Half on the slider is half the
 amplitude. Perceptual response would be different — loudness follows roughly the
@@ -206,7 +211,9 @@ otherwise indistinguishable from one that never would have.
 `MediaRouter::Options::opus_max_bitrate_kbps`. Its default moved from 48 to 96,
 which is not a behaviour change: what the wire already carried was
 libdatachannel's own default of 96. Leaving it at 48 while wiring it up for the
-first time would have halved the sound of every share.
+first time would have halved the sound of every share. It moved again, to 128,
+in step 7 of [chapter 16](16-audio-plan.md): that is where stereo Opus gets
+close to transparent for a film, and the price is 32 kbps per leg.
 
 ## 6. Measured
 
@@ -236,9 +243,9 @@ that matters: a capture delivering only silence is indistinguishable, from
 outside, from one that is working.
 
 The bandwidth arithmetic is in [chapter 12](12-requirements.md). In short: worst
-case, 96 kbps more inbound for the sharer and 96 kbps outbound per viewer, twice
-that with the audio redundancy on, which next to 3.3 Mbps of picture does not
-change how the machine is sized.
+case, 128 kbps more inbound for the sharer and 128 kbps outbound per viewer,
+twice that with the audio redundancy on, which next to 3.3 Mbps of picture does
+not change how the machine is sized.
 
 ## 7. The defect this was written to catch
 

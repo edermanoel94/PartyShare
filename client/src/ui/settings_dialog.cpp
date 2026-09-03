@@ -24,6 +24,7 @@
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include "audio/microphone_hint.hpp"
 #include "audio/screen_audio_mixer.hpp"
 #include "ui/chimes.hpp"
 #include "ui/update_checker.hpp"
@@ -125,6 +126,10 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   auto* audio_form = new QFormLayout(audio);
   input_ = new QComboBox(audio);
   output_ = new QComboBox(audio);
+  microphone_hint_ = new QLabel(QString{}, audio);
+  microphone_hint_->setWordWrap(true);
+  microphone_hint_->setProperty("hint", true);
+  microphone_hint_->hide();
   // Off first, then the four levels libwebrtc offers, each named with what it
   // takes off the noise. The data is what the configuration and CallSession
   // call these, so nothing is translated between the box, the file and the
@@ -151,6 +156,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   room_sounds_->setChecked(chimes_enabled());
 
   audio_form->addRow(QStringLiteral("Microphone"), input_);
+  audio_form->addRow(microphone_hint_);
   audio_form->addRow(QStringLiteral("Output"), output_);
   audio_form->addRow(QStringLiteral("Noise suppression"), noise_suppression_);
   audio_form->addRow(QStringLiteral("Room sounds"), room_sounds_);
@@ -345,6 +351,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
           &SettingsDialog::on_screen_audio_changed);
   connect(noise_suppression_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_noise_suppression_changed);
+  show_microphone_hint();
   // valueChanged and not sliderReleased, so that dragging is audible while it
   // happens. That is the whole way this control can be got right: nobody knows
   // what "sixty percent" sounds like against their own voice, they find it by
@@ -792,6 +799,18 @@ void SettingsDialog::on_input_changed(int index) {
   const QString device = input_->itemData(index).toString();
   (void)session_.set_input_device(device.toStdString());
   stage({{.section = "audio", .key = "input_device", .value = device.toStdString()}});
+  show_microphone_hint();
+}
+
+void SettingsDialog::show_microphone_hint() {
+  // The rate comes from the statistics, which is where the mixer publishes
+  // what the capture delivers, and it is zero outside a call: so this says
+  // nothing until there is a capture to read, rather than guessing from the
+  // device's name.
+  const std::string hint = client::audio::microphone_rate_hint(
+      session_.stats().microphone_sample_rate_hz, input_->currentText().toStdString());
+  microphone_hint_->setText(QString::fromStdString(hint));
+  microphone_hint_->setVisible(!hint.empty());
 }
 
 void SettingsDialog::on_output_changed(int index) {

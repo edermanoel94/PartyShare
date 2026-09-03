@@ -73,7 +73,7 @@ class MediaRouter : public MediaSignals {
     /// applied at all: voice fits in 48 kbps and nobody was near the ceiling.
     /// Music is not voice, and a share is stereo. See
     /// docs/09-screen-audio.md, section 5.
-    int opus_max_bitrate_kbps = 96;
+    int opus_max_bitrate_kbps = 128;
     /// RED next to Opus on every audio m-line, RFC 2198, or nothing for Opus
     /// alone. See sfu/audio_description.hpp for what it buys and what it
     /// costs; `[audio] redundancy = false` in the server's config is what
@@ -84,6 +84,13 @@ class MediaRouter : public MediaSignals {
     /// incoming one. `[audio] retransmission = false` in the server's config
     /// is what turns it off. See docs/16-audio-plan.md, step 2.
     bool audio_nack = true;
+    /// Experimental, off by default: REMB on every incoming audio track, so
+    /// that a client with DV_AUDIO_ADAPTIVE set can move its audio bitrate
+    /// with the link. The estimate follows the loss the SFU sees, between the
+    /// two numbers below. `[audio] adaptive = true` in the server's config
+    /// turns it on. See docs/16-audio-plan.md, step 10.
+    bool audio_adaptive = false;
+    int audio_adaptive_min_kbps = 16;
     /// H.264, section 6 of SPEC.md. 96 is the first dynamic payload type and
     /// what everything in this space uses for it.
     int h264_payload_type = 96;
@@ -154,6 +161,10 @@ class MediaRouter : public MediaSignals {
     std::uint64_t requests_sent = 0;
     std::uint64_t packets_missing = 0;
     std::uint64_t packets_repaired = 0;
+    /// Only while `Options::audio_adaptive` is on: how many REMB reports went
+    /// to senders, and the highest target any sender is being asked for.
+    std::uint64_t bandwidth_reports_sent = 0;
+    int target_kbps = 0;
   };
   [[nodiscard]] AudioRepairStats audio_repair_stats() const;
   /// Video packets received from whoever is sharing a screen.
@@ -263,6 +274,9 @@ class MediaRouter : public MediaSignals {
     /// Asks this participant for the audio packets that did not arrive. Null
     /// while `Options::audio_nack` is off. See sfu/loss_repair.hpp.
     std::shared_ptr<LossRepair> audio_repair;
+    /// The same repair plus a REMB, installed instead of `audio_repair` while
+    /// `Options::audio_adaptive` is on. Null otherwise.
+    std::shared_ptr<VideoFeedback> audio_feedback;
     /// Keyed by the user whose audio the track carries.
     std::unordered_map<std::string, Outbound> outbound;
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 #include <QElapsedTimer>
@@ -320,6 +321,12 @@ class MainWindow : public QMainWindow {
   /// title bar, or by noticing that the call it belongs to has ended - and a
   /// raw pointer would be left aimed at the space where it was.
   QPointer<MetricsDialog> metrics_dialog_ = nullptr;
+
+  /// The jitter buffer's totals at the last metrics report, so that the status
+  /// bar can say what share of the last interval was invented rather than a
+  /// figure for the whole call. docs/16-audio-plan.md, step 9.
+  std::uint64_t status_concealed_samples_ = 0;
+  std::uint64_t status_total_samples_ = 0;
 
   /// What the microphone meter is drawing, and the clock it moves against.
   ///

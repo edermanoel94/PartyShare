@@ -18,7 +18,7 @@ struct AudioCodecs {
   /// browser and libwebrtc build uses for it.
   int opus_payload_type = 111;
   /// The ceiling written into the Opus fmtp, in kbps.
-  int opus_max_bitrate_kbps = 96;
+  int opus_max_bitrate_kbps = 128;
   /// RED, RFC 2198: every packet carries the previous frame again, so an
   /// isolated loss on either leg is repaired at the receiver without anybody
   /// asking for anything. Nothing means Opus alone, which is what the offer

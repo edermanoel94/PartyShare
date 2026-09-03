@@ -254,6 +254,69 @@ TEST_F(ImpairedNetworkWithoutRepairTest, FivePercentLossIsHeardWithoutRepair) {
          "tell a repair from nothing";
 }
 
+/// The experiment of docs/16-audio-plan.md step 10, on both ends: REMB on the
+/// audio at the SFU, and the two trials plus adaptive_ptime on the client.
+class ImpairedNetworkAdaptiveAudioTest : public ImpairedNetworkTest {
+ protected:
+  ImpairedNetworkAdaptiveAudioTest() {
+    // Read by the media engine when it is first built, and the fixture's
+    // SetUp builds it before anything else by asking whether media is
+    // available at all - so this has to happen before SetUp, and this process
+    // must not have built an engine already. ctest runs each case in its own
+    // process, which is what makes this honest.
+#ifdef _WIN32
+    _putenv_s("DV_AUDIO_ADAPTIVE", "1");
+#else
+    setenv("DV_AUDIO_ADAPTIVE", "1", 1);
+#endif
+  }
+
+  void configure(SignalingServer::Options& options) override { options.sfu.audio_adaptive = true; }
+};
+
+TEST_F(ImpairedNetworkAdaptiveAudioTest, TheExperimentIsWiredAndTheAudioStillHoldsItsCeiling) {
+  // The spike's whole question was whether, with the experiment on at both
+  // ends, the audio's target bitrate moves when the link starts losing a fifth
+  // of its packets. Measured on 2026-09-03: it does not. The SFU asks, once a
+  // second, for the floor; the client, with both trials on and adaptive_ptime
+  // accepted, keeps aiming for the ceiling. The record is in chapter 16, step
+  // 10, and this case is that record made executable: it pins that every
+  // piece is wired, and that the audio holds. The day the last line fails is
+  // the day the experiment started working, and chapter 16 is what to update.
+  start_a_call();
+  const auto target = [&] { return ana().last_stats().audio_target_bitrate_kbps; };
+  ASSERT_TRUE(wait_until([&] { return target() > 100.0; }))
+      << "the audio never reached its ceiling on a clean link, it sat at " << target() << " kbps";
+  const double healthy = target();
+
+  dv::client::media::reset_network_impairment_counters();
+  dv::client::media::set_network_impairment({.loss = 0.20});
+  std::this_thread::sleep_for(kUnderImpairment);
+  const double squeezed = target();
+  const auto repair = server_->media_router()->audio_repair_stats();
+
+  std::printf("\n--- what the audio aims for, with the experiment on at both ends ---\n");
+  std::printf("clean link       %.0f kbps\n", healthy);
+  std::printf("under 20%% loss   %.0f kbps, the SFU asking for %d in %llu reports\n", squeezed,
+              repair.target_kbps, static_cast<unsigned long long>(repair.bandwidth_reports_sent));
+  std::printf("SFU repair       %llu requests, %llu missing, %llu recovered\n",
+              static_cast<unsigned long long>(repair.requests_sent),
+              static_cast<unsigned long long>(repair.packets_missing),
+              static_cast<unsigned long long>(repair.packets_repaired));
+  std::fflush(stdout);
+
+  // The wiring: the SFU did ask, and asked for less.
+  EXPECT_GT(repair.bandwidth_reports_sent, 5U) << "the SFU never told the sender anything";
+  EXPECT_LT(repair.target_kbps, static_cast<int>(healthy))
+      << "the SFU saw a fifth of the packets go and still asked for the ceiling";
+  // The result: the audio does not follow. See the comment above before
+  // "fixing" this line.
+  EXPECT_DOUBLE_EQ(squeezed, healthy)
+      << "the audio moved to " << squeezed
+      << " kbps under loss: the experiment works, update "
+         "docs/16-audio-plan.md step 10 and turn this into the assertion it was written for";
+}
+
 TEST_F(ImpairedNetworkTest, ACallSurvivesHalfASecondOfLatencyAndJitter) {
   start_a_call();
 

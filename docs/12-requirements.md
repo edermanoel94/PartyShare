@@ -54,8 +54,8 @@ a Qt interface. The real process carries the UI and the toolkit on top, so treat
 
 ### Bandwidth per client
 
-Video is configured at 1500 to 3000 kbps. Audio is offered a ceiling of 96 kbps,
-which is what a stereo screen share can reach; a mono voice sits at around half
+Video is configured at 1500 to 3000 kbps. Audio is offered a ceiling of 128 kbps,
+which is what a stereo screen share can reach; a mono voice sits well under half
 of it, which is the number in the table. The audio redundancy, on by default
 ([chapter 16](16-audio-plan.md), step 1), doubles whichever of those is being
 sent: every packet carries the previous frame again.
@@ -74,8 +74,8 @@ picture bad.
 rather than in one of its own, so it adds no stream to the table above and no work
 to the SFU. What it changes is the size of a stream already there: that
 participant's audio goes from a mono voice to a stereo mix, with Opus offered a
-ceiling of `audio.bitrate_kbps`, 96 kbps by default, and twice that on the wire
-while `audio.redundancy` is on.
+ceiling of `audio.bitrate_kbps`, 128 kbps by default, and twice that on the
+wire while `audio.redundancy` is on.
 
 Measured in `MediaEndToEndTest.TheSoundOfASharedScreenReachesTheOtherParticipant`:
 

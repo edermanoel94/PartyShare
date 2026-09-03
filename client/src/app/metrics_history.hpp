@@ -25,6 +25,16 @@ struct MetricsSample {
   double loss_percent = 0.0;
   double send_kbps = 0.0;
   double receive_kbps = 0.0;
+  /// The share of the audio played in this interval that the jitter buffer
+  /// had to invent, in percent. Zero for the first reading, like the loss.
+  /// This is what a loss sounds like once the repairs have had their say:
+  /// docs/16-audio-plan.md, step 9.
+  double concealment_percent = 0.0;
+  /// How long, on average, a sample waited in the jitter buffer before being
+  /// played, over this interval, in milliseconds. The buffer grows under loss
+  /// and jitter and shrinks back on a clean link, so this is the latency the
+  /// network is currently costing on top of the codec's own.
+  double jitter_buffer_ms = 0.0;
 };
 
 /// The readings of the last window, and the counters needed to turn the
@@ -65,6 +75,12 @@ class MetricsHistory {
   bool measured_ = false;
   std::uint64_t packets_lost_ = 0;
   std::uint64_t packets_received_ = 0;
+  /// The jitter buffer's totals at the last reading, for the same reason as
+  /// the packet counters: a rate is the difference between two readings.
+  std::uint64_t concealed_samples_ = 0;
+  std::uint64_t total_samples_ = 0;
+  double jitter_buffer_delay_seconds_ = 0.0;
+  std::uint64_t jitter_buffer_emitted_ = 0;
 };
 
 /// The round number an axis should stop at in order to hold `value`.

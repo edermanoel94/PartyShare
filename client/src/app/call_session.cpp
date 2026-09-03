@@ -1737,10 +1737,19 @@ void CallSession::metrics_loop() {
     }
 
     const media::AudioStats stats = session->stats();
+    // Concealment is what the loss sounded like once the repairs were done,
+    // as a share of everything played since the call began: the interval
+    // figure is on the status bar and in the charts, and a log line that has to
+    // be read on its own is better served by the total.
+    const double concealed_percent = stats.total_samples_received > 0
+                                         ? 100.0 * static_cast<double>(stats.concealed_samples) /
+                                               static_cast<double>(stats.total_samples_received)
+                                         : 0.0;
     DV_LOG_INFO(
-        "Audio: rtt {:.0f} ms, jitter {:.1f} ms, lost {} packets, up {:.0f} kbps, down {:.0f} kbps",
-        stats.round_trip_time_ms, stats.jitter_ms, stats.packets_lost, stats.send_bitrate_kbps,
-        stats.receive_bitrate_kbps);
+        "Audio: rtt {:.0f} ms, jitter {:.1f} ms, lost {} packets, concealed {:.2f}% of the audio, "
+        "up {:.0f} kbps, down {:.0f} kbps",
+        stats.round_trip_time_ms, stats.jitter_ms, stats.packets_lost, concealed_percent,
+        stats.send_bitrate_kbps, stats.receive_bitrate_kbps);
 
     // The screen share is only worth a line while there is one, and then the
     // number that matters is what the network is willing to carry against what

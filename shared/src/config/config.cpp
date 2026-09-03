@@ -279,6 +279,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
       understood = as_text(config.screen_audio.mode);
     } else if (key == "volume_percent") {
       understood = as_int(config.screen_audio.volume_percent);
+    } else if (key == "limiter") {
+      understood = as_bool(config.screen_audio.limiter);
     } else {
       known = false;
     }
@@ -293,6 +295,8 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
       understood = as_bool(config.audio.redundancy);
     } else if (key == "retransmission") {
       understood = as_bool(config.audio.retransmission);
+    } else if (key == "adaptive") {
+      understood = as_bool(config.audio.adaptive);
     } else if (key == "frame_duration_ms") {
       understood = as_int(config.audio.frame_duration_ms);
     } else if (key == "echo_cancellation") {
@@ -652,6 +656,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "bitrate_kbps", base.audio.bitrate_kbps);
       read_field(audio, "redundancy", base.audio.redundancy);
       read_field(audio, "retransmission", base.audio.retransmission);
+      read_field(audio, "adaptive", base.audio.adaptive);
       read_field(audio, "frame_duration_ms", base.audio.frame_duration_ms);
       read_field(audio, "echo_cancellation", base.audio.echo_cancellation);
       read_field(audio, "noise_suppression", base.audio.noise_suppression);
@@ -664,6 +669,7 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       const json& screen_audio = root.at("screen_audio");
       read_field(screen_audio, "mode", base.screen_audio.mode);
       read_field(screen_audio, "volume_percent", base.screen_audio.volume_percent);
+      read_field(screen_audio, "limiter", base.screen_audio.limiter);
     }
     if (root.contains("network")) {
       const json& network = root.at("network");
@@ -822,6 +828,7 @@ void apply_environment(Config& config) {
   apply_env_int("DV_AUDIO_BITRATE_KBPS", config.audio.bitrate_kbps);
   apply_env_bool("DV_AUDIO_REDUNDANCY", config.audio.redundancy);
   apply_env_bool("DV_AUDIO_RETRANSMISSION", config.audio.retransmission);
+  apply_env_bool("DV_AUDIO_ADAPTIVE_SFU", config.audio.adaptive);
   apply_env_int("DV_AUDIO_FRAME_DURATION_MS", config.audio.frame_duration_ms);
   apply_env_bool("DV_AUDIO_ECHO_CANCELLATION", config.audio.echo_cancellation);
   apply_env_bool("DV_AUDIO_NOISE_SUPPRESSION", config.audio.noise_suppression);
@@ -1106,6 +1113,7 @@ std::string to_json(const Config& config) {
                        {"bitrate_kbps", config.audio.bitrate_kbps},
                        {"redundancy", config.audio.redundancy},
                        {"retransmission", config.audio.retransmission},
+                       {"adaptive", config.audio.adaptive},
                        {"frame_duration_ms", config.audio.frame_duration_ms},
                        {"echo_cancellation", config.audio.echo_cancellation},
                        {"noise_suppression", config.audio.noise_suppression},
@@ -1115,7 +1123,8 @@ std::string to_json(const Config& config) {
                        {"output_device", config.audio.output_device}}},
                      {"screen_audio",
                       {{"mode", config.screen_audio.mode},
-                       {"volume_percent", config.screen_audio.volume_percent}}},
+                       {"volume_percent", config.screen_audio.volume_percent},
+                       {"limiter", config.screen_audio.limiter}}},
                      {"network",
                       {{"signaling_url", config.network.signaling_url},
                        {"stun_servers", config.network.stun_servers},

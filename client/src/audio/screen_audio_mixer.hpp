@@ -143,6 +143,28 @@ class ScreenAudioMixer {
   /// The microphone level the last mixed block saw, from 0 to 1.
   [[nodiscard]] double microphone_level() const noexcept { return microphone_level_.load(); }
 
+  /// What the capture device is delivering, noted by the frame processor on
+  /// every frame and logged once when it changes. The rate is what decides
+  /// whether anything above 8 kHz of somebody's voice ever leaves the machine:
+  /// a headset in communications mode delivers 16 kHz, and nothing here can
+  /// put back what the device never captured. See docs/16-audio-plan.md,
+  /// step 6.
+  void note_microphone_format(int sample_rate_hz, std::size_t channels) noexcept;
+  /// Zero until the first frame has been seen.
+  [[nodiscard]] int microphone_sample_rate_hz() const noexcept {
+    return microphone_sample_rate_hz_.load();
+  }
+
+  /// Whether the peak limiter runs on the mix. On by default: a loud voice over
+  /// a loud film adds to more than a sample holds, and the limiter turns the
+  /// gain down for the moment instead of letting `saturate` crackle. Off gives
+  /// back the plain clamp. See docs/16-audio-plan.md, step 8.
+  void set_limiter(bool enabled) noexcept { limiter_enabled_.store(enabled); }
+  [[nodiscard]] bool limiter() const noexcept { return limiter_enabled_.load(); }
+  /// Blocks in which the limiter had to turn the gain down, since the process
+  /// started. A share that never trips it costs nothing.
+  [[nodiscard]] std::uint64_t limited_blocks() const noexcept { return limited_blocks_.load(); }
+
   /// Hands over screen audio to be mixed: interleaved stereo 16-bit at 48 kHz.
   ///
   /// This is the seam the capture pushes through, and it is public because it
@@ -192,6 +214,14 @@ class ScreenAudioMixer {
   std::atomic<std::int32_t> screen_gain_{256};
   std::atomic<double> microphone_level_{0};
   std::atomic<bool> warned_about_frame_size_{false};
+  std::atomic<int> microphone_sample_rate_hz_{0};
+  std::atomic<std::size_t> microphone_channels_{0};
+  std::atomic<bool> limiter_enabled_{true};
+  /// The limiter's gain in Q15, 32768 being unity. Only the mixing thread
+  /// touches it: it is the one piece of state that has to carry from one block
+  /// to the next, so the release is smooth across the boundary.
+  std::int32_t limiter_gain_q15_ = 32768;
+  std::atomic<std::uint64_t> limited_blocks_{0};
 
   mutable std::mutex failure_mutex_;
   Error failure_;

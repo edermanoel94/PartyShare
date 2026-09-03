@@ -173,10 +173,13 @@ TEST(ScreenAudioMixerTest, ScreenAudioArrivesInStereoAndTheVoiceIsInBothEars) {
   }
 }
 
-TEST(ScreenAudioMixerTest, ALoudFilmAndALoudVoiceClipRatherThanWrapAround) {
+TEST(ScreenAudioMixerTest, ALoudFilmAndALoudVoiceAreLimitedRatherThanWrappedAround) {
   // Two signals near full scale add to more than an int16 holds. Wrapping
   // around would turn the loudest moment of a film into a burst of noise, which
-  // is the one failure a listener cannot mistake for anything else.
+  // is the one failure a listener cannot mistake for anything else. The
+  // limiter holds the loud side at the ceiling and turns the other side down
+  // by the same amount, so the stereo image stays where it was: 50000 fits
+  // into 32767 at a gain of 0.655, and -10000 at that gain is -6554.
   ScreenAudioMixer mixer;
   mixer.push_screen_audio(screen(30000, -30000));
 
@@ -184,7 +187,69 @@ TEST(ScreenAudioMixerTest, ALoudFilmAndALoudVoiceClipRatherThanWrapAround) {
   mixer.mix(microphone(20000), 1, out);
 
   EXPECT_EQ(out[0], 32767);
+  EXPECT_EQ(out[1], -6554);
+  EXPECT_EQ(mixer.limited_blocks(), 1U);
+}
+
+TEST(ScreenAudioMixerTest, WithTheLimiterOffTheMixClips) {
+  // The way back: the plain clamp, each side on its own.
+  ScreenAudioMixer mixer;
+  mixer.set_limiter(false);
+  mixer.push_screen_audio(screen(30000, -30000));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(20000), 1, out);
+
+  EXPECT_EQ(out[0], 32767);
   EXPECT_EQ(out[1], -10000);
+  EXPECT_EQ(mixer.limited_blocks(), 0U);
+}
+
+TEST(ScreenAudioMixerTest, AMixThatFitsGoesThroughTheLimiterUntouched) {
+  ScreenAudioMixer mixer;
+  mixer.push_screen_audio(screen(1000, -2000));
+
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  mixer.mix(microphone(300), 1, out);
+
+  for (std::size_t frame = 0; frame < kFramesPerBlock; ++frame) {
+    ASSERT_EQ(out[frame * 2], 300 + 1000) << "left, at frame " << frame;
+    ASSERT_EQ(out[(frame * 2) + 1], 300 - 2000) << "right, at frame " << frame;
+  }
+  EXPECT_EQ(mixer.limited_blocks(), 0U);
+}
+
+TEST(ScreenAudioMixerTest, TheLimiterLetsGoWithinAThirdOfASecond) {
+  // One loud block, then quiet ones. The gain is still down at the start of
+  // the quiet stretch - that is the release doing its job, not pumping back
+  // up on the next sample - and it is back to unity well inside the 30 blocks
+  // the plan allows, so a loud moment does not quieten the next sentence.
+  // Three loud blocks and not one: the pacer between the capture and the
+  // encoder hands out silence until it holds two blocks, so a single block
+  // pushed by hand would come out as nothing and limit nothing.
+  ScreenAudioMixer mixer;
+  mixer.push_screen_audio(screen(30000, -30000));
+  std::vector<std::int16_t> out(kSamplesPerBlock, 0);
+  for (int block = 0; block < 3; ++block) {
+    mixer.mix(microphone(20000), 1, out);
+  }
+  ASSERT_EQ(mixer.limited_blocks(), 3U);
+
+  mixer.push_screen_audio(screen(0, 0, 1));
+  mixer.mix(microphone(1000), 1, out);
+  EXPECT_LT(out[0], 1000) << "the gain came back up all at once";
+  EXPECT_GT(out[0], 600) << "the gain never started coming back";
+
+  std::size_t blocks_until_unity = 1;
+  for (; blocks_until_unity < 40; ++blocks_until_unity) {
+    mixer.push_screen_audio(screen(0, 0, 1));
+    mixer.mix(microphone(1000), 1, out);
+    if (out[kSamplesPerBlock - 2] == 1000 && out[0] == 1000) {
+      break;
+    }
+  }
+  EXPECT_LT(blocks_until_unity, 30U) << "the limiter held the gain down for too long";
+  EXPECT_EQ(mixer.limited_blocks(), 3U) << "quiet blocks were counted as limited";
 }
 
 TEST(ScreenAudioMixerTest, ItClipsAtTheBottomToo) {

@@ -80,6 +80,13 @@ inline constexpr double kFairJitterMs = 15.0;
 inline constexpr double kPoorJitterMs = 30.0;
 inline constexpr double kFairLossPercent = 1.0;
 inline constexpr double kPoorLossPercent = 5.0;
+/// Concealment is what a loss sounds like once RED and retransmission have
+/// had their say, so it sits under the loss: 5% of packets lost measured as
+/// 0.3% of samples invented with both repairs on, and 7% with neither
+/// (docs/16-audio-plan.md, steps 1 and 2). Drawn as guide lines only; the
+/// verdict still comes from the three above.
+inline constexpr double kFairConcealmentPercent = 1.0;
+inline constexpr double kPoorConcealmentPercent = 3.0;
 
 /// Turns the measurements of section 22 of SPEC.md into one word.
 ///

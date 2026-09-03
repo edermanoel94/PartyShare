@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <utility>
 
 #include <dv/logging/logger.hpp>
@@ -39,6 +40,24 @@ constexpr int kGainShift = 8;
 /// that filled with zeros would come back as a positive spike.
 [[nodiscard]] std::int32_t at_gain(std::int16_t sample, std::int32_t gain) noexcept {
   return (static_cast<std::int32_t>(sample) * gain) >> kGainShift;
+}
+
+/// The limiter's gain lives in Q15: 32768 is unity, and a mixed sample can be
+/// as wide as a full scale voice plus a full scale film boosted to 200%, some
+/// 98000, which times 32768 still fits an int64 comfortably.
+constexpr std::int32_t kLimiterUnityQ15 = 32768;
+constexpr int kLimiterShift = 15;
+/// The loudest sample that fits, and the level the limiter holds a peak to.
+constexpr std::int32_t kPeakCeiling = 32767;
+/// How fast the gain climbs back, per sample. One step per sample from half
+/// gain is some 16000 samples at 48 kHz, a third of a second: slow enough not
+/// to pump with the beat, fast enough that a single loud moment does not
+/// quieten the next sentence. Measured by ear is the next step, not this one.
+constexpr std::int32_t kLimiterReleasePerSample = 1;
+
+/// A mixed sample at the limiter's gain, still wide, for `saturate` to finish.
+[[nodiscard]] std::int32_t at_limiter_gain(std::int32_t sample, std::int32_t gain_q15) noexcept {
+  return static_cast<std::int32_t>((static_cast<std::int64_t>(sample) * gain_q15) >> kLimiterShift);
 }
 
 }  // namespace
@@ -131,6 +150,27 @@ void ScreenAudioMixer::note_failure(Error error) {
   failure_ = std::move(error);
 }
 
+void ScreenAudioMixer::note_microphone_format(int sample_rate_hz, std::size_t channels) noexcept {
+  const int previous_rate = microphone_sample_rate_hz_.exchange(sample_rate_hz);
+  const std::size_t previous_channels = microphone_channels_.exchange(channels);
+  if (previous_rate == sample_rate_hz && previous_channels == channels) {
+    return;
+  }
+  // Once per change, and at info rather than warning: a device delivering
+  // 16 kHz is doing what it was built to do. What matters is that somebody
+  // reading the log can see it, because nothing downstream can put back the
+  // half of the voice the device never captured.
+  if (sample_rate_hz < 32000) {
+    DV_LOG_INFO(
+        "Audio: the microphone is delivering {} Hz on {} channel(s); nothing above {} kHz of the "
+        "voice will be sent",
+        sample_rate_hz, channels, sample_rate_hz / 2000);
+  } else {
+    DV_LOG_INFO("Audio: the microphone is delivering {} Hz on {} channel(s)", sample_rate_hz,
+                channels);
+  }
+}
+
 MixResult ScreenAudioMixer::mix(std::span<const std::int16_t> microphone, std::size_t channels,
                                 std::span<std::int16_t> out) {
   MixResult result;
@@ -182,6 +222,11 @@ MixResult ScreenAudioMixer::mix(std::span<const std::int16_t> microphone, std::s
   // this runs then lands between blocks instead of inside one, which is the
   // difference between a volume change and a step in the middle of a waveform.
   const std::int32_t screen_gain = screen_gain_.load();
+  const bool limiting = limiter_enabled_.load();
+  if (!limiting) {
+    limiter_gain_q15_ = kLimiterUnityQ15;
+  }
+  bool limited = false;
 
   for (std::size_t frame = 0; frame < frames; ++frame) {
     // A mono microphone goes to both ears; a stereo one keeps its sides. The
@@ -195,10 +240,38 @@ MixResult ScreenAudioMixer::mix(std::span<const std::int16_t> microphone, std::s
     // The gain lands on the screen audio alone. The microphone keeps whatever
     // libwebrtc's own gain control left it at, which is the level the far end
     // has already learned this person's voice at.
-    out[frame * 2] = saturate(left + at_gain(screen_block_[frame * 2], screen_gain));
-    out[(frame * 2) + 1] = saturate(right + at_gain(screen_block_[(frame * 2) + 1], screen_gain));
+    const std::int32_t mixed_left = left + at_gain(screen_block_[frame * 2], screen_gain);
+    const std::int32_t mixed_right = right + at_gain(screen_block_[(frame * 2) + 1], screen_gain);
+
+    if (limiting) {
+      // A peak limiter with no lookahead: the moment a sample would not fit,
+      // the gain drops to exactly what fits and both channels take it, so the
+      // stereo image holds; then it climbs back one step per sample. Instant
+      // on the way down because the alternative is the crackle this exists to
+      // remove; slow on the way up because a gain that pumps with every beat
+      // is its own kind of audible.
+      const std::int32_t peak = std::max(std::abs(mixed_left), std::abs(mixed_right));
+      if (peak > kPeakCeiling) {
+        // Rounded up, so that the limited peak lands on the ceiling itself and
+        // not one below it: a gain rounded down leaves 32766 where a listener
+        // and a test both expect the loudest sample that fits.
+        const auto needed = static_cast<std::int32_t>(
+            ((static_cast<std::int64_t>(kPeakCeiling) << kLimiterShift) + peak - 1) / peak);
+        limiter_gain_q15_ = std::min(limiter_gain_q15_, needed);
+        limited = true;
+      }
+      out[frame * 2] = saturate(at_limiter_gain(mixed_left, limiter_gain_q15_));
+      out[(frame * 2) + 1] = saturate(at_limiter_gain(mixed_right, limiter_gain_q15_));
+      limiter_gain_q15_ = std::min(kLimiterUnityQ15, limiter_gain_q15_ + kLimiterReleasePerSample);
+    } else {
+      out[frame * 2] = saturate(mixed_left);
+      out[(frame * 2) + 1] = saturate(mixed_right);
+    }
   }
 
+  if (limited) {
+    limited_blocks_.fetch_add(1);
+  }
   return result;
 }
 

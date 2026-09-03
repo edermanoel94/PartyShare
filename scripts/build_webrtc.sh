@@ -271,6 +271,11 @@ EXTRA_TARGETS=(
   "//api/video_codecs:builtin_video_encoder_factory"
   "//api/video_codecs:builtin_video_decoder_factory"
   "//api/video:adapted_video_track_source"
+  # The Windows Core Audio device module, CreateWindowsCoreAudioAudioDeviceModule:
+  # the header ships, the symbol did not, because this target is not part of
+  # the webrtc library target. Step 12 of docs/16-audio-plan.md is what wants
+  # it. Harmless on the other platforms, where the target compiles to nothing.
+  "//modules/audio_device:audio_device_module_from_input_and_output"
 )
 
 echo "==> building"

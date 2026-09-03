@@ -54,6 +54,51 @@ TEST(MetricsHistoryTest, LossIsTheShareOfWhatTheIntervalExpected) {
   EXPECT_DOUBLE_EQ(history.samples().back().loss_percent, 10.0);
 }
 
+[[nodiscard]] AudioStats heard(std::uint64_t played, std::uint64_t concealed, double buffer_seconds,
+                               std::uint64_t emitted) {
+  AudioStats stats;
+  stats.total_samples_received = played;
+  stats.concealed_samples = concealed;
+  stats.jitter_buffer_delay_seconds = buffer_seconds;
+  stats.jitter_buffer_emitted_count = emitted;
+  return stats;
+}
+
+TEST(MetricsHistoryTest, ConcealmentIsTheShareOfTheIntervalThatWasInvented) {
+  // docs/16-audio-plan.md, step 9. A bad first stretch, then a clean one: the
+  // figure is the interval's, not the call's, like the loss above.
+  MetricsHistory history(60000.0);
+  history.observe(heard(48000, 4800, 1.0, 48000), 0.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().concealment_percent, 0.0)
+      << "the first reading has nothing to compare against";
+
+  // 480 more invented out of 48000 more played: one percent.
+  history.observe(heard(96000, 5280, 2.0, 96000), 1000.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().concealment_percent, 1.0);
+
+  // Nothing invented in the next stretch.
+  history.observe(heard(144000, 5280, 3.0, 144000), 2000.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().concealment_percent, 0.0);
+}
+
+TEST(MetricsHistoryTest, TheJitterBufferDepthIsTheIntervalsAverageWait) {
+  MetricsHistory history(60000.0);
+  history.observe(heard(48000, 0, 1.0, 48000), 0.0);
+  // libwebrtc adds every emitted sample's own wait to the total, so 48000
+  // samples that each waited 50 ms add 2400 seconds to it.
+  history.observe(heard(96000, 0, 1.0 + 2400.0, 96000), 1000.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().jitter_buffer_ms, 50.0);
+}
+
+TEST(MetricsHistoryTest, TheJitterBufferCountersGoingBackwardsAreASecondCallToo) {
+  MetricsHistory history(60000.0);
+  history.observe(heard(96000, 960, 2.0, 96000), 0.0);
+  // A new peer connection starts every counter from zero again.
+  history.observe(heard(48000, 100, 0.5, 48000), 1000.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().concealment_percent, 0.0);
+  EXPECT_DOUBLE_EQ(history.samples().back().jitter_buffer_ms, 0.0);
+}
+
 TEST(MetricsHistoryTest, AnIntervalWithNoPacketsInItIsNotLoss) {
   // Nobody spoke, or the call was still setting up. Zero of zero expected is
   // not a hundred percent lost, and it is not a division either.

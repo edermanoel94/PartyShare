@@ -371,6 +371,9 @@ int main(int argc, char* argv[]) {
     // Retransmission on every audio leg, unless the file turned it off. See
     // sfu/loss_repair.hpp and docs/16-audio-plan.md, step 2.
     options.sfu.audio_nack = config.audio.retransmission;
+    // The experiment of docs/16-audio-plan.md step 10, off unless the file
+    // says otherwise.
+    options.sfu.audio_adaptive = config.audio.adaptive;
     if (!config.network.turn_url.empty()) {
       options.sfu.ice_servers.push_back(build_turn_url(config.network));
     }

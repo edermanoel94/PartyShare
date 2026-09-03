@@ -158,6 +158,10 @@ class SettingsDialog : public QDialog {
   /// would leave a file whose maximum sits below its minimum.
   void stage(const std::vector<config::IniSetting>& settings);
 
+  /// Fills or clears `microphone_hint_` from what the capture is delivering
+  /// right now and which device is selected.
+  void show_microphone_hint();
+
   /// Says which file the settings are kept in, whether anything is waiting to
   /// go into it, and what went wrong when it could not be written.
   ///
@@ -201,6 +205,12 @@ class SettingsDialog : public QDialog {
   /// text editor and a restart, and since docs/16-audio-plan.md step 5 the
   /// same box holds how hard it bites: off, then the four levels.
   QComboBox* noise_suppression_ = nullptr;
+  /// Under the microphone box, and empty unless the device delivers less than
+  /// a voice needs: a headset in communications mode captures 16 kHz, and
+  /// nothing downstream can put back what it never captured. Only says
+  /// something during a call, because that is when there is a capture to read.
+  /// See audio/microphone_hint.hpp.
+  QLabel* microphone_hint_ = nullptr;
   /// The chime when somebody joins or leaves a room.
   ///
   /// Beside the devices rather than under the screen settings, because it is

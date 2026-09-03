@@ -330,6 +330,7 @@ int run(int argc, char* argv[]) {
       screen_sound_possible ? dv::client::app::screen_audio_mode_from(config.screen_audio.mode)
                             : dv::client::app::ScreenAudio::Mode::None;
   session_options.media.screen_audio_volume_percent = config.screen_audio.volume_percent;
+  session_options.media.screen_audio_limiter = config.screen_audio.limiter;
 
   // Said once at startup rather than on every share, and only to somebody who
   // asked for sound: a file that already says "none" is getting what it asked

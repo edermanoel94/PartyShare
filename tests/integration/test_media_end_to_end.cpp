@@ -183,6 +183,10 @@ TEST_F(MediaEndToEndTest, MetricsAreCollectedFromTheRealConnection) {
   // Bytes sent is the first number to move, and it proves the stats path
   // works end to end: collection, parsing and reporting.
   EXPECT_TRUE(wait_until([&] { return ana.session().stats().bytes_sent > 0; }));
+  // What the capture delivers is reported too, and it is what tells a 16 kHz
+  // headset from a 48 kHz one: docs/16-audio-plan.md, step 6.
+  EXPECT_TRUE(wait_until([&] { return ana.session().stats().microphone_sample_rate_hz > 0; }))
+      << "the microphone's sample rate never reached the statistics";
 }
 
 TEST_F(MediaEndToEndTest, TheEchoCancellerRunsOnTheCapturedAudio) {

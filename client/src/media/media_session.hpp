@@ -94,6 +94,10 @@ struct AudioStats {
   /// Outgoing audio bitrate, averaged over the last collection interval.
   double send_bitrate_kbps = 0;
   double receive_bitrate_kbps = 0;
+  /// What the audio encoder is currently asked to aim for, in kbps. Fixed at
+  /// the offer's ceiling unless the experimental adaptive audio is on, when it
+  /// is what the allocation hands the audio: docs/16-audio-plan.md, step 10.
+  double audio_target_bitrate_kbps = 0;
 
   /// What the jitter buffer had to invent, summed over every participant's
   /// incoming audio: the samples received at all, the samples played that
@@ -108,6 +112,17 @@ struct AudioStats {
   std::uint64_t total_samples_received = 0;
   std::uint64_t concealed_samples = 0;
   std::uint64_t concealment_events = 0;
+  /// The rest of what the jitter buffer reports, for docs/16-audio-plan.md
+  /// step 9: concealment that only papered over silence, which nobody hears;
+  /// the delay every emitted sample waited in the buffer, summed, and how many
+  /// samples that sum is over, which together give the buffer's average depth;
+  /// packets the buffer threw away as too late; and packets whose loss was
+  /// covered by in-band FEC, which is zero while RED carries the redundancy.
+  std::uint64_t silent_concealed_samples = 0;
+  double jitter_buffer_delay_seconds = 0;
+  std::uint64_t jitter_buffer_emitted_count = 0;
+  std::uint64_t packets_discarded = 0;
+  std::uint64_t fec_packets_received = 0;
 
   /// The retransmission, from this end. NACKs this client sent for audio it
   /// was expecting and did not get, NACKs it received for audio it sent, and
@@ -168,6 +183,16 @@ struct AudioStats {
   /// Frames thrown away because that buffer went over its watermark, which is
   /// the encoder falling behind the capture rather than the other way round.
   std::uint64_t screen_audio_dropped_frames = 0;
+  /// Blocks in which the mixer's limiter had to turn the gain down because the
+  /// voice and the screen together did not fit a sample. Zero for a share that
+  /// never trips it. docs/16-audio-plan.md, step 8.
+  std::uint64_t screen_audio_limited_blocks = 0;
+
+  /// What the capture device is delivering, in Hz. Zero before the first frame.
+  /// A headset in communications mode delivers 16000, and then nothing above
+  /// 8 kHz of the voice ever leaves the machine: the number is here so that the
+  /// settings dialog can say so. docs/16-audio-plan.md, step 6.
+  int microphone_sample_rate_hz = 0;
 };
 
 /// What the screen share is doing, section 22 of SPEC.md.
@@ -458,6 +483,9 @@ struct MediaSessionOptions {
   /// How loud a screen share's sound starts, as a percentage. See
   /// MediaSession::set_screen_audio_volume.
   int screen_audio_volume_percent = 100;
+  /// Whether the mixer's peak limiter runs. See
+  /// audio::ScreenAudioMixer::set_limiter.
+  bool screen_audio_limiter = true;
 
   /// Section 5.2 of SPEC.md: 1280x720 at 30 FPS.
   video::ScreenCaptureOptions capture;

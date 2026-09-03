@@ -1310,7 +1310,7 @@ void MainWindow::on_leave_room() {
     apply_error(QString::fromStdString(left.error().code),
                 QString::fromStdString(left.error().message));
   }
-  screen_view_->clear();
+  screen_view_->set_receiving(false);
   sharing_label_->clear();
   // The conversation belongs to the room that was just left. Leaving it on
   // screen would put one room's messages above the next room's history.
@@ -2017,7 +2017,11 @@ void MainWindow::apply_screen_share(const QString& user_id) {
   if (user_id.isEmpty()) {
     sharing_label_->clear();
     screen_view_->set_placeholder(QStringLiteral("nobody is sharing a screen"));
-    screen_view_->clear();
+    // Closed rather than cleared. Whoever was sharing has stopped, or has left
+    // the room, and the frames already inside the decoder are still on their
+    // way here - see ScreenView::set_receiving. A clear alone let the last of
+    // them land a moment later and freeze on screen for the rest of the call.
+    screen_view_->set_receiving(false);
     refresh_controls();
     return;
   }
@@ -2040,7 +2044,9 @@ void MainWindow::apply_screen_share(const QString& user_id) {
   // exactly the moment it matters most.
   if (is_me) {
     screen_view_->set_placeholder(QStringLiteral("you are sharing this screen with the room"));
-    screen_view_->clear();
+    screen_view_->set_receiving(false);
+  } else {
+    screen_view_->set_receiving(true);
   }
   refresh_controls();
 }

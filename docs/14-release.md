@@ -269,14 +269,29 @@ The `.dmg` has the bundle, the shortcut to `/Applications`, a volume icon and th
 example configuration. It lacks a background image and icon positioning, which is
 appearance rather than function.
 
-**It still ships a client that cannot make a call.** A libwebrtc tree exists for
-macOS now, produced by `scripts/build_webrtc.sh` on an Apple Silicon machine and
-validated by linking the client against it. What is missing is publishing that
-tree as a release asset and recording its URL and checksum in
-`cmake/Findlibwebrtc.cmake`, the way `_dv_url_windows_x64_md` already is. Until
-then the macOS job must not pass `-DDV_BUILD_CLIENT_MEDIA=ON`: the only tree it
-could fetch is the prebuilt one, whose `std::__Cr` symbols cannot link against a
+**The macOS client carries the media layer, and did not until v0.1.45.**
+Every `.dmg` up to v0.1.44 installed a client that connected, joined a room and
+answered every attempt to speak or share a screen with "This build has no media
+layer", the same failure the Windows job had until v0.1.4 and the first AppImage
+had before that.
+It could not be fixed by passing the flag alone: the only tree the job could
+fetch was the prebuilt one, whose `std::__Cr` symbols cannot link against a
 client built with Apple's own libc++.
+What unblocked it was publishing the source build under the
+`webrtc-m152.7977.0.0-macos-arm64` tag and recording its URL and checksum in
+`cmake/Findlibwebrtc.cmake` as `_dv_url_macos_arm64_src`, the way
+`_dv_url_windows_x64_md` already was.
+A step after the build scans the bundle's executable for the sentence only the
+stub carries, because a flag that goes missing again would otherwise build,
+bundle, sign, notarise and publish without a word.
+
+**The hardened runtime is a second gate in front of the microphone.**
+`codesign --options runtime` refuses the input device to a bundle carrying no
+`com.apple.security.device.audio-input`, whatever `NSMicrophoneUsageDescription`
+says, and the room then runs on silence with nothing in any log to explain it.
+The signing step passes `assets/partyshare.entitlements` for that one key.
+The screen needs neither an entitlement nor a plist key: macOS asks for it once,
+on its own, and remembers the answer in System Settings.
 
 ## Signing and notarization
 

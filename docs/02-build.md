@@ -131,8 +131,10 @@ cmake -S . -B build/media \
 cmake --build build/media
 ```
 
-On Windows `cmake/Findlibwebrtc.cmake` fetches a published tree by default, so
-`-DDV_WEBRTC_ROOT` is only needed to point at one built by hand.
+On Windows and on macOS `cmake/Findlibwebrtc.cmake` fetches a published tree by
+default, so `-DDV_WEBRTC_ROOT` is only needed to point at one built by hand.
+Both of those trees are source builds published from this repository, because
+the prebuilt archives cannot be linked on either platform.
 
 ### Debugging environment variables
 

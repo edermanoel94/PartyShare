@@ -240,3 +240,26 @@ That `dist` tree is published as a release asset under the
 to repeat any of the above on every tag. Rebuilding it — a new milestone, a
 different GN argument — means repeating this section, uploading the result, and
 changing `_dv_url_windows_x64_md` and `_dv_sha_windows_x64_md` together.
+
+### 7.5 macOS, published for the same reason
+
+macOS needs none of section 7.1 to 7.3: `scripts/build_webrtc.sh --ssl-root <dir>`
+produces the tree in one command, and the merge step Windows needs is what `ar`
+already does there.
+What it shares is the reason to publish the result rather than rebuild it, and
+the packaging is the same shape:
+
+```sh
+cd ~/.cache/partyshare/webrtc/dist
+tar -czf webrtc-m152.7977.0.0-macos-arm64-system-libcxx.tar.gz \
+  DV_EXTERNAL_SSL DV_SYSTEM_LIBCXX VERSIONS include lib
+shasum -a 256 webrtc-m152.7977.0.0-macos-arm64-system-libcxx.tar.gz
+```
+
+131 MB compressed, from a 478 MiB `lib/libwebrtc.a`, with the archive members at
+the root rather than under a directory of their own: CMake's `FetchContent` lifts
+a single top level directory and `Findlibwebrtc.cmake` then looks for `include/`
+and the two markers where they are.
+It is published under the `webrtc-m152.7977.0.0-macos-arm64` tag, and rebuilding
+it means changing `_dv_url_macos_arm64_src` and `_dv_sha_macos_arm64_src`
+together.

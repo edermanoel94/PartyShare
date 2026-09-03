@@ -30,6 +30,11 @@
 #                           win_use_dynamic_crt=true, which is the only one that
 #                           links next to Qt and vcpkg. Off gives the published
 #                           /MT package, which is what the spike wants.
+#   DV_WEBRTC_MACOS_SYSTEM_LIBCXX
+#                           on macOS, fetch the tree built with
+#                           use_custom_libcxx=false, which is the only one that
+#                           links next to Qt. Off gives the published package,
+#                           which carries Chromium's libc++ and does not link.
 #   DV_WEBRTC_USE_BUNDLED_LIBCXX
 #                           on Linux, compile consumers against the libc++ this
 #                           build was made with. Required for the published
@@ -67,6 +72,26 @@ option(DV_WEBRTC_ALLOW_UNVERIFIED "Allow a download with no recorded checksum" O
 option(DV_WEBRTC_WINDOWS_DYNAMIC_CRT
        "On Windows, fetch the libwebrtc built against the dynamic CRT" ON)
 
+# Which of the two macOS trees to fetch, and the same shape of problem as
+# Windows above in a third currency: the standard library.
+#
+# The published shiguredo package is built with Chromium's own libc++, whose
+# symbols live in the ABI namespace std::__Cr, and the client is built with
+# Apple's, std::__1. Neither one can read the other's std::string, so the two
+# cannot share a binary. The two archives also disagree about m152 despite
+# carrying the same version number, and the link ends on CreateSessionDescription,
+# CreateIceCandidate, Thread::SetName, AsyncPacketSocket::SubscribeCloseEvent and
+# CreateVideoEncoderSoftwareFallbackWrapper undefined.
+#
+# With this on, the fetch is a tree built by scripts/build_webrtc.sh from the
+# same milestone with use_custom_libcxx=false and rtc_build_ssl=false, published
+# from this repository because reproducing it takes a 27 GB Chromium checkout.
+#
+# Turn it off only to reach the published package, which nothing in this
+# repository can currently link.
+option(DV_WEBRTC_MACOS_SYSTEM_LIBCXX
+       "On macOS, fetch the libwebrtc built against the system standard library" ON)
+
 set(_dv_webrtc_base
     "https://github.com/shiguredo-webrtc-build/webrtc-build/releases/download/${DV_WEBRTC_VERSION}")
 
@@ -81,6 +106,14 @@ set(_dv_sha_windows_x64 "fbc4afe2f9e0a8a42ca8afb94f0ba37511c0dba7728be012edee86e
 set(_dv_url_windows_x64_md
     "https://github.com/edermanoel94/PartyShare/releases/download/webrtc-${DV_WEBRTC_VERSION}-windows-x64/webrtc-${DV_WEBRTC_VERSION}-windows-x64-dynamic-crt.tar.gz")
 set(_dv_sha_windows_x64_md "6c2056ec726ce947501a6a764a544543813da4773b9d0b4036c93c24d8146954")
+
+# The macOS tree is published from this repository for the same reason and is
+# not one of the four above either. Rebuilding it means running
+# scripts/build_webrtc.sh --ssl-root <vcpkg arm64-osx>, uploading the result,
+# and changing these two together.
+set(_dv_url_macos_arm64_src
+    "https://github.com/edermanoel94/PartyShare/releases/download/webrtc-${DV_WEBRTC_VERSION}-macos-arm64/webrtc-${DV_WEBRTC_VERSION}-macos-arm64-system-libcxx.tar.gz")
+set(_dv_sha_macos_arm64_src "da4d88cf83bcad0d1febcc5d684c1c688a01b52751303ca59202d1e64f848ae0")
 
 # --- select the archive -------------------------------------------------------
 
@@ -101,8 +134,13 @@ if(NOT DV_WEBRTC_ROOT)
         "No prebuilt libwebrtc exists for macOS ${CMAKE_OSX_ARCHITECTURES}. "
         "Point DV_WEBRTC_ROOT at a tree you built yourself.")
     endif()
-    set(_dv_url "${_dv_webrtc_base}/webrtc.macos_arm64.tar.gz")
-    set(_dv_sha "${_dv_sha_macos_arm64}")
+    if(DV_WEBRTC_MACOS_SYSTEM_LIBCXX)
+      set(_dv_url "${_dv_url_macos_arm64_src}")
+      set(_dv_sha "${_dv_sha_macos_arm64_src}")
+    else()
+      set(_dv_url "${_dv_webrtc_base}/webrtc.macos_arm64.tar.gz")
+      set(_dv_sha "${_dv_sha_macos_arm64}")
+    endif()
   elseif(UNIX)
     if(DV_WEBRTC_LINUX_FLAVOR STREQUAL "22.04")
       set(_dv_url "${_dv_webrtc_base}/webrtc.ubuntu-22.04_x86_64.tar.gz")

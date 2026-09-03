@@ -33,6 +33,7 @@ chapters link to it.
 | 13 | [Security review](13-security.md) | The section 17 review, and what is still open |
 | 14 | [Release](14-release.md) | Cutting a release, and what each platform produces |
 | 15 | [Post-mortems](15-postmortems.md) | The bugs that cost real time, and what each turned out to be |
+| 16 | [Audio plan](16-audio-plan.md) | Twelve steps, one pull request each, to repair loss and lift the voice and the shared music |
 
 ## Reference
 

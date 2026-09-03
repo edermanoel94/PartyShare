@@ -257,12 +257,24 @@ repository under the `webrtc-m152.7977.0.0-windows-x64` tag.
 `DV_WEBRTC_WINDOWS_DYNAMIC_CRT=OFF` goes back to the `/MT` package — which the
 spike is now the only thing that wants.
 
-macOS has neither conflict. The media layer builds and runs there over a source
-build, so `std::string` crosses the boundary in anger rather than in a probe. It
-needed `--ssl-root`, because libwebrtc's bundled BoringSSL and the OpenSSL
+macOS has no runtime conflict, and it does have the libc++ one: the prebuilt
+`macos_arm64` archive is built with Chromium's, so it is ruled out for exactly
+the reason the Linux archive is.
+
+The media layer builds and runs there over a source build, so `std::string`
+crosses the boundary in anger rather than in a probe.
+It needed `--ssl-root`, because libwebrtc's bundled BoringSSL and the OpenSSL
 libdatachannel needs collide in 932 duplicate symbols; `ld64` refuses that
 outright, which is why it surfaced there and not on Linux, where GNU `ld` takes
 the first definition and links anyway.
+
+That tree is published from this repository under the
+`webrtc-m152.7977.0.0-macos-arm64` tag, for the same reason the Windows one is:
+a release pipeline cannot be asked to reproduce a 27 GB Chromium checkout on
+every tag.
+`Findlibwebrtc.cmake` fetches it on macOS by default, and
+`DV_WEBRTC_MACOS_SYSTEM_LIBCXX=OFF` goes back to the prebuilt package, which
+nothing in this repository can currently link.
 
 ## 7. What is still open
 
@@ -270,8 +282,9 @@ the first definition and links anyway.
       machine runs X11, so this depends on another session.
 - [ ] A Linux build over the reconstructed `0001` patch, per the note in section 5.
 - [x] Everything else: the pin and its checksums, `Findlibwebrtc.cmake`, source
-      builds on Linux and Windows, X11 capture with a real 1920x1080 frame, and
-      the media layer running on all three platforms.
+      builds on Linux, Windows and macOS, the Windows and macOS trees published
+      as release assets, X11 capture with a real 1920x1080 frame, and the media
+      layer running on all three platforms.
 
 Two platform-specific results are worth keeping, because both look like defects
 and are not:

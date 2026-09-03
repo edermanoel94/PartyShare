@@ -52,7 +52,7 @@ is written to an audit log.
 | --- | --- | --- |
 | Linux x64 | Built, run and measured. Every number in the documentation comes from here | The server, as a tarball `scripts/install_server.sh` installs. The client: **nothing** — build from source |
 | Windows x64 | Built, run and packaged. Media layer included | `.msi` and `.zip`, installed and run |
-| macOS ARM64 | Built and run, media layer included | `.dmg`, which still ships a client that **cannot make a call** |
+| macOS ARM64 | Built and run, media layer included | `.dmg`, installed and run |
 | macOS x64 | Code, presets and packaging exist. Never built | **nothing** — the build fails on the Intel runner |
 
 Windows is the one platform where a downloaded client works, and Linux the one

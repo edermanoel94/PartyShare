@@ -618,14 +618,55 @@ jobs:
         run: scripts/ci_vcpkg.sh
         shell: bash
 
+      # DV_BUILD_CLIENT_MEDIA is the whole difference between a disk image and
+      # a disk image that can make a call. It defaults to OFF, and every .dmg
+      # this pipeline published up to v0.1.44 was built without it: the client
+      # started, connected, joined a room and answered every attempt to speak
+      # or share a screen with "This build has no media layer", which is what
+      # media/media_session.cpp and video/screen_capturer.cpp return when the
+      # stubs are the only definitions in the binary.
+      #
+      # It could not be turned on before the tree it needs was published. The
+      # prebuilt macos_arm64 archive carries Chromium's libc++ and does not
+      # link against a client built with Apple's, so cmake/Findlibwebrtc.cmake
+      # fetches a source build published from this repository instead. That is
+      # 131 MB of download expanding to a 478 MiB static library.
       - name: Configure
         run: >
           cmake --preset ${{ matrix.preset }}
           -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
+          -DDV_BUILD_CLIENT_MEDIA=ON
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      # find_package(libwebrtc REQUIRED) already fails the configure when the
+      # media layer cannot be built, so this is not about the fetch breaking.
+      # It is about the flag above being dropped or misspelled, which is a
+      # change that builds, bundles, signs, notarises and publishes, and is
+      # only discovered by a person who downloaded the image and tried to talk.
+      # The sentence looked for here exists in exactly two translation units,
+      # and only when the stubs are compiled in.
+      #
+      # grep -c rather than grep -q, because grep -q closes the pipe on its
+      # first match and hands strings a SIGPIPE, which pipefail then reports as
+      # a failed pipeline - turning the case this step exists to catch into a
+      # pass.
+      - name: Check the media layer is in the binary
+        run: |
+          set -euo pipefail
+          bin=build/${{ matrix.preset }}/bin/partyshare.app/Contents/MacOS/partyshare
+          if [[ ! -f "$bin" ]]; then
+            echo "::error::$bin was not built"
+            exit 1
+          fi
+          stubs=$(strings -a "$bin" | grep -c 'built without libwebrtc' || true)
+          if [[ "$stubs" != "0" ]]; then
+            echo "::error::this build carries the media stub, so it cannot send or receive audio"
+            exit 1
+          fi
+          echo "media layer present, partyshare is $(du -m "$bin" | cut -f1) MB"
 
       # The configuration file has to be carried into the bundle by hand.
       # install(FILES) puts it under share/doc, which is right for a Unix
@@ -731,7 +772,16 @@ jobs:
             "$RUNNER_TEMP/build.keychain"
           rm "$RUNNER_TEMP/cert.p12"
 
+          # --options runtime is a second gate in front of the microphone, and
+          # NSMicrophoneUsageDescription does not open it: under the hardened
+          # runtime a build with no com.apple.security.device.audio-input is
+          # refused the input device outright, and a voice room then runs on
+          # silence with nothing in any log to say why. The Info.plist string
+          # says why the program wants the microphone; the entitlement says the
+          # program is allowed to ask at all. The screen needs neither, macOS
+          # gates that through its own prompt.
           codesign --deep --force --options runtime --timestamp \
+            --entitlements assets/partyshare.entitlements \
             --sign "$MACOS_SIGNING_IDENTITY" stage/partyshare.app
 
           ditto -c -k --keepParent stage/partyshare.app "$RUNNER_TEMP/notarise.zip"

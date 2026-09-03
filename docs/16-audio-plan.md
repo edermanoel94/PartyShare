@@ -136,6 +136,16 @@ retransmit from (`kNackRtpHistoryMs`); with `nack` on the receive codec it
 turns on NetEq's NackTracker (`webrtc_voice_engine.cc:322` and `:2074`).
 Nothing to do on the client.
 
+**Verified while building it, and easy to misread.** libwebrtc gives its own
+audio codecs no `nack` feedback (`media/base/codec.cc` adds it to video only)
+and intersects feedback parameters on the way to an answer
+(`pc/codec_vendor.cc:725`), so the client's answer never echoes
+`a=rtcp-fb:111 nack`. That is not a refusal. In `SetRemoteContent_w`
+(`pc/channel.cc:753`) the send parameters are read off the remote description,
+which is this server's offer, and `SetReceiveNackEnabled` follows
+`SenderNackEnabled()`. The offer alone turns on both halves; the SFU must never
+wait for the line to come back.
+
 ### Changes
 
 - SDP: `rtpMap(111)->addFeedback("nack")` on both audio m-lines, in the same

@@ -71,6 +71,7 @@ set(dv_unit_sources
   unit/test_notice_store.cpp
   unit/test_session_store.cpp
   unit/test_audio_description.cpp
+  unit/test_loss_repair.cpp
   unit/test_video_feedback.cpp
   unit/test_video_stitcher.cpp
   unit/test_bandwidth_estimator.cpp

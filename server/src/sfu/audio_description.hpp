@@ -27,6 +27,19 @@ struct AudioCodecs {
   /// 63 is what Chrome uses for it. Any number nothing else in the offer takes
   /// would do: libwebrtc looks the codec up by name, not by number.
   std::optional<int> red_payload_type = 63;
+  /// `a=rtcp-fb:<opus> nack` on the m-line, which is what turns on, in a
+  /// libwebrtc client, both halves of retransmission: five seconds of send
+  /// history to answer a NACK from, and a jitter buffer that asks for what it
+  /// missed. What RED does not cover, two packets lost back to back, this
+  /// does. See docs/16-audio-plan.md, step 2.
+  ///
+  /// The client's answer never echoes the line, and that is not a refusal.
+  /// libwebrtc gives its own audio codecs no `nack` and intersects feedback
+  /// on the way to an answer, but it reads its send parameters off the offer
+  /// and lets the receive side follow the send side (`pc/channel.cc`,
+  /// SetRemoteContent_w). So the offer is what counts, and this server
+  /// writes every offer.
+  bool nack = true;
 };
 
 /// The Opus fmtp this server offers, which is what decides what a participant

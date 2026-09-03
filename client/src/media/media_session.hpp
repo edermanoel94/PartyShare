@@ -73,6 +73,15 @@ struct AudioStats {
   std::uint64_t concealed_samples = 0;
   std::uint64_t concealment_events = 0;
 
+  /// The retransmission, from this end. NACKs this client sent for audio it
+  /// was expecting and did not get, NACKs it received for audio it sent, and
+  /// the audio packets it sent again in answer. Totals since the connection
+  /// began. All three stay at zero while the server does not offer `nack`.
+  /// See docs/16-audio-plan.md, step 2.
+  std::uint64_t nacks_sent = 0;
+  std::uint64_t nacks_received = 0;
+  std::uint64_t retransmitted_packets_sent = 0;
+
   /// True while the echo canceller is running on the captured audio.
   ///
   /// libwebrtc only reports echo return loss when the echo controller exists,

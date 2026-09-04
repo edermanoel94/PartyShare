@@ -97,6 +97,7 @@ The server never echoes one back and never writes one to a log.
 | --- | --- | --- |
 | `authenticated` | `user`, `token`, `expires_in_seconds` | |
 | `password_changed` | | |
+| `session_ended` | | `reason` |
 | `room_created` | `room_id` | `room_name`, `capacity` |
 | `user_joined` | `room_id`, `user` | |
 | `user_left` | `room_id`, `user_id` | |
@@ -368,8 +369,9 @@ A `user_restricted` can also arrive with no `by_user_id` at all, and that is not
 A server that *is* running notices within one heartbeat interval and enforces exactly what a `restrict_user` would have, announcements included, but nobody sent it anything, so there is no account to name as the actor.
 Clients render the missing name as "an administrator", which is as much as the server knows; the audit log is where the name is.
 Nothing else about the message differs, so a client needs no special case beyond the one it already has for an absent optional field.
-The same pass answers a session end requested the same way: `tools/dbadmin` marks the account, and the server signs that account out on its next heartbeat exactly as a ban would, `user_kicked` with the reason "the session was ended by an administrator" and `user_left` included, without changing the account.
-The person may sign in again at once; a client needs nothing new for it, because everything it receives is a message it already handles.
+The same pass answers a session end requested the same way: `tools/dbadmin` marks the account, and the server signs that account out on its next heartbeat exactly as a ban would - `session_ended` to the person, then `user_kicked` with the reason "the session was ended by an administrator" and `user_left` to the room - without changing the account.
+The person may sign in again at once.
+What the person's own client does with it is section 4.10; it is the same for every way a session ends.
 
 `kick_user` and `restrict_user` are different tools and neither replaces the other.
 A kick ends one visit to one room and the account can come straight back; a restriction stays with the account until an administrator lifts it.
@@ -481,6 +483,9 @@ Succeeding revokes **every** session of the account, including the one that aske
 The connection stays open and its token stops resolving to anything, so `password_changed` is the last message it is answered with; anything after it is `unauthorized`.
 A client that receives it should disconnect and sign in again.
 
+The session end itself is announced the way every session end is: a `session_ended` with the reason "the password was changed" arrives first, and `password_changed` follows as the answer to the form.
+Section 4.10 has the general message; a client that knew only that one would still end up on its sign-in screen with the right sentence on it.
+
 That is deliberate, and it is the reason the change is worth making at all: a password is most often replaced because the old one is believed to be loose, and a change that leaves the tokens the old one minted alive for the rest of their lifetime has not closed the door it was opened to close.
 
 The audit log records `change_password` with the account as both actor and target.
@@ -558,7 +563,33 @@ A receipt that only arrived while the administrator happened to be connected wou
 Deleting an account removes every notice ever sent to it.
 These are messages written to a named person, and a record with a subject and no owner is not one worth keeping.
 
-### 4.10 Who may send what
+### 4.10 A session the server ends
+
+```json
+{"type": "session_ended", "reason": "the session was ended by an administrator"}
+```
+
+Sent to a connection whose session the server has taken away without the client asking: the account was banned (section 4.7), the account was deleted, whether by `delete_user` or by somebody editing the database while the person was signed in, an operator signed the person out from `tools/dbadmin`, or the password was replaced (section 4.8).
+Every one of those goes through one place on the server, and this is the first thing that place does.
+`reason` is the sentence the room is told, when there is a room, and is for a person to read.
+
+It is the **first** message the connection reads about any of it: before the `user_kicked` the room hears, before `user_left`, and before the token stops resolving.
+The order is the point.
+A client acts on `user_kicked` the moment it reads it - back to its home screen, and a `list_rooms` on the wire - and a `session_ended` that arrived afterwards would find that request already refused with `unauthorized`.
+That refusal, worded by the client as a wrong password to somebody who had typed nothing, is what this message exists to prevent.
+Arriving first, the identity is gone before the kick is read, and the kick is about a room the client is no longer in.
+
+It is also the only message a person in no room receives.
+A ban, a deletion or a sign-out from the terminal reaching somebody on the home screen used to produce nothing at all, and they found out at their next click.
+
+On receiving it a client forgets its identity, its room and its media at once, and puts the sign-in form back with `reason` on it.
+It must send nothing but `authenticate`, `ping` and `pong` afterwards; anything else is `unauthorized`.
+
+The socket stays open.
+The connection is nobody's until the next `authenticate`, which is accepted on it exactly as on a fresh socket: signing back in reuses it the way a sign-in from the login screen reuses the probe's.
+Only the server sends it; a client sending one is answered with `unknown_message_type`.
+
+### 4.11 Who may send what
 
 | Role | May send |
 | --- | --- |
@@ -569,7 +600,7 @@ This table says what a role may send, not who they may send it about.
 Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
 `acknowledge_notice` is the same shape of rule: anybody may send one, and the server accepts it only for a notice addressed to them.
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list` and `error`.
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `session_ended`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes
@@ -658,6 +689,8 @@ Relevant transitions:
 - In `Authenticated`, only `create_room` and `join_room` are accepted.
 - In `Joining`, the client waits for `user_joined` or `error`.
 - In `InRoom`, all negotiation and state messages are accepted.
+- `session_ended` in any state after `Connected` leads back to `Connected`, on the same socket, with nothing remembered: the client has to `authenticate` again.
+  Section 4.10 says when the server sends it.
 - A connection drop in any state leads to `Disconnected`.
   The client reconnects with exponential backoff and has to redo `authenticate` and then `join_room`.
   The server does not preserve session state across connections in the MVP.

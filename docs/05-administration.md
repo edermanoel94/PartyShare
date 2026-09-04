@@ -183,7 +183,10 @@ heartbeat pass and answers with the same exit a ban takes - out of the room,
 tokens revoked, everybody told - without the ban: nothing is taken from the
 account and the person may sign in again at once. The server zeroes the mark
 once it has acted, and a login discards one written before it, so a request
-made a heartbeat too late cannot end a session nobody asked about.
+made a heartbeat too late cannot end a session nobody asked about. The person
+sees their sign-in screen again, with "the session was ended by an
+administrator" under the button; the same screen and the same shape of
+sentence a ban or a deleted account produce.
 
 It deliberately does not create collections or indexes, create rooms, close a
 room on a running server, or kick one participant out of one room. The first

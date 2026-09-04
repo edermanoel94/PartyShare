@@ -391,6 +391,19 @@ class Client {
               chat_ = std::move(messages);
               ++histories_;
             },
+        .on_session_ended =
+            [this](std::string reason) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              session_ends_.push_back(std::move(reason));
+            },
+        // Counted and not kept: the tests use it as the server's receipt for
+        // an administrative change, which is what it is sent as.
+        .on_user_list = [this](std::vector<proto::UserSummary>) { user_lists_.fetch_add(1); },
+        .on_kicked =
+            [this](std::string reason) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              kicks_.push_back(std::move(reason));
+            },
     });
     session_->on_room_created([this](std::string room_id) {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -514,8 +527,19 @@ class Client {
     const std::lock_guard<std::mutex> lock(mutex_);
     return histories_;
   }
+  /// The reasons the server gave for ending this session, in order.
+  [[nodiscard]] std::vector<std::string> session_ends() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return session_ends_;
+  }
+  /// The reasons this session was removed from a room, in order.
+  [[nodiscard]] std::vector<std::string> kicks() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return kicks_;
+  }
   [[nodiscard]] CallSession::State last_state() const { return last_state_.load(); }
   [[nodiscard]] std::uint64_t state_reports() const { return state_reports_.load(); }
+  [[nodiscard]] std::uint64_t user_lists() const { return user_lists_.load(); }
   [[nodiscard]] CallSession::LinkStats last_link() {
     const std::lock_guard<std::mutex> lock(mutex_);
     return last_link_;
@@ -542,9 +566,12 @@ class Client {
   std::vector<dv::Error> errors_;
   std::vector<dv::models::ChatMessage> chat_;
   std::uint64_t histories_ = 0;
+  std::vector<std::string> session_ends_;
+  std::vector<std::string> kicks_;
   std::string created_room_;
   std::atomic<CallSession::State> last_state_{CallSession::State::Idle};
   std::atomic<std::uint64_t> state_reports_{0};
+  std::atomic<std::uint64_t> user_lists_{0};
   CallSession::LinkStats last_link_;
   std::uint64_t link_reports_ = 0;
   std::atomic<std::uint64_t> metrics_reports_{0};
@@ -810,6 +837,92 @@ TEST_F(CallSessionTest, BeingKickedEndsTheCallForWhoeverWasRemoved) {
   EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Authenticated; }));
   EXPECT_TRUE(wait_until([&] { return ana.session().room_id().empty(); }));
   EXPECT_TRUE(wait_until([&] { return carla.participants().size() == 1; }));
+  EXPECT_TRUE(wait_until([&] { return !ana.kicks().empty(); }));
+  EXPECT_TRUE(ana.session_ends().empty()) << "a kick is not a sign-out";
+}
+
+// --- a session the server ends -----------------------------------------------
+
+TEST_F(CallSessionTest, ASessionTheServerEndsSignsOutWithoutAWrongPasswordError) {
+  ASSERT_TRUE(server_->add_user("carla", "password", "Carla", dv::models::Role::Admin).ok());
+
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(wait_until([&] { return carla.participants().size() == 2; }));
+
+  // A ban is the way over the wire to the same exit tools/dbadmin's "end
+  // session" and a deleted account take: one call on the server, and this
+  // client cannot tell them apart.
+  proto::RestrictUser ban;
+  ban.user_id = ana.session().local_user().id;
+  ban.banned = true;
+  ban.reason = "the session was ended by an administrator";
+  ASSERT_TRUE(carla.session().restrict_user(ban).ok());
+
+  // Signed out, with the reason, and not merely out of the room: the identity
+  // is gone, so the interface shows the login screen and asks for nothing.
+  ASSERT_TRUE(wait_until([&] { return !ana.session_ends().empty(); }));
+  EXPECT_EQ(ana.session_ends().front(), "the session was ended by an administrator");
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Idle; }));
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+  EXPECT_TRUE(ana.session().room_id().empty());
+  EXPECT_TRUE(wait_until([&] { return ana.audio().closed.load(); }));
+  EXPECT_TRUE(wait_until([&] { return carla.participants().size() == 1; }));
+
+  // Enough time for anything still on the wire to arrive and be answered.
+  std::this_thread::sleep_for(300ms);
+
+  // The kick that follows on the wire is about a room this session has
+  // already forgotten it was in, so it does not come through as ours - that
+  // is what used to send the interface back to the home screen.
+  EXPECT_TRUE(ana.kicks().empty());
+
+  // The regression itself. Being told a wrong password after typing none was
+  // the bug: the old client answered the kick with list_rooms on a session the
+  // server had already dropped, and the refusal was worded as a bad login.
+  for (const dv::Error& error : ana.errors()) {
+    EXPECT_NE(error.code, "unauthorized") << error.message;
+  }
+
+  // Lifted, the same person signs straight back in on the same session
+  // object: the socket the server left open is the one the login reuses. The
+  // account list the server answers the administrator with is the receipt
+  // that the lift has been applied before the login is tried.
+  const std::uint64_t receipts = carla.user_lists();
+  proto::RestrictUser lift;
+  lift.user_id = ban.user_id;
+  lift.banned = false;
+  ASSERT_TRUE(carla.session().restrict_user(lift).ok());
+  ASSERT_TRUE(wait_until([&] { return carla.user_lists() > receipts; }));
+  ASSERT_TRUE(ana.login());
+  EXPECT_EQ(ana.last_state(), CallSession::State::Authenticated);
+}
+
+TEST_F(CallSessionTest, ASessionEndedOutsideARoomIsStillToldSo) {
+  ASSERT_TRUE(server_->add_user("carla", "password", "Carla", dv::models::Role::Admin).ok());
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  Client& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+
+  // Nobody in a room, so there is no kick to overhear: without its own message
+  // this client learnt it was signed out from the `unauthorized` its next
+  // click was refused with.
+  ASSERT_TRUE(carla.session().delete_user(bruno.session().local_user().id).ok());
+
+  ASSERT_TRUE(wait_until([&] { return !bruno.session_ends().empty(); }));
+  EXPECT_EQ(bruno.session_ends().front(), "the account was removed");
+  EXPECT_TRUE(wait_until([&] { return bruno.last_state() == CallSession::State::Idle; }));
+  EXPECT_TRUE(bruno.session().local_user().id.empty());
+  EXPECT_TRUE(bruno.errors().empty());
 }
 
 TEST_F(CallSessionTest, MuteIsConfirmedByTheServerBeforeItShows) {

@@ -80,6 +80,7 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
            proto::MessageType::UserLeft,
            proto::MessageType::UserKicked,
            proto::MessageType::UserRestricted,
+           proto::MessageType::SessionEnded,
            proto::MessageType::ChatHistory,
            proto::MessageType::Notice,
            proto::MessageType::UserList,

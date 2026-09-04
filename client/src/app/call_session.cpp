@@ -1285,6 +1285,52 @@ void CallSession::handle_signal(protocol::Message message) {
     return;
   }
 
+  if (const auto* ended = std::get_if<protocol::SessionEnded>(&message)) {
+    Callbacks handlers;
+    std::shared_ptr<media::MediaSession> session;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+
+      // The same teardown disconnect() does, minus the socket, and done here
+      // on the signaling thread rather than left to the interface. The
+      // `user_kicked` for the room we were in is the next message on this
+      // socket, and this thread reads it a moment from now: with the identity
+      // still set it would be taken as ours, the state would go back to
+      // Authenticated, and the interface would ask for a room list on a
+      // session the server has already forgotten - refused as `unauthorized`,
+      // which it words as a wrong password. Cleared here, that kick is about
+      // a stranger in a room we are not in.
+      session.swap(audio_);
+      participants_.clear();
+      room_id_.clear();
+      display_name_.clear();
+      screen_sharer_.clear();
+      muted_ = false;
+      // The identity, because the server has dropped it, and the credentials
+      // waiting on a reconnection, because the next socket to open must not
+      // sign this person straight back in to a server that just signed them
+      // out.
+      local_user_ = {};
+      pending_username_.clear();
+      pending_password_.clear();
+    }
+    if (session) {
+      // Closed outside the lock: it waits for media callbacks, and those take
+      // it.
+      session->close();
+    }
+    publish_participants();
+    // Idle and not Failed: nothing broke. The socket is still up and the
+    // metrics thread keeps measuring it, which is exactly the probe state the
+    // login screen expects to find.
+    set_state(State::Idle, ended->reason);
+    if (handlers.on_session_ended) {
+      handlers.on_session_ended(ended->reason);
+    }
+    return;
+  }
+
   if (std::holds_alternative<protocol::PasswordChanged>(message)) {
     Callbacks handlers;
     {

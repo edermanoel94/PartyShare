@@ -197,6 +197,23 @@ class CallSession {
     /// looking at a login screen.
     std::function<void()> on_password_changed;
 
+    /// The server ended this session: the account was banned or deleted, an
+    /// operator signed the person out from the terminal, or the password was
+    /// replaced. `reason` is the server's own words for which.
+    ///
+    /// Unlike `on_password_changed`, the teardown is done before this runs
+    /// and not left to the interface: the room, the media and the identity are
+    /// gone, the state is Idle, and `local_user()` is empty. It has to be,
+    /// because the `user_kicked` that follows this message on the wire is read
+    /// on the same thread a moment later, and an identity still standing then
+    /// would make the interface treat it as ours - back to the home screen,
+    /// asking for a room list on a session that no longer exists. What is left
+    /// for the interface is to put the login form back and say why.
+    ///
+    /// The socket is still open: the server keeps it so, and the next sign-in
+    /// reuses it the way a sign-in from the login screen reuses the probe's.
+    std::function<void(std::string reason)> on_session_ended;
+
     /// An administrator told this account something, and is waiting to be told
     /// it was read.
     ///

@@ -28,6 +28,7 @@ TEST(MessageType, NamesRoundTrip) {
   const MessageType types[] = {
       MessageType::ChangePassword,
       MessageType::PasswordChanged,
+      MessageType::SessionEnded,
       MessageType::CreateRoom,
       MessageType::RoomCreated,
       MessageType::JoinRoom,
@@ -123,6 +124,20 @@ TEST(RoundTrip, ChangePassword) {
 TEST(RoundTrip, PasswordChanged) {
   const PasswordChanged original{};
   EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, SessionEnded) {
+  const SessionEnded original{"the session was ended by an administrator"};
+  EXPECT_EQ(type_name(MessageType::SessionEnded), "session_ended");
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(Parse, SessionEndedNeedsNoReason) {
+  // The reason is for a person to read, and a server with nothing to say
+  // still has to be able to end the session.
+  const auto parsed = parse(R"({"type":"session_ended"})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_TRUE(std::get<SessionEnded>(parsed.value()).reason.empty());
 }
 
 TEST(Parse, ChangePasswordRequiresBothPasswords) {

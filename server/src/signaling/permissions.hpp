@@ -110,6 +110,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserKicked:
     case protocol::MessageType::UserRestricted:
     case protocol::MessageType::PasswordChanged:
+    case protocol::MessageType::SessionEnded:
     case protocol::MessageType::ChatHistory:
     case protocol::MessageType::Notice:
     case protocol::MessageType::UserList:

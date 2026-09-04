@@ -153,6 +153,19 @@ class HubRestrictionWatchTest : public ::testing::Test {
     return total;
   }
 
+  /// Where in `out` the first T for `connection` sits, so that a test can say
+  /// which of two messages the same socket reads first. The end of `out` when
+  /// there is none, which orders after everything that is there.
+  template <typename T>
+  static std::size_t index_of(const std::vector<Outgoing>& out, ConnectionId connection) {
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      if (out[i].connection == connection && std::holds_alternative<T>(out[i].message)) {
+        return i;
+      }
+    }
+    return out.size();
+  }
+
   dv::server::store::MemoryUserStore users_;
   RecordingMediaSignals media_;
   Hub hub_;
@@ -218,6 +231,14 @@ TEST_F(HubRestrictionWatchTest, ABanWrittenElsewhereEndsTheSessionThatIsAlreadyO
   EXPECT_FALSE(hub_.rooms().find(room_)->contains(user_.id));
   EXPECT_NE(std::find(media_.left.begin(), media_.left.end(), user_.id), media_.left.end());
   EXPECT_TRUE(find<proto::UserLeft>(out, admin_connection_).has_value());
+
+  // The person is told their session is over, and told before the room is
+  // told they left: the same exit a ban from the panel takes.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the account was suspended");
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::UserKicked>(out, user_connection_));
 
   // And the session is no longer a session. The connection is still open,
   // because telling somebody why is worth more than the socket, but it is no
@@ -349,7 +370,15 @@ TEST_F(HubRestrictionWatchTest, ADeletedAccountInNoRoomStillLosesItsSession) {
   const auto [connection, bruno] = login("bruno", Role::User);
 
   ASSERT_FALSE(users_.remove(bruno.id).has_value());
-  (void)tick();
+  const auto out = tick();
+
+  // The one case where nothing else says anything: with no room there is no
+  // `user_kicked`, and until this existed the person learnt they were signed
+  // out from the `unauthorized` their next click was refused with.
+  const auto ended = find<proto::SessionEnded>(out, connection);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the account was removed");
+  EXPECT_EQ(count<proto::UserKicked>(out), 0U);
 
   const auto refused = find<proto::ErrorMessage>(send(connection, proto::ListRooms{}), connection);
   ASSERT_TRUE(refused.has_value());
@@ -400,6 +429,20 @@ TEST_F(HubRestrictionWatchTest, ASessionEndRequestedElsewhereEndsTheSessionThatI
   ASSERT_TRUE(kicked.has_value());
   EXPECT_EQ(kicked->reason, "the session was ended by an administrator");
   EXPECT_TRUE(find<proto::UserLeft>(out, admin_connection_).has_value());
+
+  // Told that the *session* is over, in the same words, and told that first.
+  // The kick alone read to the client as "out of the room, still signed in":
+  // it went home, asked for the room list, and was refused with `unauthorized`
+  // - shown as a wrong password to somebody who had typed nothing. Sent after
+  // the kick this would lose that race, because the client acts on the kick
+  // the moment it reads it.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the session was ended by an administrator");
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::UserKicked>(out, user_connection_));
+  // Nobody else's business: the room hears the kick, not the sign-out.
+  EXPECT_FALSE(find<proto::SessionEnded>(out, admin_connection_).has_value());
 
   // And no longer a session: the next message is refused for want of a login.
   const auto refused = find<proto::ErrorMessage>(
@@ -475,6 +518,10 @@ TEST_F(HubRestrictionWatchTest, ABanAndASessionEndOnTheSamePassEndTheSessionOnce
   EXPECT_EQ(count<proto::UserLeft>(out), 1U);
   EXPECT_EQ(std::count(media_.left.begin(), media_.left.end(), user_.id), 1);
   EXPECT_FALSE(hub_.rooms().find(room_)->contains(user_.id));
+  // And told once that the session is over. The ban got there first, so the
+  // reason is the ban's.
+  EXPECT_EQ(count<proto::SessionEnded>(out), 1U);
+  EXPECT_EQ(find<proto::SessionEnded>(out, user_connection_)->reason, "the account was suspended");
 
   // The ban stays, the request does not: one is a statement about the
   // account and the other was an instruction about a session that is over.

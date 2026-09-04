@@ -57,6 +57,10 @@ enum class MessageType : std::uint8_t {
   // sent the message.
   ChangePassword,
   PasswordChanged,
+  // The server took this connection's session away, section 4.10 of
+  // docs/06-protocol.md. Server to client only, like `PasswordChanged`, and
+  // sent for every way a session can end that the client did not ask for.
+  SessionEnded,
   // The room's conversation, section 4.5 of docs/06-protocol.md.
   ChatMessage,
   ListChat,
@@ -181,6 +185,33 @@ struct Authenticated {
 /// revoked.
 struct PasswordChanged {
   friend bool operator==(const PasswordChanged&, const PasswordChanged&) = default;
+};
+
+/// The server has ended this connection's session, and this is the first
+/// thing the connection hears about it.
+///
+/// Every way a session ends without the client asking - the account banned or
+/// deleted, an operator signing the person out from tools/dbadmin, the
+/// password replaced - goes through one place on the server, and that place
+/// sends this before anything else it does: before `user_kicked` reaches the
+/// room the person was in, and before the token stops resolving. A client that
+/// hears it forgets its identity, its room and its media on the spot and puts
+/// the sign-in form back with `reason` on it.
+///
+/// It exists because the alternative was `user_kicked`, which the client
+/// reads as "out of the room, still signed in": the interface went back to the
+/// home screen, asked for the room list, and was refused with `unauthorized` -
+/// shown as a wrong password to somebody who had typed nothing. Somebody in no
+/// room at the time was told nothing at all until their next click.
+///
+/// The socket stays open. It is nobody's until the next `authenticate`, so the
+/// sign-in that follows reuses it exactly as one from the login screen reuses
+/// the probe's.
+struct SessionEnded {
+  /// Why, in the words the room was told. Optional, and empty is fine.
+  std::string reason;
+
+  friend bool operator==(const SessionEnded&, const SessionEnded&) = default;
 };
 
 struct RoomCreated {
@@ -613,11 +644,11 @@ struct Pong {
 using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
-                 ScreenShareStopped, Mute, Unmute, ChangePassword, PasswordChanged, ChatMessage,
-                 ListChat, ChatHistory, SendNotice, Notice, AcknowledgeNotice, ErrorMessage, Ping,
-                 Pong, KickUser, UserKicked, ForceMute, RestrictUser, UserRestricted, ListUsers,
-                 UserList, CreateUser, UpdateUser, DeleteUser, ListRooms, RoomList, DeleteRoom,
-                 ListAudit, AuditList>;
+                 ScreenShareStopped, Mute, Unmute, ChangePassword, PasswordChanged, SessionEnded,
+                 ChatMessage, ListChat, ChatHistory, SendNotice, Notice, AcknowledgeNotice,
+                 ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute, RestrictUser,
+                 UserRestricted, ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms,
+                 RoomList, DeleteRoom, ListAudit, AuditList>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

@@ -97,6 +97,19 @@ class HubAdminTest : public ::testing::Test {
     return std::nullopt;
   }
 
+  /// Where in `out` the first T for `connection` sits, so that a test can say
+  /// which of two messages the same socket reads first. The end of `out` when
+  /// there is none, which orders after everything that is there.
+  template <typename T>
+  static std::size_t index_of(const std::vector<Outgoing>& out, ConnectionId connection) {
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      if (out[i].connection == connection && std::holds_alternative<T>(out[i].message)) {
+        return i;
+      }
+    }
+    return out.size();
+  }
+
   RecordingMediaSignals media_;
   Hub hub_;
   ConnectionId next_connection_ = 1;
@@ -486,6 +499,13 @@ TEST_F(HubAdminTest, DeletingAnAccountRemovesThemFromTheirRoomAndEndsTheirSessio
   EXPECT_FALSE(hub_.rooms().find(room_)->contains(user_.id));
   EXPECT_EQ(media_.left, std::vector<std::string>{user_.id});
 
+  // And the person told, before the room is: the same words the room hears.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the account was removed");
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::UserKicked>(out, user_connection_));
+
   // Their connection is no longer authenticated: a token issued a moment ago
   // must not outlive the account it belongs to.
   const auto after = send(user_connection_, proto::CreateRoom{user_.id, "anything"});
@@ -842,6 +862,19 @@ TEST_F(HubAdminTest, ABannedAccountLosesItsSessionAndCannotLogInAgain) {
   EXPECT_TRUE(find<proto::UserLeft>(out, admin_connection_).has_value());
   EXPECT_EQ(hub_.rooms().find(room_)->size(), 1U);
 
+  // And told that the session itself is over, in this order: the restriction
+  // that explains it, then the sign-out, then the kick the rest of the room
+  // hears. The sign-out before the kick is what stops the client reading the
+  // kick as "still signed in" and asking for a room list on a dead session.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "again");
+  EXPECT_LT(index_of<proto::UserRestricted>(out, user_connection_),
+            index_of<proto::SessionEnded>(out, user_connection_));
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::UserKicked>(out, user_connection_));
+  EXPECT_FALSE(find<proto::SessionEnded>(out, admin_connection_).has_value());
+
   // The session is gone, not merely emptied out.
   const auto refused = find<proto::ErrorMessage>(send(user_connection_, proto::ListChat{room_, 0}),
                                                  user_connection_);
@@ -1026,10 +1059,18 @@ TEST_F(HubAdminTest, AnOrdinaryUserMayChangeTheirOwnPasswordAndNobodyElses) {
   // administrator's way of setting a password - stays refused for them. Both
   // halves in one test because it is the pair that matters: opening the second
   // one up would have been the easy way to deliver the first.
-  EXPECT_TRUE(find<proto::PasswordChanged>(
-                  send(user_connection_, proto::ChangePassword{"password", "new-password"}),
-                  user_connection_)
-                  .has_value());
+  const auto out = send(user_connection_, proto::ChangePassword{"password", "new-password"});
+  EXPECT_TRUE(find<proto::PasswordChanged>(out, user_connection_).has_value());
+
+  // The session end that the change causes is announced the way every other
+  // one is, and first; `password_changed` follows as the answer to the form.
+  // A client that only knew the general message would still end up on its
+  // login screen with the right reason on it.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the password was changed");
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::PasswordChanged>(out, user_connection_));
 
   const auto [again, bruno] = login("carla", Role::User);
   const auto refused = find<proto::ErrorMessage>(

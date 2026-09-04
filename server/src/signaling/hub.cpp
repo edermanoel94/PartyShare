@@ -1568,7 +1568,28 @@ void Hub::handle_restrict_user(std::vector<Outgoing>& out, Connection& connectio
 
 void Hub::end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
                          const std::string& reason) {
-  // Out of the room first. `evict` reads the participant before announcing, so
+  // The person first, and before the room. This is the one message that says
+  // "you are signed out" rather than "you are out of the room", and it has to
+  // be the first thing their connection reads about any of it.
+  //
+  // The order is the fix, not a nicety. The client used to learn of this from
+  // the `user_kicked` that `evict` sends to the room, which it reads as what
+  // it says: out of the room, still signed in. So it went back to its home
+  // screen, asked for the room list, and was refused with `unauthorized` -
+  // which its interface words as a wrong password, to somebody who had typed
+  // nothing. Sent *after* the kick, this message would still lose that race:
+  // the client acts on `user_kicked` the moment it arrives, and the request it
+  // sends in response is already on the wire. Sent first, the identity is gone
+  // before the kick is read, and the kick is about somebody else's room.
+  //
+  // Somebody in no room at the time is the other half: until this existed
+  // they were told nothing at all, and found out at their next click.
+  if (const auto target = connection_of_user(user_id)) {
+    out.push_back(
+        Outgoing{.connection = *target, .message = protocol::SessionEnded{.reason = reason}});
+  }
+
+  // Out of the room next. `evict` reads the participant before announcing, so
   // it has to run while the room still holds them.
   if (const auto room_id = rooms_.room_of(user_id)) {
     evict(out, *room_id, user_id, reason);
@@ -1780,10 +1801,12 @@ void Hub::handle_change_password(std::vector<Outgoing>& out, Connection& connect
   // server can rely on.
   end_session_of(out, account.id, "the password was changed");
 
-  // Sent after the session is gone, and it is the only thing that makes the
-  // change visible to the client: nothing else about this connection changes
-  // shape. Without it the client would find out at its next message, as an
-  // `unauthorized` it has no way to explain.
+  // Sent after the session is gone. `end_session_of` has already told this
+  // connection `session_ended`, so the client is on its login screen by the
+  // time this arrives; what this adds is the answer to the request that was
+  // made - the form was filled in and the change took - which a bare
+  // `session_ended` with a reason does not say in so many words. Kept as the
+  // documented reply of `change_password`, section 4.8 of docs/06-protocol.md.
   out.push_back(Outgoing{.connection = connection.id, .message = protocol::PasswordChanged{}});
 }
 

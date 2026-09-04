@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/06-protocol.md must match.
-constexpr std::array<TypeMapping, 41> kTypeMappings{{
+constexpr std::array<TypeMapping, 42> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -34,6 +34,7 @@ constexpr std::array<TypeMapping, 41> kTypeMappings{{
     {.type = MessageType::Unmute, .name = "unmute"},
     {.type = MessageType::ChangePassword, .name = "change_password"},
     {.type = MessageType::PasswordChanged, .name = "password_changed"},
+    {.type = MessageType::SessionEnded, .name = "session_ended"},
     {.type = MessageType::ChatMessage, .name = "chat_message"},
     {.type = MessageType::ListChat, .name = "list_chat"},
     {.type = MessageType::ChatHistory, .name = "chat_history"},
@@ -528,6 +529,9 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, PasswordChanged>) {
           return MessageType::PasswordChanged;
         }
+        if constexpr (std::is_same_v<T, SessionEnded>) {
+          return MessageType::SessionEnded;
+        }
         if constexpr (std::is_same_v<T, ChatMessage>) {
           return MessageType::ChatMessage;
         }
@@ -694,6 +698,8 @@ std::string serialize(const Message& message) {
         } else if constexpr (std::is_same_v<T, ErrorMessage>) {
           root["code"] = value.code;
           root["message"] = value.message;
+        } else if constexpr (std::is_same_v<T, SessionEnded>) {
+          root["reason"] = value.reason;
         } else if constexpr (std::is_same_v<T, KickUser> || std::is_same_v<T, UserKicked>) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
@@ -921,6 +927,11 @@ Result<Message> parse(std::string_view json_text) {
     }
     case MessageType::PasswordChanged:
       return finish(reader, PasswordChanged{});
+    case MessageType::SessionEnded: {
+      SessionEnded value;
+      value.reason = reader.optional_string("reason");
+      return finish(reader, value);
+    }
     case MessageType::Unmute: {
       Unmute value;
       value.room_id = reader.string("room_id");

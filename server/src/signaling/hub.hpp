@@ -405,8 +405,14 @@ class Hub {
   /// hung up on cannot be told why, and the announcements above this call are
   /// worth more than the file descriptor.
   ///
-  /// `reason` is what the room is told. Safe to call for an account with no
-  /// room and for one with no connection.
+  /// The connection is told with `session_ended`, and told first: before the
+  /// room hears `user_kicked`, and before the token stops resolving. Why it
+  /// has to come first is in the function body. Without it a client in a room
+  /// read the kick as "still signed in" and was refused at its next request,
+  /// and a client in no room was told nothing at all.
+  ///
+  /// `reason` is what the room is told, and what the person is told. Safe to
+  /// call for an account with no room and for one with no connection.
   void end_session_of(std::vector<Outgoing>& out, const std::string& user_id,
                       const std::string& reason);
 

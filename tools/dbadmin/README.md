@@ -163,7 +163,8 @@ over, and both are refused on the spot with a sentence saying so. What it
 writes is one field on the account, `session_end_requested_at`, and the server
 reads it on the same heartbeat pass that finds a restriction written here:
 within five seconds by default the person is out of their room, their tokens
-are revoked, everybody in the room is told, and the field is zeroed. Nothing is
+are revoked, everybody in the room is told, the person is back on their sign-in
+screen with the reason under the button, and the field is zeroed. Nothing is
 taken from the account and they may sign in again at once - a ban is the lasting
 form, and that is the `m` form on the users screen. A request written while
 nobody was signed in is discarded by their next login, so an operator who was a

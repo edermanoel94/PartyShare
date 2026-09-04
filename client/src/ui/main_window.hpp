@@ -149,6 +149,14 @@ class MainWindow : public QMainWindow {
   /// on the server's side by the time this runs; disconnecting here is what
   /// makes this side agree with it.
   void apply_password_changed();
+  /// The server ended this session - a ban, a deleted account, an operator
+  /// signing the person out from the terminal, a changed password - and said
+  /// why in `reason`.
+  ///
+  /// The session has already forgotten its identity and its room by the time
+  /// this runs, so the login page is up; what is left is to say why, and to
+  /// leave the window in exactly the state the sign out button leaves it.
+  void apply_session_ended(const QString& reason);
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
   void apply_kicked(const QString& reason);
@@ -190,6 +198,17 @@ class MainWindow : public QMainWindow {
   /// the button on every login that has not failed yet, and a card that jumps
   /// as soon as one does.
   void show_login_error(const QString& text);
+
+  /// The one way back to the login screen, with `text` under the sign in
+  /// button: the identity and the socket dropped, the password field emptied,
+  /// the link indicator reset and a fresh probe sent so that it describes the
+  /// server the form is about to talk to.
+  ///
+  /// One function because there are three ways to arrive here - the sign out
+  /// button, a changed password, a session the server ended - and three
+  /// transcriptions of the same steps is how one of them stops sending the
+  /// probe and leaves a stale indicator over an empty form.
+  void return_to_login(const QString& text);
 
   void build_login_page();
   void build_home_page();

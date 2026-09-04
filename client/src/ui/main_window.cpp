@@ -1032,6 +1032,11 @@ void MainWindow::wire_session() {
           [this] {
             QMetaObject::invokeMethod(this, "apply_password_changed", Qt::QueuedConnection);
           },
+      .on_session_ended =
+          [this](const std::string& reason) {
+            QMetaObject::invokeMethod(this, "apply_session_ended", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(reason)));
+          },
       .on_notice =
           [this](const models::Notice& notice) {
             // The name the administrator held when they wrote it, which is
@@ -1233,17 +1238,27 @@ void MainWindow::on_connect() {
 }
 
 void MainWindow::on_sign_out() {
+  // Nothing to say: the person asked for this.
+  return_to_login(QString{});
+}
+
+void MainWindow::return_to_login(const QString& text) {
   // disconnect() drops the identity along with the socket, and the state it
   // publishes is what carries the interface back to the login screen. Nothing
   // here changes the page by hand: two routes to the same page are two routes
   // that can disagree.
+  //
+  // For a session the server ended, the identity is already gone and the
+  // socket is still up; dropping both again costs a reconnect and buys one
+  // path. The server kept that socket open so that it could say why, and it
+  // has said it by the time this runs.
   session_.disconnect();
 
   // The password does not stay in the field for whoever sits down next. The
   // username does, because signing back in as yourself is the ordinary case
   // and a server address that has just been changed is the other one.
   password_->clear();
-  show_login_error(QString{});
+  show_login_error(text);
 
   // Back on the login screen, the indicator has the same question to answer
   // as when the window opened, and the socket that answered it has just been
@@ -1276,13 +1291,26 @@ void MainWindow::on_change_password() {
 void MainWindow::apply_password_changed() {
   // The same route out as the sign out button, deliberately: two ways to reach
   // the login screen are two ways that can disagree about what they left
-  // behind.
-  session_.disconnect();
-  password_->clear();
+  // behind. The sentence goes on the login screen, where they are about to
+  // type it, rather than in a box they dismiss on the way there.
+  //
+  // This arrives right after the `session_ended` the same change produced, so
+  // the screen is already up with that message's reason on it; this one
+  // replaces it with the answer to the form they filled in.
+  return_to_login(QStringLiteral("Password changed. Sign in with the new one."));
+}
 
-  // On the login screen, where they are about to type it, rather than in a box
-  // they dismiss on the way there.
-  show_login_error(QStringLiteral("Password changed. Sign in with the new one."));
+void MainWindow::apply_session_ended(const QString& reason) {
+  // On the login screen and not in a box, for the reason the password message
+  // is: it is the answer to the question they are about to ask of the form in
+  // front of them. The reason is the server's, in the room's own words - "the
+  // session was ended by an administrator", "the account was removed" - and
+  // for a ban the box explaining the restriction has already been shown by
+  // apply_restrictions, which the server sends first.
+  return_to_login(
+      reason.isEmpty()
+          ? QStringLiteral("The server ended your session. Sign in again.")
+          : QStringLiteral("The server ended your session: %1. Sign in again.").arg(reason));
 }
 
 void MainWindow::on_create_room() {

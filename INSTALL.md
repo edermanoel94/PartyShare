@@ -462,8 +462,10 @@ Why that separate build has to exist at all is section 5 of
 ./build/linux-release/bin/partyshare --signaling-url=ws://192.168.1.10:8080
 ```
 
-The default is `ws://127.0.0.1:8080`, which only serves a server on the same
-machine.
+The default in a build from source is `ws://127.0.0.1:8080`, which only serves a
+server on the same machine. The published installers are built with the
+project's server as their default, so a downloaded client with no configuration
+at all opens on it; [docs/14-release.md](docs/14-release.md) says how.
 
 A flag is fine for one run and useless for a machine somebody else uses: an
 installed client starts from a shortcut, and a shortcut carries no arguments. So

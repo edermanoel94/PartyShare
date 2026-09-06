@@ -113,6 +113,14 @@ TEST(Config, DefaultsAreValid) {
   EXPECT_FALSE(dv::config::validate(Config{}).has_value());
 }
 
+TEST(Config, TheDefaultServerIsTheOneTheBuildWasGiven) {
+  // The loopback address in a build from source, and the deployment's server
+  // in a release: whichever the build was configured with is what a client
+  // with no configuration starts on. The same test in both cases, because what
+  // it checks is that the definition reaches the struct, not what it says.
+  EXPECT_EQ(Config{}.network.signaling_url, DV_DEFAULT_SIGNALING_URL);
+}
+
 TEST(Config, ParsesAPartialJsonObjectAndKeepsOtherDefaults) {
   const auto result = dv::config::parse_json(R"({"video": {"fps": 60}})", Config{});
   ASSERT_TRUE(result.ok()) << result.error().message;

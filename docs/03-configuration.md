@@ -126,7 +126,7 @@ form, and `DV_SECTION_KEY` in the environment.
 
 | Key | Default | |
 | --- | --- | --- |
-| `signaling_url` | `ws://127.0.0.1:8080` | The server. The one line most installations change |
+| `signaling_url` | `ws://127.0.0.1:8080` | The server. The one line most installations change. A build from source starts on loopback; the published installers are built with the project's server as this default, which is not written in this repository - [chapter 14](14-release.md) |
 | `stun_servers` | `stun:stun.l.google.com:19302` | Comma separated. May be empty on a closed LAN |
 | `turn_url`, `turn_username`, `turn_password` | — | Only when NAT defeats STUN |
 | `ice_port_range_begin`, `ice_port_range_end` | 0, 0 | The UDP range the SFU binds media in. [Chapter 4](04-server-and-database.md) |

@@ -8,6 +8,10 @@ thing. The Windows installer shows it on its "What's new" page.
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
+## 0.1.58 (2026-09-06)
+
+- A tela de login pede o endereço do servidor e testa a conexão
+
 ## 0.1.57 (2026-09-06)
 
 - O Settings volta a tela de login, sem sair da tela de escolher a sala

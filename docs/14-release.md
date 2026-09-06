@@ -13,8 +13,15 @@ Nothing. Merging code into `master` is cutting a release.
 
 `.github/workflows/tag.yml` runs on every push to `master` and does what a person
 used to have to remember: work out the next version, write it into `CMakeLists.txt`
-and `vcpkg.json`, commit that line back, write the annotated tag, and ask
-`release.yml` for the artifacts.
+and `vcpkg.json`, add a section for it to `CHANGELOG.md`, commit that back, write
+the annotated tag, and ask `release.yml` for the artifacts.
+
+The changelog section is the titles of the pull requests the push merged, which
+are the same lines GitHub puts in the generated release notes, so the file in the
+repository and the release page never disagree. The Windows installer shows the
+file on its "What's new" page, and that is why the section is written before the
+tag rather than after the release: the installer is built from what the tag
+points at.
 
 | What was merged | What comes out |
 | --- | --- |
@@ -39,7 +46,9 @@ a commit that edits a header and the page documenting it still releases.
 **When the automatic number is wrong**, edit the version in the pull request. A
 push that already raises `VERSION` is tagged as written rather than raised a
 second time, which is how to jump to 2.0.0. `vcpkg.json` carries the same number,
-and both have to move together.
+and both have to move together. That path skips the commit that writes the
+changelog, so the pull request writes the `## x.y.z (date)` section itself; the
+tag job warns when it is missing, and cuts the tag anyway.
 
 **To exercise the pipeline**, use `workflow_dispatch` on `release.yml`. It builds
 everything and publishes nothing, because a release without a tag has no version
@@ -244,6 +253,19 @@ who prefer the files without an installer touching their machine.
 
 `CPACK_WIX_UPGRADE_GUID` in `cmake/Packaging.cmake` is what makes the next version
 replace this one instead of installing beside it, so **it must never change**.
+
+The pages are Welcome, What's new, the licence, the folder, and Ready. "What's new"
+is `CHANGELOG.md`, and the licence page is `LICENSE`, the MIT text. Until 0.1.55
+the licence page read "This is an installer created using CPack. No license
+provided.", which is the template CPack falls back on when a project names no
+licence file. The extra page is the reason `cmake/wix/PartyShareUI.wxs` exists: a
+WixUI sequence cannot be added to, only replaced, so that file is WiX's own
+`WixUI_InstallDir` with one dialog and two transitions more, and a diff against
+the original in the wix3 repository shows exactly that. The control on the page
+reads RTF and nothing else, and `cmake/ChangelogRtf.cmake` writes it from the
+Markdown at configure time, in CMake rather than in Python so that a machine
+without Python builds the same installer the release job does. Both files are
+also installed beside `bin\`, as `LICENSE.txt` and `CHANGELOG.md`.
 
 Both carry the client and the Qt runtime and nothing else: the job configures with
 `-DDV_BUILD_SERVER=OFF`, because the server is a Linux daemon and nobody installs

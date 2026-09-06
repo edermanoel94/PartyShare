@@ -211,9 +211,11 @@ jobs:
       # tag on the commit before the bump would name a version that the sources
       # under it disagree with, which is the exact failure the comment at the top
       # of this file is about.
-      - name: Write the version into CMakeLists.txt and vcpkg.json
+      - name: Write the version into CMakeLists.txt, vcpkg.json and CHANGELOG.md
         id: commit
         if: steps.guard.outputs.skip == 'false' && steps.changes.outputs.docs_only == 'false' && steps.check.outputs.exists == 'false' && steps.version.outputs.needs_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
@@ -243,16 +245,47 @@ jobs:
             exit 1
           fi
 
+          # CHANGELOG.md gets a section for the version, made of the titles of
+          # the pull requests this push merged - the same lines GitHub's
+          # generated release notes list, so the file and the release page
+          # agree. The Windows installer shows the file on its "What's new"
+          # page, which is why it has to be written before the tag and not
+          # after. A push that reached master without a pull request falls
+          # back to its commit subject.
+          titles="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[].title' 2>/dev/null || true)"
+          if [[ -z "$titles" ]]; then
+            titles="$(git log -1 --format=%s "$GITHUB_SHA")"
+          fi
+          {
+            printf '## %s (%s)\n\n' "$version" "$(date -u +%Y-%m-%d)"
+            printf '%s\n' "$titles" | sed 's/^/- /'
+            printf '\n'
+          } > "${RUNNER_TEMP}/entry.md"
+          # Above the newest version, below the preface: the section goes in
+          # front of the first "## " line the file has.
+          awk -v entry="${RUNNER_TEMP}/entry.md" '
+            !done && /^## / { while ((getline line < entry) > 0) print line; done = 1 }
+            { print }
+          ' CHANGELOG.md > "${RUNNER_TEMP}/changelog.md"
+          mv "${RUNNER_TEMP}/changelog.md" CHANGELOG.md
+          if ! grep -q "^## ${version} (" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${version} after the edit"
+            exit 1
+          fi
+          echo "CHANGELOG.md:"
+          sed -n "/^## ${version} (/,/^## /p" CHANGELOG.md | sed '$d' | awk '{print "  " $0}'
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           # Two -m rather than a heredoc: a here-document inside a YAML block
           # scalar carries the block's indentation into the message, and its
           # terminator has to sit at column zero, which this file has no way to
           # give it. The subject is what the guard step above matches on.
-          git add CMakeLists.txt vcpkg.json
+          git add CMakeLists.txt vcpkg.json CHANGELOG.md
           git commit \
             -m "partyshare ${version}" \
-            -m "A versão que este merge produziu, escrita de volta na única linha que a guarda. Commit automático de .github/workflows/tag.yml, que a partir daqui escreve a tag v${version} e pede a release."
+            -m "A versão que este merge produziu, escrita de volta na única linha que a guarda, e a entrada dela no CHANGELOG.md. Commit automático de .github/workflows/tag.yml, que a partir daqui escreve a tag v${version} e pede a release."
 
           # Somebody may have merged while this job was running, and pushing on
           # top of that would tag a master nobody looked at. The concurrency
@@ -276,9 +309,17 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          # A version raised by hand skips the commit step above, and with it
+          # the changelog. The tag is still cut - a missing paragraph is not a
+          # reason to withhold a build - but the run says so, because the
+          # installer's "What's new" page is about to open on an older version.
+          if ! grep -q "^## ${version} (" CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md has no section for ${version}; write one by hand when raising the version yourself"
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$tag" -m "PartyShare ${{ steps.version.outputs.version }}"
+          git tag -a "$tag" -m "PartyShare ${version}"
           git push origin "$tag"
           echo "::notice::created ${tag}"
 

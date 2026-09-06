@@ -48,6 +48,20 @@ set(CPACK_PACKAGE_FILE_NAME "partyshare-${PROJECT_VERSION}-${DV_PACKAGE_PLATFORM
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
 set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_CURRENT_LIST_DIR}/CPackOptions.cmake")
 
+# What the installer says about the project, from the project rather than from
+# CMake. Left unset, both of these point at templates inside the CMake
+# installation, and the licence page of the MSI read "This is an installer
+# created using CPack. No license provided." - a sentence about the tool that
+# built the file, shown to the person who downloaded it.
+#
+# The licence goes through a copy with a .txt extension: the WiX generator
+# converts .txt to the RTF its dialog needs and refuses any other extension,
+# and the file at the root is called LICENSE so that GitHub finds it.
+set(dv_packaging_dir "${CMAKE_BINARY_DIR}/packaging")
+configure_file("${CMAKE_SOURCE_DIR}/LICENSE" "${dv_packaging_dir}/LICENSE.txt" COPYONLY)
+set(CPACK_RESOURCE_FILE_LICENSE "${dv_packaging_dir}/LICENSE.txt")
+set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_SOURCE_DIR}/README.md")
+
 if(WIN32)
   # WiX and not NSIS: task 1 asks for an installer, and an MSI is the installer
   # Windows itself understands. A person gets it in Add/Remove Programs, a fleet
@@ -77,6 +91,27 @@ if(WIN32)
   # a signaling server and nobody installs one from a desktop MSI.
   set(CPACK_PACKAGE_EXECUTABLES "partyshare;PartyShare")
   set(CPACK_CREATE_DESKTOP_LINKS "partyshare")
+
+  # The pages of the installer. WiX's own sequence goes Welcome, licence,
+  # folder, ready; this one has a "What's new" page between Welcome and the
+  # licence, showing CHANGELOG.md, so that somebody running an upgrade sees
+  # what it brings before agreeing to anything. The page lives in
+  # cmake/wix/PartyShareUI.wxs, and the text it shows is CHANGELOG.md turned
+  # into RTF here at configure time - the only format the control reads. The
+  # define is how the .wxs learns where the RTF landed.
+  include("${CMAKE_CURRENT_LIST_DIR}/ChangelogRtf.cmake")
+  dv_changelog_to_rtf("${CMAKE_SOURCE_DIR}/CHANGELOG.md" "${dv_packaging_dir}/whatsnew.rtf")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/CHANGELOG.md")
+  set(CPACK_WIX_UI_REF "WixUI_PartyShare")
+  set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_CURRENT_LIST_DIR}/wix/PartyShareUI.wxs")
+  set(CPACK_WIX_CANDLE_EXTRA_FLAGS "-dDvWhatsNewRtf=${dv_packaging_dir}/whatsnew.rtf")
+
+  # Beside bin/, so that what the installer showed is also what it left on the
+  # disk. The .txt copy rather than LICENSE, because on Windows a file with no
+  # extension opens nowhere.
+  install(FILES "${dv_packaging_dir}/LICENSE.txt" "${CMAKE_SOURCE_DIR}/CHANGELOG.md"
+    DESTINATION .
+  )
 else()
   set(CPACK_GENERATOR "TGZ")
 endif()

@@ -91,3 +91,8 @@ macOS arm64 `.dmg`, and the Linux server tarball. The Linux client and macOS x64
 jobs are switched off, so the run is green with two artifacts missing and nothing
 in its output says so.
 [Chapter 14](docs/14-release.md) is the procedure, and the reason for each.
+
+## License
+
+MIT. The text is in [LICENSE](LICENSE), and the Windows installer shows it before
+installing anything.

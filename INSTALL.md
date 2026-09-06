@@ -487,6 +487,11 @@ signaling_url = ws://192.168.1.10:8080
 Edit the second one where there is a choice: the first belongs to the installer
 and is replaced on the next upgrade, taking the address of your server with it.
 
+Or type the address on the sign-in screen: its Server field takes an IP or a
+name, `192.168.1.10` or `party.example.com:9000`, and writes this line into the
+second file when you sign in. The Test button beside it says whether the server
+answers before you type a password.
+
 The client prints which of those files it read and which it did not find on every
 startup, at `info`. That log line is the answer to "I put the address in and it
 still connects to localhost", which is almost always a file written one directory

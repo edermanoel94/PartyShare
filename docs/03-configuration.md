@@ -51,6 +51,14 @@ is commented out — so uncommenting one line is the whole edit:
 signaling_url = ws://192.168.1.10:8080
 ```
 
+The client writes that line itself when the address is typed on its sign-in
+screen. The Server field there takes an IP or a name - `192.168.1.10`,
+`party.example.com:9000` - and supplies the `ws://` and the default port; a
+sign-in to a new one is saved to this user's `config.ini` on the way, and the
+Test button beside the field asks the server whether it is there before any
+password is typed. The file is still where an installer or a script puts the
+address, and still what is read at startup.
+
 Sections and keys are the same names the JSON form uses, so nothing has to be
 learned twice. Comments start with `;` or `#`. A key the client does not know is
 a startup error naming the line, rather than a line that quietly does nothing:

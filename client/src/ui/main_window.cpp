@@ -3,8 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <optional>
+#include <string>
 #include <string_view>
 
+#include <dv/config/config.hpp>
 #include <dv/logging/logger.hpp>
 #include <dv/models/chat.hpp>
 #include <dv/models/room.hpp>
@@ -49,6 +53,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "app/server_address.hpp"
 #include "app/smoothing.hpp"
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
@@ -295,6 +300,9 @@ MainWindow::MainWindow(client::app::CallSession& session, UpdateChecker& updates
       session_(session),
       updates_(updates),
       pages_(new QStackedWidget(this)),
+      // What the session starts with came from the configuration, so the
+      // first sign-in to it has nothing to write down.
+      remembered_server_(session.signaling_url()),
       level_timer_(new QTimer(this)) {
   setWindowTitle(QStringLiteral("PartyShare"));
   setMinimumSize(720, 560);
@@ -359,9 +367,9 @@ MainWindow::MainWindow(client::app::CallSession& session, UpdateChecker& updates
   // submitted answers that question with an error.
   show_link_quality();
   if (const auto probed = session_.probe_server(); !probed) {
-    // A refused address - empty, or not ws:// - is what the settings dialog
-    // exists to fix, and the indicator saying "offline" until it is fixed is
-    // the right amount of noise about it.
+    // A refused address - empty, or not ws:// - is what the Server field on
+    // the login screen is for, and the indicator saying "offline" until it is
+    // fixed is the right amount of noise about it.
     link_connected_ = 0;
     show_link_quality();
   }
@@ -415,6 +423,39 @@ void MainWindow::build_login_page() {
   box->setMaximumWidth(420);
   auto* form = new QFormLayout(box);
 
+  // The server first, above the name, because it is the question the other
+  // two depend on: a username is only a username somewhere.
+  //
+  // It is on the form and not only in config.ini and the settings dialog,
+  // and the history is why. The address used to be reachable from this
+  // screen through a Settings button, which left in 0.1.55 and came back in
+  // 0.1.57 because a wrong address in config.ini had left editing the file
+  // by hand as the only way in. Both arrangements asked somebody who had been
+  // handed "192.168.1.10" to know that a WebSocket URL was what the program
+  // wanted, and to find the row for it. This field takes the address as it
+  // was handed over - app::expand_server_address says what it makes of it -
+  // and the button beside it asks the server whether it is there, which was
+  // otherwise a question answered by a failed sign-in. Settings stays on the
+  // home screen and in the room, where the rest of what it holds is used.
+  server_ = new QLineEdit(box);
+  server_->setPlaceholderText(QStringLiteral("192.168.1.10 or party.example.com"));
+  server_->setToolTip(
+      QStringLiteral("An IP or a name, with a port after a colon when the server is not on "
+                     "8080. ws:// is added; wss://, for a server behind TLS, is typed."));
+  server_->setText(
+      QString::fromStdString(client::app::display_server_address(session_.signaling_url())));
+  test_server_button_ = new QPushButton(QStringLiteral("Test"), box);
+  test_server_button_->setToolTip(
+      QStringLiteral("Asks the server at this address whether it is there, and how far away."));
+
+  auto* server_row = new QHBoxLayout();
+  server_row->addWidget(server_, 1);
+  server_row->addWidget(test_server_button_);
+
+  server_hint_ = new QLabel(QString{}, box);
+  server_hint_->setWordWrap(true);
+  server_hint_->setVisible(false);
+
   username_ = new QLineEdit(box);
   username_->setPlaceholderText(QStringLiteral("username"));
   password_ = new QLineEdit(box);
@@ -433,23 +474,11 @@ void MainWindow::build_login_page() {
   login_error_->setProperty("error", true);
   login_error_->setVisible(false);
 
-  // Settings is reachable from here as well as from the home page and the
-  // room, and the reason is the one setting that signing in depends on: the
-  // server address. A dialog that opens only after a successful sign-in is a
-  // dialog nobody can reach at the one moment they need it - a wrong address
-  // in config.ini used to leave editing the file by hand as the only way back.
-  // The button left this screen in 0.1.55 and came back one version later,
-  // for exactly that reason.
-  auto* login_settings = new QPushButton(QStringLiteral("Settings"), box);
-  login_settings->setMinimumHeight(40);
-
-  auto* actions = new QHBoxLayout();
-  actions->addWidget(connect_button_, 1);
-  actions->addWidget(login_settings);
-
+  form->addRow(QStringLiteral("Server"), server_row);
+  form->addRow(server_hint_);
   form->addRow(QStringLiteral("Username"), username_);
   form->addRow(QStringLiteral("Password"), password_);
-  form->addRow(actions);
+  form->addRow(connect_button_);
   form->addRow(login_error_);
 
   auto* centred = new QHBoxLayout();
@@ -460,9 +489,17 @@ void MainWindow::build_login_page() {
   outer->addStretch();
 
   connect(connect_button_, &QPushButton::clicked, this, &MainWindow::on_connect);
-  connect(login_settings, &QPushButton::clicked, this, &MainWindow::on_open_settings);
+  connect(test_server_button_, &QPushButton::clicked, this, &MainWindow::on_test_server);
+  connect(server_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
   connect(username_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
   connect(password_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
+  // A sentence about an address that is no longer in the field is a sentence
+  // about the wrong address. textEdited and not textChanged: this window
+  // writes the field itself, and what it writes is what the sentence is about.
+  connect(server_, &QLineEdit::textEdited, this, [this] {
+    server_under_test_.clear();
+    show_server_hint(QString{}, false);
+  });
 
   pages_->insertWidget(kLoginPage, page);
 }
@@ -880,10 +917,15 @@ void MainWindow::wire_session() {
             // carries plain types and an optional is not one of them. Zero is
             // not free for that job: a round trip really can measure zero
             // milliseconds against a server on this machine.
+            //
+            // Numbered here, on the thread that made the report, and not in
+            // apply_link: the number has to say when the report was made,
+            // and the queue between the two is exactly what it is for.
             QMetaObject::invokeMethod(
                 this, "apply_link", Qt::QueuedConnection,
                 Q_ARG(int, link.round_trip ? static_cast<int>(link.round_trip->count()) : -1),
-                Q_ARG(bool, link.connected));
+                Q_ARG(bool, link.connected), Q_ARG(bool, link.attempting),
+                Q_ARG(int, ++link_sequence_));
           },
       .on_participants =
           [this](const std::vector<client::app::Participant>& list) {
@@ -1234,10 +1276,32 @@ void MainWindow::wire_session() {
 
 void MainWindow::on_connect() {
   show_login_error(QString{});
+
+  // Top to bottom, the way the form reads: a server that cannot be right is
+  // said before a username that is missing.
+  const std::optional<std::string> url = server_address_from_form();
+  if (!url) {
+    return;
+  }
   const QString user = username_->text().trimmed();
   if (user.isEmpty()) {
     show_login_error(QStringLiteral("Enter a username."));
     return;
+  }
+
+  // A different server than the socket has been knocking at. set_signaling_url
+  // takes the probe's socket there, and connect_and_authenticate below finds
+  // it on its way and hands the credentials over the moment it opens. The
+  // same server is left alone: closing a socket that is up in order to open
+  // the same one again is a reconnect nobody asked for.
+  if (*url != session_.signaling_url()) {
+    session_.set_signaling_url(*url);
+  }
+  // And a different one than the file says, whether or not it is the one in
+  // use: the Test button can have moved the session there already, and a
+  // sign-in is the moment the address stops being an experiment.
+  if (*url != remembered_server_) {
+    remember_server_address(*url);
   }
 
   if (const auto connected =
@@ -1246,6 +1310,81 @@ void MainWindow::on_connect() {
     show_login_error(describe(QString::fromStdString(connected.error().code),
                               QString::fromStdString(connected.error().message)));
   }
+}
+
+void MainWindow::on_test_server() {
+  show_login_error(QString{});
+  const std::optional<std::string> url = server_address_from_form();
+  if (!url) {
+    return;
+  }
+
+  // Armed before the socket is touched, so that no report about the socket
+  // being closed can slip in between: a report numbered at or below this was
+  // made before the test began, and apply_link ignores it for the test.
+  server_under_test_ = QString::fromStdString(*url);
+  server_test_since_ = link_sequence_.load();
+  show_server_hint(QStringLiteral("Looking for %1...").arg(server_under_test_), false);
+
+  if (*url != session_.signaling_url()) {
+    // Knocks at the new address on its own; see CallSession::set_signaling_url.
+    session_.set_signaling_url(*url);
+    return;
+  }
+  if (const auto knocked = session_.retest_server(); !knocked) {
+    server_under_test_.clear();
+    show_server_hint(describe(QString::fromStdString(knocked.error().code),
+                              QString::fromStdString(knocked.error().message)),
+                     true);
+  }
+}
+
+std::optional<std::string> MainWindow::server_address_from_form() {
+  const auto url = client::app::expand_server_address(server_->text().toStdString());
+  if (!url) {
+    server_under_test_.clear();
+    show_server_hint(QString::fromStdString(url.error().message), true);
+    return std::nullopt;
+  }
+  // Put back as the URL displays, so that what is on screen is what was
+  // used. A space on the end is invisible, and "192.168.1.10" on screen over
+  // "ws://192.168.1.10:8080" in use is a port somebody has to know about.
+  const QString shown = QString::fromStdString(client::app::display_server_address(url.value()));
+  if (shown != server_->text()) {
+    server_->setText(shown);
+  }
+  return url.value();
+}
+
+void MainWindow::show_server_hint(const QString& text, bool error) {
+  server_hint_->setText(text);
+  server_hint_->setVisible(!text.isEmpty());
+  // Two properties and not one, because the theme styles them apart: "error"
+  // is the colour of a refusal, "hint" the colour of a remark. Restyled on
+  // every change, since a property set after the widget was polished is not
+  // seen until it is polished again.
+  server_hint_->setProperty("error", error);
+  server_hint_->setProperty("hint", !error);
+  server_hint_->style()->unpolish(server_hint_);
+  server_hint_->style()->polish(server_hint_);
+}
+
+void MainWindow::remember_server_address(const std::string& url) {
+  const std::filesystem::path file = config::user_config_file();
+  if (file.empty()) {
+    // Nowhere to keep it, which main() has already said at startup. The
+    // address is in use; it is only the next start that will not have it.
+    return;
+  }
+  const auto written = config::save_ini_settings(
+      file, {config::IniSetting{.section = "network", .key = "signaling_url", .value = url}});
+  if (!written) {
+    DV_LOG_WARN("Could not save network.signaling_url to {}: {}", file.string(),
+                written.error().message);
+    return;
+  }
+  remembered_server_ = url;
+  DV_LOG_INFO("Signaling server saved to {}: {}", file.string(), url);
 }
 
 void MainWindow::on_sign_out() {
@@ -1270,6 +1409,15 @@ void MainWindow::return_to_login(const QString& text) {
   // and a server address that has just been changed is the other one.
   password_->clear();
   show_login_error(text);
+
+  // The server field says what the next sign-in will use, and the settings
+  // dialog may have moved that while somebody was signed in - which is the
+  // case its own row describes as "leave the room and sign in again". The
+  // sentence under the field, if any, was about a test of the old one.
+  server_->setText(
+      QString::fromStdString(client::app::display_server_address(session_.signaling_url())));
+  server_under_test_.clear();
+  show_server_hint(QString{}, false);
 
   // Back on the login screen, the indicator has the same question to answer
   // as when the window opened, and the socket that answered it has just been
@@ -1928,9 +2076,38 @@ void MainWindow::apply_metrics(const QString& summary, int quality) {
       QStringLiteral("color: %1; font-weight: bold;").arg(quality_colour(measured).name()));
 }
 
-void MainWindow::apply_link(int round_trip_ms, bool connected) {
+void MainWindow::apply_link(int round_trip_ms, bool connected, bool attempting, int sequence) {
   link_round_trip_ms_ = round_trip_ms;
-  link_connected_ = connected ? 1 : 0;
+  // A socket still on its first attempt is "not known yet", which is drawn as
+  // a wait, and not "not there", which is drawn as the answer.
+  if (connected) {
+    link_connected_ = 1;
+  } else if (attempting) {
+    link_connected_ = -1;
+  } else {
+    link_connected_ = 0;
+  }
+
+  // The Test button's answer, if one is owed and this report is about the
+  // socket it opened. The address is in the sentence because the answer can
+  // arrive after the field has been changed to something else.
+  if (!server_under_test_.isEmpty() && sequence > server_test_since_) {
+    if (!connected && !attempting) {
+      show_server_hint(QStringLiteral("Could not reach %1. Check the address, and that the "
+                                      "server is running there.")
+                           .arg(server_under_test_),
+                       true);
+      server_under_test_.clear();
+    } else if (connected && round_trip_ms >= 0) {
+      show_server_hint(
+          QStringLiteral("%1 answered in %2 ms.").arg(server_under_test_).arg(round_trip_ms),
+          false);
+      server_under_test_.clear();
+    } else if (connected) {
+      show_server_hint(QStringLiteral("Connected to %1. Measuring...").arg(server_under_test_),
+                       false);
+    }
+  }
 
   // While there is a call, the verdict weighing all three measurements is the
   // better answer and keeps the label. This one fills the rest of the time,
@@ -2455,6 +2632,10 @@ void MainWindow::refresh_controls() {
   connect_button_->setEnabled(!authenticated);
   username_->setEnabled(!authenticated);
   password_->setEnabled(!authenticated);
+  // The server goes with them: a session is on one, and CallSession::
+  // retest_server refuses to close the socket carrying it.
+  server_->setEnabled(!authenticated);
+  test_server_button_->setEnabled(!authenticated);
   create_button_->setEnabled(authenticated);
   join_button_->setEnabled(authenticated);
   // The server is what actually decides, and it re-reads the role on every

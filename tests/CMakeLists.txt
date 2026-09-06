@@ -95,6 +95,7 @@ if(TARGET dv::client_core)
     unit/test_metrics_history.cpp
     unit/test_smoothing.cpp
     unit/test_chat_links.cpp
+    unit/test_server_address.cpp
     unit/test_noise_suppression_level.cpp
     unit/test_microphone_hint.cpp
   )

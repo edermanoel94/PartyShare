@@ -56,6 +56,8 @@ add_library(dv_client_core STATIC
   src/app/metrics_history.cpp
   src/app/metrics_history.hpp
   src/app/network_quality.hpp
+  src/app/server_address.cpp
+  src/app/server_address.hpp
   src/app/smoothing.hpp
   src/media/media_session.cpp
   src/media/media_session.hpp

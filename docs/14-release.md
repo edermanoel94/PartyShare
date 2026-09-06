@@ -255,7 +255,7 @@ who prefer the files without an installer touching their machine.
 replace this one instead of installing beside it, so **it must never change**.
 
 The pages are Welcome, What's new, the licence, the folder, and Ready. "What's new"
-is `CHANGELOG.md`, and the licence page is `LICENSE`, the MIT text. Until 0.1.54
+is `CHANGELOG.md`, and the licence page is `LICENSE`, the MIT text. Until 0.1.55
 the licence page read "This is an installer created using CPack. No license
 provided.", which is the template CPack falls back on when a project names no
 licence file. The extra page is the reason `cmake/wix/PartyShareUI.wxs` exists: a

@@ -8,6 +8,10 @@ thing. The Windows installer shows it on its "What's new" page.
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
+## 0.1.55 (2026-09-06)
+
+- Move o Settings da tela de login para a tela de escolher a sala
+
 ## 0.1.54 (2026-09-04)
 
 - Sinaliza a sessao encerrada em vez de deixar o cliente na sala com "senha errada"

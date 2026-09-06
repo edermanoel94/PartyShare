@@ -179,7 +179,7 @@ it writes the entry here in the same commit.
 
 ## 0.1.14 (2026-08-24)
 
-- Merge pull request #27 from edermanoel94/fix/estatisticas-congeladas-ao-sair
+- Dois defeitos achados testando a release v0.1.13
 
 ## 0.1.13 (2026-08-24)
 

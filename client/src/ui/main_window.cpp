@@ -433,23 +433,14 @@ void MainWindow::build_login_page() {
   login_error_->setProperty("error", true);
   login_error_->setVisible(false);
 
-  // Settings is reachable from here and not only from inside a room, and the
-  // reason is the one setting that lives in this dialog: the server address.
-  // Every other setting can wait until somebody is signed in, because it is
-  // about this machine. The address is what signing in depends on, so a
-  // dialog that opens only after a successful sign-in is a dialog nobody can
-  // reach at the one moment they need it - a wrong address in config.ini used
-  // to leave editing the file by hand as the only way back.
-  auto* login_settings = new QPushButton(QStringLiteral("Settings"), box);
-  login_settings->setMinimumHeight(40);
-
-  auto* actions = new QHBoxLayout();
-  actions->addWidget(connect_button_, 1);
-  actions->addWidget(login_settings);
-
+  // No Settings here. The button used to sit beside Connect so that the server
+  // address could be fixed before signing in; it lives on the home page now,
+  // with the rest of what is about this machine rather than about a room. A
+  // wrong address in config.ini is edited by hand again, or fixed from the
+  // home page of a sign-in that worked.
   form->addRow(QStringLiteral("Username"), username_);
   form->addRow(QStringLiteral("Password"), password_);
-  form->addRow(actions);
+  form->addRow(connect_button_);
   form->addRow(login_error_);
 
   auto* centred = new QHBoxLayout();
@@ -460,7 +451,6 @@ void MainWindow::build_login_page() {
   outer->addStretch();
 
   connect(connect_button_, &QPushButton::clicked, this, &MainWindow::on_connect);
-  connect(login_settings, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(username_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
   connect(password_, &QLineEdit::returnPressed, this, &MainWindow::on_connect);
 
@@ -564,6 +554,15 @@ void MainWindow::build_home_page() {
   join_button_ = new QPushButton(QStringLiteral("Join room"), box);
   join_button_->setMinimumHeight(44);
 
+  // Settings is reachable from here and not only from inside a room, so the
+  // microphone, the monitor and the server address can be sorted out before
+  // there is anybody on the other end to hear the result. It goes with the
+  // account buttons below rather than with the room ones above: all three are
+  // about this machine or this person, none is what somebody came to this
+  // screen to do.
+  auto* settings = new QPushButton(QStringLiteral("Settings"), box);
+  settings->setMinimumHeight(36);
+
   // The way back to the login screen, and the reason it exists is the server
   // address in the settings dialog. A new address is adopted at the next
   // sign-in, and without a way to sign out, "the next sign-in" would mean
@@ -594,6 +593,7 @@ void MainWindow::build_home_page() {
   column->addWidget(room_id_);
   column->addWidget(join_button_);
   column->addSpacing(16);
+  column->addWidget(settings);
   column->addWidget(change_password);
   column->addWidget(sign_out);
 
@@ -635,6 +635,7 @@ void MainWindow::build_home_page() {
   connect(room_name_, &QLineEdit::returnPressed, this, &MainWindow::on_create_room);
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
+  connect(settings, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(change_password, &QPushButton::clicked, this, &MainWindow::on_change_password);
   connect(sign_out, &QPushButton::clicked, this, &MainWindow::on_sign_out);
 

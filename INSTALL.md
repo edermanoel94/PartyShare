@@ -462,8 +462,10 @@ Why that separate build has to exist at all is section 5 of
 ./build/linux-release/bin/partyshare --signaling-url=ws://192.168.1.10:8080
 ```
 
-The default is `ws://127.0.0.1:8080`, which only serves a server on the same
-machine.
+The default in a build from source is `ws://127.0.0.1:8080`, which only serves a
+server on the same machine. The published installers are built with the
+project's server as their default, so a downloaded client with no configuration
+at all opens on it; [docs/14-release.md](docs/14-release.md) says how.
 
 A flag is fine for one run and useless for a machine somebody else uses: an
 installed client starts from a shortcut, and a shortcut carries no arguments. So
@@ -486,6 +488,11 @@ signaling_url = ws://192.168.1.10:8080
 
 Edit the second one where there is a choice: the first belongs to the installer
 and is replaced on the next upgrade, taking the address of your server with it.
+
+Or type the address on the sign-in screen: its Server field takes an IP or a
+name, `192.168.1.10` or `party.example.com:9000`, and writes this line into the
+second file when you sign in. The Test button beside it says whether the server
+answers before you type a password.
 
 The client prints which of those files it read and which it did not find on every
 startup, at `info`. That log line is the answer to "I put the address in and it

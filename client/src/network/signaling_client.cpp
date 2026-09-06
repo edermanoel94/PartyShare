@@ -87,6 +87,11 @@ void SignalingClient::on_state(StateHandler handler) {
   state_handler_ = std::move(handler);
 }
 
+void SignalingClient::on_round_trip(RoundTripHandler handler) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  round_trip_handler_ = std::move(handler);
+}
+
 void SignalingClient::set_url(std::string url) {
   const std::lock_guard<std::mutex> lock(mutex_);
   next_url_ = std::move(url);
@@ -95,6 +100,16 @@ void SignalingClient::set_url(std::string url) {
 std::string SignalingClient::url() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return next_url_;
+}
+
+bool SignalingClient::is_attempting() const {
+  if (state_.load() != State::Connecting) {
+    return false;
+  }
+  // attempts_ counts drops since connect() and is put back to zero by a
+  // socket that opened, so a Connecting socket with none is the first try.
+  const std::lock_guard<std::mutex> lock(retry_mutex_);
+  return attempts_ == 0;
 }
 
 Result<std::monostate> SignalingClient::probe() {
@@ -376,11 +391,24 @@ void SignalingClient::handle_payload(const std::string& payload) {
   // it. One that does not match is somebody else's, or ours from a connection
   // that has since dropped, and is dropped rather than timed.
   if (const auto* pong = std::get_if<protocol::Pong>(&message)) {
-    const std::lock_guard<std::mutex> lock(mutex_);
-    if (!probe_nonce_.empty() && pong->nonce == probe_nonce_) {
-      round_trip_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - probe_sent_at_);
-      probe_nonce_.clear();
+    std::optional<std::chrono::milliseconds> measured;
+    RoundTripHandler handler;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (!probe_nonce_.empty() && pong->nonce == probe_nonce_) {
+        round_trip_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - probe_sent_at_);
+        probe_nonce_.clear();
+        measured = round_trip_;
+        handler = round_trip_handler_;
+      }
+    }
+    if (measured) {
+      // Outside the lock, for the reason the state handler runs outside it:
+      // the handler is free to come back into this client.
+      if (handler) {
+        handler(*measured);
+      }
       return;
     }
   }

@@ -328,8 +328,37 @@ build at all.
 | `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PASSWORD` | Developer ID Application certificate, a `.p12` in base64 |
 | `MACOS_SIGNING_IDENTITY` | Identity name, as `security find-identity` shows it |
 | `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD`, `MACOS_NOTARY_TEAM_ID` | Apple ID, an app-specific password, and the ten character Team ID |
+| `DV_DEFAULT_SIGNALING_URL` | The server a downloaded client starts on. Not a signing secret, and the one of these that is set - see below |
 
-**None of them is configured today.**
+**None of the signing secrets is configured today.**
+
+## The default server
+
+A client with no configuration at all starts on `ws://127.0.0.1:8080`, which is
+right for a build from source on the machine that runs the server and wrong for
+every installer somebody downloads. The address of the project's server is not
+written in this repository; it is the `DV_DEFAULT_SIGNALING_URL` repository
+secret, and every client job passes it to CMake as
+`-DDV_DEFAULT_SIGNALING_URL=...`, which `shared/CMakeLists.txt` checks - it has
+to start with `ws://` or `wss://` - and hands to the compiler. From there it is
+the default of `network.signaling_url` in `dv::config::NetworkConfig`, and the
+sign-in screen's Server field opens showing it.
+
+An unset secret passes an empty string, which CMake treats as "not given": the
+build keeps the loopback default rather than failing, so a fork releases a client
+that works on its own machine and nothing else. Whether a release carried the
+address is on its first log line, `Signaling server: ...`, and in the Server
+field before anybody has typed.
+
+A build made by hand takes the same option:
+
+```sh
+cmake --preset windows-release -DDV_DEFAULT_SIGNALING_URL=ws://server.example.com:8080
+```
+
+Nothing else is needed for a private server: `config.ini` and the sign-in screen
+override the default on every machine, as [chapter 3](03-configuration.md)
+describes.
 
 Notarization is not signing: Apple wants the bundle signed with a Developer ID,
 then uploaded, then stapled, and a bundle that skips any of the three is one

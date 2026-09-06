@@ -740,6 +740,79 @@ TEST_F(CallSessionTest, SigningOutLeavesNoCredentialsForTheProbeToUse) {
   EXPECT_EQ(ana.last_state(), CallSession::State::Idle);
 }
 
+TEST_F(CallSessionTest, RetestingTheServerKnocksAgainOnAFreshSocket) {
+  // The Test button on the login screen. probe_server leaves a socket that is
+  // up alone, so a test has to close it and open another, and the answer
+  // arrives the way the first probe's did: the socket open, then a round trip
+  // measured on it.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().round_trip.has_value(); }));
+
+  const std::uint64_t before = ana.link_reports();
+  ASSERT_TRUE(ana.session().retest_server().ok());
+  // Two reports at least, not one: the socket opening is reported without a
+  // round trip - closing the old one forgot its measurement, which is the
+  // point - and the number comes on the tick after. One report with a number
+  // could be the old socket's last periodic word, made as the test began.
+  ASSERT_TRUE(wait_until([&] {
+    return ana.link_reports() >= before + 2 && ana.last_link().connected &&
+           ana.last_link().round_trip.has_value();
+  })) << "the retest never reported a round trip on the new socket";
+
+  // And still not a sign-in.
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+  EXPECT_EQ(ana.last_state(), CallSession::State::Idle);
+  EXPECT_EQ(ana.state_reports(), 0u);
+  EXPECT_TRUE(ana.errors().empty());
+}
+
+TEST_F(CallSessionTest, RetestingIsRefusedWhileSomebodyIsSignedIn) {
+  // The socket is carrying a session, and measuring a server by hanging up on
+  // it is not a measurement anybody asked for.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+
+  const auto refused = ana.session().retest_server();
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "already_connected");
+  EXPECT_FALSE(ana.session().local_user().id.empty()) << "the refusal signed somebody out";
+  EXPECT_EQ(ana.last_state(), CallSession::State::Authenticated);
+}
+
+TEST_F(CallSessionTest, SettingTheAddressBeforeAnyProbeOpensOneToIt) {
+  // The address the client started with was never knocked at - the one in
+  // the file was refused, say - and a good one is typed in. It has to be
+  // knocked at then, or the indicator goes on saying "offline" about a server
+  // nobody has asked.
+  Client& ana = add_without_a_server("ana");
+  ana.session().set_signaling_url("ws://127.0.0.1:" + std::to_string(server_->port()));
+
+  ASSERT_TRUE(wait_until([&] { return ana.last_link().connected; }))
+      << "the new address was not knocked at";
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+  EXPECT_EQ(ana.state_reports(), 0u);
+}
+
+TEST_F(CallSessionTest, ARefusedConnectionIsReportedAsAnAnswerAndNotAnAttempt) {
+  // The login screen draws "still attempting" as a wait and "refused" as the
+  // answer, and the Test button only speaks on the second. A connection that
+  // nothing accepts has to come through as the second, or the test never
+  // ends.
+  Client& ana = add_without_a_server("ana");
+  ASSERT_TRUE(ana.session().probe_server().ok());
+
+  ASSERT_TRUE(wait_until([&] { return ana.link_reports() > 0 && !ana.last_link().attempting; }))
+      << "the refused connection was only ever reported as an attempt";
+  EXPECT_FALSE(ana.last_link().connected);
+
+  // And a socket that is open is not attempting anything.
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.session().probe_server().ok());
+  ASSERT_TRUE(wait_until([&] { return bruno.last_link().connected; }));
+  EXPECT_FALSE(bruno.last_link().attempting);
+}
+
 TEST_F(CallSessionTest, AuthenticatesAndReachesTheAuthenticatedState) {
   Client& ana = add("ana");
   ASSERT_TRUE(ana.login());

@@ -150,6 +150,14 @@ class CallSession {
     /// telling somebody at the login screen nothing about whether signing in
     /// can work.
     bool connected = false;
+    /// Whether the socket is on its first attempt to open and has not been
+    /// answered either way. `connected` is false then too, and reading that
+    /// as "the server is not there" is what put "server offline" on the
+    /// status bar for a server that was a handshake away from answering.
+    /// False once the attempt has been refused or the socket has dropped and
+    /// is being retried - those are the answers, and an interface that waited
+    /// through every retry before saying so would never say so.
+    bool attempting = false;
   };
 
   struct Callbacks {
@@ -304,6 +312,20 @@ class CallSession {
   /// The state callback stays quiet while only this is running: a server that
   /// is not there is news for the indicator, not a failed sign-in.
   [[nodiscard]] Result<std::monostate> probe_server();
+
+  /// Closes the socket `probe_server` opened, if one is up, and knocks again
+  /// at whatever `signaling_url` is now.
+  ///
+  /// This is the sign-in screen's Test button. `probe_server` deliberately
+  /// leaves a socket that is up alone, and a socket that has been up for an
+  /// hour answers "is the server there" about an hour ago; a test is a fresh
+  /// attempt or it is not a test. The answer arrives through `on_link` the
+  /// same way the probe's does: the socket open, then a round trip.
+  ///
+  /// Refused, with nothing closed, while anybody is signed in or signing in.
+  /// The socket is then carrying a session, and taking it down to measure it
+  /// would be measuring a server by hanging up on it.
+  [[nodiscard]] Result<std::monostate> retest_server();
 
   /// Creates a room and reports its identifier through `on_room_created`.
   ///
@@ -511,6 +533,11 @@ class CallSession {
   /// in a call leaves the room and signs in again, which is a great deal less
   /// than closing and reopening the client - and that is the whole point of
   /// this being a setter rather than a line in a file read once at startup.
+  ///
+  /// While nobody is signed in, the only socket up is the sign-in screen's
+  /// probe, and it is knocking at the old address; it is closed and reopened
+  /// to the new one, as `retest_server` does, so that the indicator describes
+  /// the server that was just typed in.
   ///
   /// Not validated here, for the same reason `SignalingClient::set_url` is
   /// not: an address is refused where it becomes an attempt, so the message

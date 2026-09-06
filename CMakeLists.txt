@@ -29,6 +29,15 @@ option(DV_ENABLE_SCREEN_AUDIO_SPIKE "Build the shared screen audio spike" OFF)
 # rooms and audit log in memory, which is what it did before persistence
 # existed. Configure with -DVCPKG_MANIFEST_FEATURES=mongo to get the driver.
 option(DV_ENABLE_MONGO "Persist accounts, rooms and the audit log in MongoDB" OFF)
+# The signaling server a client with no configuration starts on. A cache
+# variable and not a line in a header so that the address of a deployment can
+# be given to a release build without being written into this repository:
+# .github/workflows/release.yml passes the DV_DEFAULT_SIGNALING_URL secret here,
+# and a build from source, given nothing, keeps the loopback default in
+# shared/include/dv/config/config.hpp. Checked and handed to the compiler in
+# shared/CMakeLists.txt.
+set(DV_DEFAULT_SIGNALING_URL "" CACHE STRING
+  "The signaling server a client with no configuration connects to, ws:// or wss://; empty for ws://127.0.0.1:8080")
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 

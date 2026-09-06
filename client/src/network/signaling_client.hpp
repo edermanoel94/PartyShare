@@ -72,6 +72,7 @@ class SignalingClient {
 
   using MessageHandler = std::function<void(protocol::Message)>;
   using StateHandler = std::function<void(State, const std::string& detail)>;
+  using RoundTripHandler = std::function<void(std::chrono::milliseconds)>;
 
   explicit SignalingClient(Options options);
   ~SignalingClient();
@@ -90,6 +91,15 @@ class SignalingClient {
   /// client before what its handlers reach into.
   void on_message(MessageHandler handler);
   void on_state(StateHandler handler);
+  /// Called each time a probe of ours is answered, with the round trip it
+  /// measured, from the socket's thread.
+  ///
+  /// `round_trip()` carries the same number afterwards, and whoever reads it
+  /// on a timer needs nothing more. This is for whoever wants to hear it the
+  /// moment it exists: the Test button on the sign-in screen, which would
+  /// otherwise say "measuring" for the length of a metrics interval after
+  /// the answer had already come back.
+  void on_round_trip(RoundTripHandler handler);
 
   /// Starts connecting and returns immediately. Progress arrives through the
   /// state handler. Fails only when the URL is unusable.
@@ -145,6 +155,15 @@ class SignalingClient {
 
   [[nodiscard]] State state() const noexcept { return state_.load(); }
   [[nodiscard]] bool is_connected() const noexcept { return state_.load() == State::Connected; }
+  /// Whether the socket is on the first attempt of a `connect()` and has not
+  /// been answered either way.
+  ///
+  /// Not the same as `state() == Connecting`: every retry passes through that
+  /// state too, for the length of a handshake. False from the first refusal
+  /// or drop onwards, retries included - they are this client not giving up,
+  /// and whoever asks in the meantime is owed the answer the first attempt
+  /// got rather than a wait that comes back every few seconds.
+  [[nodiscard]] bool is_attempting() const;
 
   /// Number of `ping` frames answered so far. Exposed for the tests, which use
   /// it to prove the client survives the server's heartbeat.
@@ -204,6 +223,7 @@ class SignalingClient {
   std::shared_ptr<rtc::WebSocket> socket_;
   MessageHandler message_handler_;
   StateHandler state_handler_;
+  RoundTripHandler round_trip_handler_;
 
   std::atomic<State> state_{State::Disconnected};
   std::atomic<std::uint64_t> pings_answered_{0};
@@ -211,7 +231,9 @@ class SignalingClient {
 
   /// Guards the retry schedule. Separate from `mutex_` because the retry
   /// thread has to be able to wake up while a callback holds the other one.
-  std::mutex retry_mutex_;
+  // Mutable for is_attempting, which reads the attempt count and changes
+  // nothing.
+  mutable std::mutex retry_mutex_;
   std::condition_variable retry_changed_;
   std::thread retry_thread_;
   /// True between connect() and disconnect(). A drop only schedules a retry

@@ -102,7 +102,10 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   auto* connection = new QGroupBox(QStringLiteral("Connection"), this);
   auto* connection_form = new QFormLayout(connection);
   signaling_url_ = new QLineEdit(connection);
-  signaling_url_->setPlaceholderText(QStringLiteral("ws://127.0.0.1:8080"));
+  // The built-in default, asked of the configuration rather than typed here
+  // again: two copies of one address is how a placeholder comes to name a
+  // server the program no longer starts on.
+  signaling_url_->setPlaceholderText(QString::fromStdString(config::NetworkConfig{}.signaling_url));
   signaling_url_->setText(QString::fromStdString(session_.signaling_url()));
   signaling_hint_ = new QLabel(QString{}, connection);
   signaling_hint_->setWordWrap(true);

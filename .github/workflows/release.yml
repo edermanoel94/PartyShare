@@ -92,8 +92,14 @@ jobs:
         if: steps.webrtc-cache.outputs.cache-hit != 'true'
         run: scripts/build_webrtc.sh --out ~/.cache/partyshare/webrtc
 
+      # The server a downloaded client starts on, through the environment
+      # because the script owns the configure line. Empty when the secret is
+      # not set, which the script and CMake both read as "keep the loopback
+      # default". See docs/14-release.md.
       - name: Build the AppImage
         run: scripts/appimage.sh
+        env:
+          DV_DEFAULT_SIGNALING_URL: ${{ secrets.DV_DEFAULT_SIGNALING_URL }}
 
       # An artefact that has never been started is an artefact nobody knows is
       # broken. This is the same check that found the first AppImage shipping
@@ -353,6 +359,7 @@ jobs:
           -DDV_BUILD_TESTS=OFF
           -DDV_BUILD_SERVER=OFF
           -DDV_BUILD_CLIENT_MEDIA=ON
+          -DDV_DEFAULT_SIGNALING_URL="${{ secrets.DV_DEFAULT_SIGNALING_URL }}"
         shell: bash
 
       - name: Build
@@ -637,6 +644,7 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN"
           -DDV_BUILD_TESTS=OFF
           -DDV_BUILD_CLIENT_MEDIA=ON
+          -DDV_DEFAULT_SIGNALING_URL="${{ secrets.DV_DEFAULT_SIGNALING_URL }}"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}

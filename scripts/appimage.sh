@@ -113,6 +113,15 @@ if [[ -n "${DV_VCPKG_TOOLCHAIN:-}" ]]; then
   TOOLCHAIN_ARGS=(-DCMAKE_TOOLCHAIN_FILE="$DV_VCPKG_TOOLCHAIN")
 fi
 
+# The server a client with no configuration starts on, from the environment for
+# the reason the toolchain is: the release workflow owns the secret and this
+# script owns the configure line. Empty, which is what an unset secret arrives
+# as, keeps the loopback default; CMake refuses anything that is not ws:// or
+# wss://. See docs/14-release.md.
+if [[ -n "${DV_DEFAULT_SIGNALING_URL:-}" ]]; then
+  log "default signaling server ${DV_DEFAULT_SIGNALING_URL}"
+fi
+
 if [[ $SKIP_BUILD -eq 0 ]]; then
   log "configuring"
   cmake -S "$REPO_ROOT" -B "$BUILD_DIR" \
@@ -120,6 +129,7 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
     -DDV_BUILD_TESTS=OFF \
     -DDV_BUILD_CLIENT_MEDIA=ON \
     -DDV_WEBRTC_ROOT="$WEBRTC_ROOT" \
+    -DDV_DEFAULT_SIGNALING_URL="${DV_DEFAULT_SIGNALING_URL:-}" \
     ${TOOLCHAIN_ARGS[@]+"${TOOLCHAIN_ARGS[@]}"}
 
   log "building"

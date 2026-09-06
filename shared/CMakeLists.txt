@@ -16,6 +16,21 @@ add_library(dv::shared ALIAS dv_shared)
 # here rather than repeating the literal.
 target_compile_definitions(dv_shared PUBLIC DV_VERSION="${PROJECT_VERSION}")
 
+# The server a client with no configuration starts on, when the build was given
+# one; see the option in the top level CMakeLists.txt. Refused here rather than
+# at the first start of every installed client: dv::config::validate refuses
+# the same two things, and a release built on an address it would refuse is a
+# release nobody can sign in from.
+if(DV_DEFAULT_SIGNALING_URL)
+  if(NOT DV_DEFAULT_SIGNALING_URL MATCHES "^wss?://.")
+    message(FATAL_ERROR
+      "DV_DEFAULT_SIGNALING_URL must start with ws:// or wss://: '${DV_DEFAULT_SIGNALING_URL}'")
+  endif()
+  target_compile_definitions(dv_shared PUBLIC
+    DV_DEFAULT_SIGNALING_URL="${DV_DEFAULT_SIGNALING_URL}")
+  message(STATUS "Default signaling server: ${DV_DEFAULT_SIGNALING_URL}")
+endif()
+
 target_include_directories(dv_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )

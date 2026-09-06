@@ -131,8 +131,24 @@ struct ScreenAudioConfig {
   bool limiter = true;
 };
 
+/// The signaling server a client with no configuration at all connects to.
+///
+/// The loopback address unless the build was given one. A release is
+/// configured with -DDV_DEFAULT_SIGNALING_URL=<the deployment's server>, which
+/// .github/workflows/release.yml takes from a repository secret, so that the
+/// installers people download open on the right server without that address
+/// being written into this repository. A macro rather than a constant, because
+/// it has to reach a default member initializer from the command line, and
+/// shared/CMakeLists.txt is where it is checked and handed over. See
+/// docs/14-release.md.
+#ifndef DV_DEFAULT_SIGNALING_URL
+#define DV_DEFAULT_SIGNALING_URL "ws://127.0.0.1:8080"
+#endif
+
 struct NetworkConfig {
-  std::string signaling_url = "ws://127.0.0.1:8080";
+  /// See DV_DEFAULT_SIGNALING_URL above: where the first start goes, and
+  /// nothing more. config.ini and the sign-in screen both override it.
+  std::string signaling_url = DV_DEFAULT_SIGNALING_URL;
   std::vector<std::string> stun_servers = {"stun:stun.l.google.com:19302"};
   std::string turn_url;
   std::string turn_username;

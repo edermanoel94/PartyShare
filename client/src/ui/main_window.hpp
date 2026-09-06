@@ -1,7 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -92,6 +95,14 @@ class MainWindow : public QMainWindow {
 
  private slots:
   void on_connect();
+  /// Asks the server whose address is in the Server field whether it is
+  /// there, and says what it answered under the field.
+  ///
+  /// Otherwise the only way to find out was to sign in and read the failure,
+  /// which is a sentence about a password when the problem is an address.
+  /// The answer arrives through apply_link, the same way the status bar's
+  /// indicator gets it.
+  void on_test_server();
   /// Drops the connection and the identity with it, which puts the login
   /// screen back. What it is for is in build_home_page.
   void on_sign_out();
@@ -133,8 +144,14 @@ class MainWindow : public QMainWindow {
   /// where it was blank before: the call metrics stop when the call does, and
   /// "is my connection any good" is asked hardest on the lobby screen. Before
   /// that it is asked on the login screen as "is the server there", which is
-  /// what `connected` answers.
-  void apply_link(int round_trip_ms, bool connected);
+  /// what `connected` answers - unless `attempting`, in which case the
+  /// question is still open. See CallSession::LinkStats.
+  ///
+  /// `sequence` numbers the reports in the order the session made them. The
+  /// Test button on the login screen needs it: a report made before the test
+  /// started can still be waiting in the event queue when the test does, and
+  /// it describes the socket the test just closed.
+  void apply_link(int round_trip_ms, bool connected, bool attempting, int sequence);
   void apply_local_level(double level, bool speaking);
   /// Moves the microphone meter one frame closer to the last measurement.
   ///
@@ -209,6 +226,31 @@ class MainWindow : public QMainWindow {
   /// transcriptions of the same steps is how one of them stops sending the
   /// probe and leaves a stale indicator over an empty form.
   void return_to_login(const QString& text);
+
+  /// Puts a sentence under the Server field, styled as a refusal when `error`,
+  /// or takes the row away when there is nothing to say - for the reason
+  /// show_login_error does.
+  void show_server_hint(const QString& text, bool error);
+
+  /// The signaling URL for what is in the Server field, or nothing after
+  /// saying under the field why there is none.
+  ///
+  /// What the field shows is put back in the form the URL displays as, so
+  /// that what is on screen is what was used: "  192.168.1.10 " becomes
+  /// "192.168.1.10:8080", and the sentence about it names the same thing.
+  [[nodiscard]] std::optional<std::string> server_address_from_form();
+
+  /// Writes `url` into this user's config.ini, so that the next start opens
+  /// on the server that was typed in rather than the one it was installed
+  /// with.
+  ///
+  /// Failing to write is a line in the log and not a refusal: the sign-in it
+  /// is part of works either way, and a full disk is not a reason to be kept
+  /// out of a room. The settings dialog keeps its own pending list and its
+  /// own Save button for the same key; this is the one setting that is asked
+  /// for by a form whose only button is "go", and a form like that does not
+  /// get a second button for "and remember".
+  void remember_server_address(const std::string& url);
 
   void build_login_page();
   void build_home_page();
@@ -285,10 +327,29 @@ class MainWindow : public QMainWindow {
   QStackedWidget* pages_ = nullptr;
 
   // Login.
+  /// Where the server is, as an IP or a name. See build_login_page for why
+  /// this is on the form and not only in config.ini and the settings dialog.
+  QLineEdit* server_ = nullptr;
+  QPushButton* test_server_button_ = nullptr;
+  QLabel* server_hint_ = nullptr;
   QLineEdit* username_ = nullptr;
   QLineEdit* password_ = nullptr;
   QPushButton* connect_button_ = nullptr;
   QLabel* login_error_ = nullptr;
+  /// The URL the Test button is waiting for an answer about, or empty when
+  /// it is not waiting. The answer names it, because it can arrive after the
+  /// field has been changed to something else.
+  QString server_under_test_;
+  /// The last link report made before the test started. Reports up to and
+  /// including it are about the socket the test closed, whether or not they
+  /// reach apply_link after the test began.
+  int server_test_since_ = 0;
+  /// Numbers the link reports as the session makes them, which is on its own
+  /// threads: see wire_session.
+  std::atomic<int> link_sequence_{0};
+  /// The server address this window last read from or wrote to config.ini,
+  /// so that a sign-in to the same one writes nothing.
+  std::string remembered_server_;
 
   // Home.
   QLabel* welcome_ = nullptr;

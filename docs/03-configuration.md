@@ -51,6 +51,14 @@ is commented out — so uncommenting one line is the whole edit:
 signaling_url = ws://192.168.1.10:8080
 ```
 
+The client writes that line itself when the address is typed on its sign-in
+screen. The Server field there takes an IP or a name - `192.168.1.10`,
+`party.example.com:9000` - and supplies the `ws://` and the default port; a
+sign-in to a new one is saved to this user's `config.ini` on the way, and the
+Test button beside the field asks the server whether it is there before any
+password is typed. The file is still where an installer or a script puts the
+address, and still what is read at startup.
+
 Sections and keys are the same names the JSON form uses, so nothing has to be
 learned twice. Comments start with `;` or `#`. A key the client does not know is
 a startup error naming the line, rather than a line that quietly does nothing:
@@ -118,7 +126,7 @@ form, and `DV_SECTION_KEY` in the environment.
 
 | Key | Default | |
 | --- | --- | --- |
-| `signaling_url` | `ws://127.0.0.1:8080` | The server. The one line most installations change |
+| `signaling_url` | `ws://127.0.0.1:8080` | The server. The one line most installations change. A build from source starts on loopback; the published installers are built with the project's server as this default, which is not written in this repository - [chapter 14](14-release.md) |
 | `stun_servers` | `stun:stun.l.google.com:19302` | Comma separated. May be empty on a closed LAN |
 | `turn_url`, `turn_username`, `turn_password` | — | Only when NAT defeats STUN |
 | `ice_port_range_begin`, `ice_port_range_end` | 0, 0 | The UDP range the SFU binds media in. [Chapter 4](04-server-and-database.md) |

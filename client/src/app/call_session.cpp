@@ -56,6 +56,10 @@ CallSession::CallSession(Options options, MediaSessionFactory factory)
   signaling_.on_state([this](SignalingClient::State state, const std::string& detail) {
     handle_signaling_state(state, detail);
   });
+  // The moment a probe is answered, and not at the next tick of the metrics
+  // thread: the number is what the sign-in screen's Test button is waiting to
+  // say, and a tick is up to five seconds away.
+  signaling_.on_round_trip([this](std::chrono::milliseconds) { report_link(); });
 }
 
 CallSession::~CallSession() {
@@ -720,16 +724,26 @@ void CallSession::set_signaling_url(std::string url) {
   // knocking at the old address. Taken down and reopened so that the
   // indicator on the login screen describes the server that was just typed
   // in, and so that the sign-in that follows reuses a socket to that one.
+  // The refusal is the signed-in case, and it is the promise being kept.
+  (void)retest_server();
+}
+
+Result<std::monostate> CallSession::retest_server() {
   bool signed_in = false;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     signed_in = !local_user_.id.empty() || !pending_username_.empty();
   }
-  if (signed_in || signaling_.state() == SignalingClient::State::Disconnected) {
-    return;
+  if (signed_in) {
+    return Result<std::monostate>::failure(
+        "already_connected", "the server is tested from the sign-in screen, not from a session");
   }
+  // Whether or not a socket is up: a probe that was never opened - the
+  // address the client started with was refused - has nothing to close, and
+  // disconnect() on nothing is nothing. What matters is that probe_server
+  // finds a socket it is allowed to open.
   signaling_.disconnect();
-  (void)probe_server();
+  return probe_server();
 }
 
 void CallSession::disconnect() {
@@ -820,10 +834,11 @@ void CallSession::handle_signaling_state(SignalingClient::State state, const std
         }
       }
       // The first probe goes out now rather than at the next tick of the
-      // metrics thread, so the indicator carries a number one interval after
-      // the socket opens instead of two. And the socket being up is itself
-      // news worth a report: it is what turns "server offline" back into a
-      // measurement in progress.
+      // metrics thread, so the indicator carries a number one round trip after
+      // the socket opens - see on_round_trip in the constructor - instead of
+      // an interval later. And the socket being up is itself news worth a
+      // report: it is what turns "server offline" back into a measurement in
+      // progress.
       (void)signaling_.probe();
       report_link();
       break;
@@ -872,8 +887,9 @@ void CallSession::report_link() {
     callbacks = callbacks_;
   }
   if (callbacks.on_link) {
-    callbacks.on_link(
-        LinkStats{.round_trip = signaling_.round_trip(), .connected = signaling_.is_connected()});
+    callbacks.on_link(LinkStats{.round_trip = signaling_.round_trip(),
+                                .connected = signaling_.is_connected(),
+                                .attempting = signaling_.is_attempting()});
   }
 }
 

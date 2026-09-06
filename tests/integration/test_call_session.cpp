@@ -777,7 +777,11 @@ TEST_F(CallSessionTest, RetestingIsRefusedWhileSomebodyIsSignedIn) {
   ASSERT_FALSE(refused.ok());
   EXPECT_EQ(refused.error().code, "already_connected");
   EXPECT_FALSE(ana.session().local_user().id.empty()) << "the refusal signed somebody out";
-  EXPECT_EQ(ana.last_state(), CallSession::State::Authenticated);
+  // wait_until rather than a bare read: login() returns as soon as the
+  // local user has an id, and the state is recorded by a different callback,
+  // so the two land in no guaranteed order. Read straight after login() this
+  // is still Connecting often enough that the sanitiser build caught it.
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Authenticated; }));
 }
 
 TEST_F(CallSessionTest, SettingTheAddressBeforeAnyProbeOpensOneToIt) {
@@ -975,7 +979,11 @@ TEST_F(CallSessionTest, ASessionTheServerEndsSignsOutWithoutAWrongPasswordError)
   ASSERT_TRUE(carla.session().restrict_user(lift).ok());
   ASSERT_TRUE(wait_until([&] { return carla.user_lists() > receipts; }));
   ASSERT_TRUE(ana.login());
-  EXPECT_EQ(ana.last_state(), CallSession::State::Authenticated);
+  // wait_until rather than a bare read: login() returns as soon as the
+  // local user has an id, and the state is recorded by a different callback,
+  // so the two land in no guaranteed order. Read straight after login() this
+  // is still Connecting often enough that the sanitiser build caught it.
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Authenticated; }));
 }
 
 TEST_F(CallSessionTest, ASessionEndedOutsideARoomIsStillToldSo) {

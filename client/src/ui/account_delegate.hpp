@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <QStyledItemDelegate>
 #include <Qt>
 
@@ -12,7 +14,7 @@ namespace dv::ui {
 /// What a cell of the account table is, so the delegate knows how to draw it.
 /// Carried on the item under `kAccountCellRole`, because the delegate is one
 /// object for the whole table and a column number says nothing on its own.
-enum class AccountCell : int {
+enum class AccountCell : std::uint8_t {
   /// Drawn by the style: text in the table's font.
   Plain = 0,
   /// A dot: filled green when the account is signed in, an outline when not.

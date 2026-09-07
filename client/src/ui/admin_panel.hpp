@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <QHash>
 #include <QPoint>
 #include <QString>
@@ -152,7 +154,7 @@ class AdminPanel : public QWidget {
 
   /// One of the four, for the menu entries and the `b` key that turn a single
   /// flag on or off.
-  enum class Flag { Banned, Muted, Silenced, ScreenBlocked };
+  enum class Flag : std::uint8_t { Banned, Muted, Silenced, ScreenBlocked };
 
   /// Rebuilds the account table from the rows of `apply_users`, keeping the
   /// selection by identifier. The table's own fill rather than ui::fill,

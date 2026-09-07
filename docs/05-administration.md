@@ -40,16 +40,23 @@ remaining administrator may not be demoted, banned or deleted
 silently ignored. Without them, one click leaves a deployment that can only be
 repaired by editing the database by hand.
 
-## Kick, force mute, restrictions, and a notice
+## Kick, force mute, restrictions, ending a session, and a notice
 
-Four different tools, and none of them replaces another.
+Five different tools, and none of them replaces another.
 
 | | Reaches | Lasts |
 | --- | --- | --- |
 | **Kick** | One participant, one room | That visit. They can come straight back |
 | **Force mute** | One participant, one room | Until an administrator releases it |
 | **Restriction** | The account | Until an administrator lifts it. Survives the room, the session and the process |
+| **End session** | The account's connection, in a room or not | That sign-in. They can sign in again at once |
 | **Notice** | The account | Until they say they have read it. Waits for them if they are not connected |
+
+Ending a session is what a ban does without the ban: the person is put back on
+their sign-in screen with the reason under the button, out of whatever room they
+were in, with the room told - and nothing on the account has changed. It is for
+the moment somebody has to be got off the platform now and kept off it is a
+separate decision; an administrator who wants them kept off has the ban.
 
 The first three take something away. A notice takes nothing away, and that is
 what it is for: it is the only way to tell somebody *why*, and the only one of
@@ -135,10 +142,10 @@ way to enumerate accounts.
 
 ### From the client
 
-An administrator gets a panel: accounts, rooms, restrictions and the audit log,
-behind the `Admin` button inside a room, beside `Network status`. The call
-carries on while it is open, and `Back` returns to it. The same room offers a
-per-participant menu. Everything takes effect at once, and every change is
+An administrator gets a panel: accounts, rooms, sessions, restrictions and the
+audit log, behind the `Admin` button inside a room, beside `Network status`. The
+call carries on while it is open, and `Back` returns to it. The same room offers
+a per-participant menu. Everything takes effect at once, and every change is
 announced to the room and to the account it is about.
 
 The per-participant menu sends one flag and leaves the rest alone, so silencing
@@ -146,9 +153,9 @@ somebody does not lift a ban a colleague applied a minute earlier.
 
 The panel's `Users` tab is laid out as a console. A filter line over the table
 narrows it as you type, on any column, and says how many rows are left. The rows
-are in the platform's fixed-pitch face and read at a glance: a dot for an account
-that is signed in, the role in small capitals with administrators in the accent,
-and each restriction as a chip. The account you pick is shown in a pane beside
+read at a glance: a dot for an account that is signed in, the role in small
+capitals with administrators in the accent, and each restriction as a chip. The
+account you pick is shown in a pane beside
 the table: who they are, the four restrictions as boxes with a reason and an
 `Apply` that sends all four, the actions that still need a dialog (message, role,
 password reset, deletion), and the last five audit lines about them. On the
@@ -163,6 +170,20 @@ entry that reads as what it will do (`Silence Ana in the chat`, `Let Ana use the
 chat again`). Those single entries send one flag the way the room's menu does.
 The ban is the one that asks first, for a reason to show the person, because it
 is the one that locks them out.
+
+The `Sessions` tab is the screen `dbadmin` has, reached through the server: who
+has been connected and from where, the open sessions first and the ended ones
+after them, newest first within each. Each row is the account, its state, the
+address the connection came from, when it was last heard from and when it
+arrived. The state is one of three, because "open" and "online" are different
+claims: `online` is a row the server has not closed whose account is connected;
+`stale` is a row it has not closed whose account is not, which is what a server
+killed rather than stopped leaves behind and what the next server to start
+closes; `ended` is history. `k`, or the `End session` button, signs out whoever
+the selected row names, after asking for a reason to show them, and only for a
+row that is online - the other two are refused on the spot with a sentence about
+the row. An administrator cannot end their own session from here; that is the
+sign-out button on the home screen.
 
 ### From `dbadmin`, with no server running
 
@@ -214,13 +235,14 @@ because the schema belongs to the server; the other three because they name a
 room in a running process's memory, which a database tool has no connection to,
 both of those are the server's job.
 
-What it does have that the panel does not is **who is online, and from where**.
-The server writes one row per session — the account, the address, when it
-started, when it was last heard from — and that collection is written for this
-reader and for no other. The panel shows an `Online` column, but only about the
-server it is connected to and only while it is; the sessions screen is a history
-that outlives the process, which is what makes it the place to answer "which
-address was Bruno on last Tuesday".
+Its sessions screen and the panel's `Sessions` tab read the same rows: the
+server writes one per session — the account, the address, when it started, when
+it was last heard from, when it ended — and both show them open ones first. The
+difference is the path. The panel asks the server, which reads the rows back
+and is the one process that can also say, from the sockets it is holding,
+whether a row that is open is actually online. `dbadmin` reads the database
+directly, which is what makes it the one that still answers "which address was
+Bruno on last Tuesday" when there is no server to ask.
 
 ## The audit log
 
@@ -230,9 +252,9 @@ sharing a screen and muting yourself would fill the log with what nobody reads i
 for.
 
 `action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`,
-`create_user`, `update_user`, `delete_user`, `create_room`, `delete_room`,
-`change_password`, `send_notice` or `acknowledge_notice`. A `restrict_user`
-entry names the flags that **moved** and
+`end_session`, `create_user`, `update_user`, `delete_user`, `create_room`,
+`delete_room`, `change_password`, `send_notice` or `acknowledge_notice`. A
+`restrict_user` entry names the flags that **moved** and
 what they became, plus the reason if one was given: `silenced=true reason=off
 topic`. What moved and not the resulting set, because a log that only ever states
 the result leaves the reader to diff it against an entry they have to go and

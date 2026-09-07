@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -1180,6 +1181,29 @@ void MainWindow::wire_session() {
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             QMetaObject::invokeMethod(admin_panel_, "apply_audit", Qt::QueuedConnection,
+                                      Q_ARG(QStringList, rows));
+          },
+      .on_session_list =
+          [this](const std::vector<protocol::SessionSummary>& sessions) {
+            // The three times as the server wrote them, formatted here; the
+            // account stays an identifier, because the panel holds the account
+            // list and is where a name is looked up. Zero, which is a time the
+            // server never wrote, travels as an empty field.
+            const auto when = [](std::int64_t seconds) {
+              return seconds > 0 ? QDateTime::fromSecsSinceEpoch(seconds).toString(
+                                       QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                                 : QString();
+            };
+            QStringList rows;
+            rows.reserve(static_cast<qsizetype>(sessions.size()));
+            for (const protocol::SessionSummary& summary : sessions) {
+              QStringList fields;
+              fields << as_field(summary.id) << as_field(summary.user_id) << as_field(summary.ip)
+                     << when(summary.connected_at) << when(summary.last_seen_at)
+                     << when(summary.ended_at);
+              rows.push_back(fields.join(QLatin1Char('\t')));
+            }
+            QMetaObject::invokeMethod(admin_panel_, "apply_sessions", Qt::QueuedConnection,
                                       Q_ARG(QStringList, rows));
           },
       .on_kicked =

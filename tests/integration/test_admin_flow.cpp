@@ -246,6 +246,33 @@ TEST_F(AdminFlowTest, TheAuditLogCrossesTheWire) {
   EXPECT_GT(log->entries.front().timestamp_seconds, 0);
 }
 
+TEST_F(AdminFlowTest, ASessionCanBeReadAndEndedAcrossTheWire) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+
+  admin->send(proto::ListSessions{});
+  const auto listed = admin->wait_for<proto::SessionList>(kTimeout);
+  ASSERT_TRUE(listed.has_value());
+  ASSERT_EQ(listed->sessions.size(), 2U);
+  for (const proto::SessionSummary& session : listed->sessions) {
+    EXPECT_EQ(session.ended_at, 0);
+    EXPECT_FALSE(session.ip.empty()) << "a real socket has an address";
+  }
+
+  // No room anywhere: the person is on their home screen, which is the case
+  // a kick could never reach.
+  admin->send(proto::EndSession{bruno.id, "off you go"});
+  const auto ended = plain->wait_for<proto::SessionEnded>(kTimeout);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "off you go");
+
+  const auto after = admin->wait_for<proto::SessionList>(kTimeout);
+  ASSERT_TRUE(after.has_value());
+  ASSERT_EQ(after->sessions.size(), 2U);
+  EXPECT_EQ(after->sessions.front().user_id, ana.id) << "the open row comes first";
+  EXPECT_GT(after->sessions.back().ended_at, 0);
+}
+
 // --- notices -----------------------------------------------------------------
 
 TEST_F(AdminFlowTest, ANoticeReachesTheAccountItWasWrittenTo) {

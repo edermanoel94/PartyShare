@@ -145,6 +145,8 @@ TEST_F(HubAdminTest, AnOrdinaryUserIsRefusedEveryAdministrativeMessage) {
            proto::DeleteUser{admin_.id},
            proto::DeleteRoom{room_},
            proto::ListAudit{},
+           proto::ListSessions{},
+           proto::EndSession{admin_.id, "because"},
        }) {
     const auto out = send(user_connection_, message);
     const auto error = find<proto::ErrorMessage>(out, user_connection_);
@@ -1106,6 +1108,118 @@ TEST_F(HubAdminTest, NothingAParticipantDoesReachesTheLog) {
       find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
   ASSERT_TRUE(log.has_value());
   EXPECT_TRUE(log->entries.empty());
+}
+
+// --- sessions ----------------------------------------------------------------
+
+TEST_F(HubAdminTest, TheSessionListSaysWhoIsHereAndFromWhere) {
+  set_up_room();
+
+  const auto list =
+      find<proto::SessionList>(send(admin_connection_, proto::ListSessions{}), admin_connection_);
+  ASSERT_TRUE(list.has_value());
+  ASSERT_EQ(list->sessions.size(), 2U);
+
+  // One row per sign-in, each with the address its socket came from, and both
+  // still open: nobody has left.
+  for (const proto::SessionSummary& session : list->sessions) {
+    EXPECT_FALSE(session.id.empty());
+    EXPECT_EQ(session.ended_at, 0);
+    EXPECT_GT(session.connected_at, 0);
+    EXPECT_GE(session.last_seen_at, session.connected_at);
+    if (session.user_id == admin_.id) {
+      EXPECT_EQ(session.ip, address_of(admin_connection_));
+    } else {
+      EXPECT_EQ(session.user_id, user_.id);
+      EXPECT_EQ(session.ip, address_of(user_connection_));
+    }
+  }
+}
+
+TEST_F(HubAdminTest, EndingASessionSignsThePersonOutAndLeavesTheAccountAlone) {
+  set_up_room();
+
+  const auto out =
+      send(admin_connection_, proto::EndSession{user_.id, "please reconnect on the wired network"});
+
+  // The person is told first and in the administrator's words, then the room
+  // hears the kick, and the media layer tears the connection down.
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "please reconnect on the wired network");
+  EXPECT_LT(index_of<proto::SessionEnded>(out, user_connection_),
+            index_of<proto::UserKicked>(out, user_connection_));
+  ASSERT_TRUE(find<proto::UserKicked>(out, admin_connection_).has_value());
+  EXPECT_EQ(media_.left, std::vector<std::string>{user_.id});
+
+  // The answer is the new list, with the row closed.
+  const auto list = find<proto::SessionList>(out, admin_connection_);
+  ASSERT_TRUE(list.has_value());
+  ASSERT_EQ(list->sessions.size(), 2U);
+  for (const proto::SessionSummary& session : list->sessions) {
+    if (session.user_id == user_.id) {
+      EXPECT_GT(session.ended_at, 0);
+    } else {
+      EXPECT_EQ(session.ended_at, 0);
+    }
+  }
+  // Open first: the administrator's row is on top now.
+  EXPECT_EQ(list->sessions.front().user_id, admin_.id);
+
+  // Nothing about the account changed, so they sign straight back in, and the
+  // connection they were on is nobody's until they do.
+  const auto refused = send(user_connection_, proto::ListRooms{});
+  ASSERT_TRUE(find<proto::ErrorMessage>(refused, user_connection_).has_value());
+  const ConnectionId fresh = connect();
+  const auto again =
+      find<proto::Authenticated>(send(fresh, proto::Authenticate{"bruno", "password"}), fresh);
+  ASSERT_TRUE(again.has_value());
+  EXPECT_FALSE(again->user.restrictions.any());
+
+  // And the log says who did it, with the reason.
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  ASSERT_EQ(log->entries.size(), 1U);
+  EXPECT_EQ(log->entries.front().action, "end_session");
+  EXPECT_EQ(log->entries.front().actor_id, admin_.id);
+  EXPECT_EQ(log->entries.front().target_id, user_.id);
+  EXPECT_EQ(log->entries.front().room_id, room_);
+  EXPECT_EQ(log->entries.front().detail, "please reconnect on the wired network");
+}
+
+TEST_F(HubAdminTest, EndingASessionWithNoReasonUsesTheServersSentence) {
+  set_up_room();
+
+  const auto out = send(admin_connection_, proto::EndSession{user_.id, ""});
+  const auto ended = find<proto::SessionEnded>(out, user_connection_);
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_EQ(ended->reason, "the session was ended by an administrator");
+}
+
+TEST_F(HubAdminTest, AnAdministratorCannotEndTheirOwnSessionFromThePanel) {
+  set_up_room();
+
+  const auto out = send(admin_connection_, proto::EndSession{admin_.id, ""});
+  const auto error = find<proto::ErrorMessage>(out, admin_connection_);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_target");
+  EXPECT_FALSE(find<proto::SessionEnded>(out, admin_connection_).has_value());
+  // Still an administrator on a live connection.
+  EXPECT_TRUE(find<proto::UserList>(send(admin_connection_, proto::ListUsers{}), admin_connection_)
+                  .has_value());
+}
+
+TEST_F(HubAdminTest, EndingTheSessionOfSomebodyNotSignedInIsRefused) {
+  set_up_room();
+  (void)send(user_connection_, proto::LeaveRoom{room_, user_.id});
+  (void)hub_.on_disconnect(user_connection_, now_);
+
+  const auto out = send(admin_connection_, proto::EndSession{user_.id, ""});
+  const auto error = find<proto::ErrorMessage>(out, admin_connection_);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_target");
+  EXPECT_FALSE(find<proto::SessionList>(out, admin_connection_).has_value());
 }
 
 }  // namespace

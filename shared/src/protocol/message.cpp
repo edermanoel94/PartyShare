@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/06-protocol.md must match.
-constexpr std::array<TypeMapping, 42> kTypeMappings{{
+constexpr std::array<TypeMapping, 45> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -59,6 +59,9 @@ constexpr std::array<TypeMapping, 42> kTypeMappings{{
     {.type = MessageType::DeleteRoom, .name = "delete_room"},
     {.type = MessageType::ListAudit, .name = "list_audit"},
     {.type = MessageType::AuditList, .name = "audit_list"},
+    {.type = MessageType::ListSessions, .name = "list_sessions"},
+    {.type = MessageType::SessionList, .name = "session_list"},
+    {.type = MessageType::EndSession, .name = "end_session"},
 }};
 
 /// Reads fields out of a JSON object, remembering the first failure instead of
@@ -443,6 +446,26 @@ models::AuditEntry audit_entry_from(FieldReader& reader) {
   return value;
 }
 
+json session_summary_to_json(const SessionSummary& summary) {
+  return json{{"id", summary.id},
+              {"user_id", summary.user_id},
+              {"ip", summary.ip},
+              {"connected_at", summary.connected_at},
+              {"last_seen_at", summary.last_seen_at},
+              {"ended_at", summary.ended_at}};
+}
+
+SessionSummary session_summary_from(FieldReader& reader) {
+  SessionSummary value;
+  value.id = reader.optional_string("id");
+  value.user_id = reader.string("user_id");
+  value.ip = reader.optional_string("ip");
+  value.connected_at = reader.optional_integer("connected_at");
+  value.last_seen_at = reader.optional_integer("last_seen_at");
+  value.ended_at = reader.optional_integer("ended_at");
+  return value;
+}
+
 Result<Message> finish(FieldReader& reader, Message message) {
   if (!reader.ok()) {
     return Result<Message>::failure(reader.error());
@@ -601,7 +624,16 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, ListAudit>) {
           return MessageType::ListAudit;
         }
-        return MessageType::AuditList;
+        if constexpr (std::is_same_v<T, AuditList>) {
+          return MessageType::AuditList;
+        }
+        if constexpr (std::is_same_v<T, ListSessions>) {
+          return MessageType::ListSessions;
+        }
+        if constexpr (std::is_same_v<T, SessionList>) {
+          return MessageType::SessionList;
+        }
+        return MessageType::EndSession;
       },
       message);
 }
@@ -779,6 +811,17 @@ std::string serialize(const Message& message) {
             entries.push_back(audit_entry_to_json(entry));
           }
           root["entries"] = std::move(entries);
+        } else if constexpr (std::is_same_v<T, ListSessions>) {
+          root["limit"] = value.limit;
+        } else if constexpr (std::is_same_v<T, SessionList>) {
+          json sessions = json::array();
+          for (const SessionSummary& summary : value.sessions) {
+            sessions.push_back(session_summary_to_json(summary));
+          }
+          root["sessions"] = std::move(sessions);
+        } else if constexpr (std::is_same_v<T, EndSession>) {
+          root["user_id"] = value.user_id;
+          root["reason"] = value.reason;
         } else {
           root["nonce"] = value.nonce;
         }
@@ -1079,6 +1122,22 @@ Result<Message> parse(std::string_view json_text) {
     case MessageType::AuditList: {
       AuditList value;
       value.entries = reader.array<models::AuditEntry>("entries", audit_entry_from);
+      return finish(reader, value);
+    }
+    case MessageType::ListSessions: {
+      ListSessions value;
+      value.limit = static_cast<int>(reader.optional_integer("limit"));
+      return finish(reader, value);
+    }
+    case MessageType::SessionList: {
+      SessionList value;
+      value.sessions = reader.array<SessionSummary>("sessions", session_summary_from);
+      return finish(reader, value);
+    }
+    case MessageType::EndSession: {
+      EndSession value;
+      value.user_id = reader.string("user_id");
+      value.reason = reader.optional_string("reason");
       return finish(reader, value);
     }
   }

@@ -395,6 +395,12 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else if constexpr (std::is_same_v<T, protocol::ListAudit>) {
           handle_list_audit(out, *state, value);
 
+        } else if constexpr (std::is_same_v<T, protocol::ListSessions>) {
+          handle_list_sessions(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::EndSession>) {
+          handle_end_session(out, *state, value);
+
         } else {
           // Unreachable: the gate above already answered every server to
           // client type. Kept so that adding an alternative to the variant and
@@ -1719,6 +1725,19 @@ protocol::RoomList Hub::room_list() const {
   return list;
 }
 
+protocol::SessionList Hub::session_list(int limit) const {
+  protocol::SessionList list;
+  for (const store::SessionRecord& session : sessions_->list(limit)) {
+    list.sessions.push_back(protocol::SessionSummary{.id = session.id,
+                                                     .user_id = session.user_id,
+                                                     .ip = session.ip,
+                                                     .connected_at = session.connected_at,
+                                                     .last_seen_at = session.last_seen_at,
+                                                     .ended_at = session.ended_at});
+  }
+  return list;
+}
+
 void Hub::broadcast_room_list(std::vector<Outgoing>& out) const {
   // Every authenticated connection, not just whoever caused the change. A room
   // list is only ever asked for once, when a client opens a screen that shows
@@ -2002,6 +2021,51 @@ void Hub::handle_list_audit(std::vector<Outgoing>& out, Connection& connection,
   out.push_back(Outgoing{
       .connection = connection.id,
       .message = protocol::AuditList{.entries = audit_->list(message.limit, message.actor_id)}});
+}
+
+void Hub::handle_list_sessions(std::vector<Outgoing>& out, Connection& connection,
+                               const protocol::ListSessions& message) {
+  out.push_back(Outgoing{.connection = connection.id, .message = session_list(message.limit)});
+}
+
+void Hub::handle_end_session(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::EndSession& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  // The same refusal delete_user and restrict_user give. Signing yourself out
+  // is the button on the home screen, and a misclick on the wrong row should
+  // not put an administrator on their login screen with the panel half read.
+  if (message.user_id == actor->id) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target",
+                      .message = "an administrator cannot end their own session from here"});
+    return;
+  }
+  // Somebody who is not here has no session to end. Refused rather than
+  // answered with the unchanged list, because the panel would show the same
+  // rows and the administrator would be left wondering whether it happened.
+  if (!connection_of_user(message.user_id).has_value()) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target", .message = "that account is not signed in"});
+    return;
+  }
+
+  // Resolved before the session ends, while the connection still carries the
+  // identity: `user_label` reads the store first, but a session can outlive
+  // the account that opened it.
+  const std::string label = user_label(message.user_id);
+  const std::string room_id = rooms_.room_of(message.user_id).value_or("");
+  const std::string reason =
+      message.reason.empty() ? "the session was ended by an administrator" : message.reason;
+
+  DV_LOG_INFO("{} ended the session of {}",
+              models::user_label(actor->id, actor->display_name, connection.username), label);
+  record(*actor, "end_session", message.user_id, room_id, message.reason);
+  end_session_of(out, message.user_id, reason);
+  out.push_back(Outgoing{.connection = connection.id, .message = session_list(0)});
 }
 
 }  // namespace dv::server

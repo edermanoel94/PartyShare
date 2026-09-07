@@ -94,6 +94,12 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::DeleteUser:
     case protocol::MessageType::DeleteRoom:
     case protocol::MessageType::ListAudit:
+    // Who has been connected and from where, and signing one of them out.
+    // Both reach beyond any room: the list says which address an account was
+    // on last Tuesday, and the sign-out reaches somebody sitting on the home
+    // screen.
+    case protocol::MessageType::ListSessions:
+    case protocol::MessageType::EndSession:
     // Telling one account something, in a box they have to dismiss. It reaches
     // a person who is in no room and, if they are not connected, a person who
     // is not there at all, which is exactly the reach that makes it
@@ -116,6 +122,7 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UserList:
     case protocol::MessageType::RoomList:
     case protocol::MessageType::AuditList:
+    case protocol::MessageType::SessionList:
     case protocol::MessageType::Error:
       return Access::ServerToClient;
   }

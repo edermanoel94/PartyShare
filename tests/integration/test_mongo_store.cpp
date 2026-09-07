@@ -587,13 +587,40 @@ TEST_F(MongoStoreTest, RecoveryClosesWhatAKilledServerLeftOpen) {
   EXPECT_EQ(stores_->sessions().close_open(), 0U);
 }
 
-// What a recovered row is stamped with - the moment it was last seen, not the
-// moment of recovery - has no test here, and deliberately no method to give it
-// one. SessionStore answers about open sessions, because that is the only
-// question the server has; the closed ones are read by tools/dbadmin, and
-// TestSessionsAreReadNewestFirst there is where that timestamp is checked.
-// Widening this interface to reach a field no server ever reads would be
-// paying for a test with an API somebody later has to implement twice.
+TEST_F(MongoStoreTest, TheListPutsWhoIsHereFirstAndThenTheHistory) {
+  // The order the administrator's panel reads: open rows before ended ones
+  // whatever the times say, and the one heard from most recently first within
+  // each. Written in neither order, so the sort is what is under test.
+  ASSERT_TRUE(stores_->sessions().open(session("id-open-old", "203.0.113.1", 1000)).ok());
+  const auto recent = stores_->sessions().open(session("id-ended-recent", "203.0.113.2", 3000));
+  ASSERT_TRUE(recent.ok());
+  ASSERT_FALSE(stores_->sessions().close(recent.value().id).has_value());
+  ASSERT_TRUE(stores_->sessions().open(session("id-open-new", "203.0.113.3", 2000)).ok());
+  const auto older = stores_->sessions().open(session("id-ended-old", "203.0.113.4", 500));
+  ASSERT_TRUE(older.ok());
+  ASSERT_FALSE(stores_->sessions().close(older.value().id).has_value());
+
+  const auto listed = stores_->sessions().list(0);
+  ASSERT_EQ(listed.size(), 4U);
+  EXPECT_EQ(listed[0].user_id, "id-open-new");
+  EXPECT_EQ(listed[1].user_id, "id-open-old");
+  EXPECT_EQ(listed[2].user_id, "id-ended-recent");
+  EXPECT_EQ(listed[3].user_id, "id-ended-old");
+  EXPECT_GT(listed[2].ended_at, 0);
+
+  EXPECT_EQ(stores_->sessions().list(2).size(), 2U);
+}
+
+TEST_F(MongoStoreTest, RecoveryStampsARowWithWhenItWasLastSeen) {
+  // A server killed on Friday and started on Monday did not have anybody
+  // connected over the weekend, and the row has to say so.
+  ASSERT_TRUE(stores_->sessions().open(session("id-ana", "203.0.113.7", 1000)).ok());
+  ASSERT_EQ(stores_->sessions().close_open(), 1U);
+
+  const auto listed = stores_->sessions().list(0);
+  ASSERT_EQ(listed.size(), 1U);
+  EXPECT_EQ(listed.front().ended_at, 1000);
+}
 
 TEST_F(MongoStoreTest, ARefusedConnectionFailsRatherThanFallingBackToMemory) {
   // Port 1 has nothing listening on it. What matters is that this returns a

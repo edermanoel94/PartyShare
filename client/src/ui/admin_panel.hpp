@@ -15,25 +15,36 @@ class QEvent;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QStackedWidget;
+class QTabBar;
 class QTableWidget;
-class QTabWidget;
 
 namespace dv::ui {
 
-/// Accounts, rooms and the audit log, for an administrator.
+/// Accounts, rooms, sessions and the audit log, for an administrator.
 ///
 /// A page of its own rather than a dialog, because managing a dozen accounts
 /// is not something anyone does in one glance and a modal window would trap
 /// them there while a call is going on.
 ///
-/// The accounts tab is laid out as a console: a filter line over a table in
-/// the platform's fixed-pitch face, rows that say their state with a dot, a
-/// coloured role and chips rather than with words, and beside the table a
-/// pane showing the account that is picked - its four restrictions as boxes,
-/// the actions that still need a dialog, and the last audit lines about it.
-/// The keys work from the table and are written under it. What this replaced
-/// was a grid of six columns, six buttons and a dialog per action, none of
-/// which could be read at a glance or driven without the mouse.
+/// One line at the top holds the title, the tabs and the way out, and the
+/// pages sit directly under it with no frame of their own: the tables and the
+/// pane are the cards, and a card around cards was a second set of corners
+/// that agreed with nothing. The interface's own face throughout, the same
+/// one every other screen is set in.
+///
+/// The accounts tab is laid out as a console: a filter line over a table,
+/// rows that say their state with a dot, a coloured role and chips rather
+/// than with words, and beside the table a pane showing the account that is
+/// picked - its four restrictions as boxes, the actions that still need a
+/// dialog, and the last audit lines about it. The keys work from the table
+/// and are written under it. What this replaced was a grid of six columns,
+/// six buttons and a dialog per action, none of which could be read at a
+/// glance or driven without the mouse.
+///
+/// The sessions tab is the screen tools/dbadmin has, reached through the
+/// server instead of through the database: who has been connected and from
+/// where, the open sessions first, and `k` to sign one of them out.
 ///
 /// Everything here is a request to the server and an answer that arrives
 /// later, never a local edit: this widget holds no state that the server does
@@ -80,6 +91,7 @@ class AdminPanel : public QWidget {
   void apply_users(const QStringList& rows);
   void apply_rooms(const QStringList& rows);
   void apply_audit(const QStringList& rows);
+  void apply_sessions(const QStringList& rows);
 
  signals:
   /// A request could not even be sent. Reported upwards rather than shown
@@ -96,6 +108,12 @@ class AdminPanel : public QWidget {
   void on_delete_user();
   void on_create_room();
   void on_close_room();
+  /// Signs out whoever the session table has selected, after asking for a
+  /// reason. Only a session that is online can be ended; the other two
+  /// states are refused on the spot with a sentence about that row, because
+  /// the request is about a connection a running server is holding and
+  /// neither of them is one.
+  void on_end_session();
   void on_tab_changed(int index);
   /// The right-click menu on an account: everything the pane does, and each
   /// restriction on its own, for the row under the pointer.
@@ -111,10 +129,11 @@ class AdminPanel : public QWidget {
  protected:
   /// The keys of the console, watched on the two widgets they belong to.
   ///
-  /// In the table, a bare letter is a command: `/` goes to the filter, Return
-  /// and `r` to the restriction boxes, `m` messages, `b` bans, `p` resets the
-  /// password, `d` deletes, `n` creates. In the filter, Escape clears it and
-  /// hands the keyboard back to the table, which is the way out of a search
+  /// In the account table, a bare letter is a command: `/` goes to the
+  /// filter, Return and `r` to the restriction boxes, `m` messages, `b` bans,
+  /// `p` resets the password, `d` deletes, `n` creates. In the session table,
+  /// `k` ends the selected session. In the filter, Escape clears it and hands
+  /// the keyboard back to the table, which is the way out of a search
   /// everywhere else. Watched rather than bound as QShortcuts: a shortcut
   /// only fires while the window is the active one, and these are meant to
   /// work wherever the key press itself is delivered.
@@ -126,7 +145,19 @@ class AdminPanel : public QWidget {
  private:
   QWidget* build_users_tab();
   QWidget* build_rooms_tab();
+  QWidget* build_sessions_tab();
   QWidget* build_audit_tab();
+
+  /// What one row of the session table says about the connection it names.
+  ///
+  /// Three answers and not two, because "open" and "online" are different
+  /// claims and the difference is the thing an administrator has to be able
+  /// to see. A row the server has not closed whose account is not connected
+  /// is a row the server failed to close, or one another server left behind;
+  /// calling it online would be the panel repeating a lie the store is
+  /// telling it. Decided against the account list rather than sent by the
+  /// server, because that list already says who is connected.
+  enum class SessionState : std::uint8_t { Online, Stale, Ended };
 
   /// What the server last said about one account, as it said it.
   ///
@@ -160,6 +191,19 @@ class AdminPanel : public QWidget {
   /// selection by identifier. The table's own fill rather than ui::fill,
   /// because its cells carry what the delegate draws.
   void fill_accounts(const QStringList& rows);
+
+  /// Rebuilds the session table from `session_rows_`. Its own fill because
+  /// the account column is a name looked up in `accounts_` and the state is
+  /// decided rather than read, so it runs again when either list arrives.
+  void fill_sessions();
+
+  /// The state of the session row `fields` describes, against `accounts_`.
+  [[nodiscard]] SessionState session_state(const QStringList& fields) const;
+
+  /// How an account reads in the session table: its username, or the first
+  /// characters of the identifier for an account that has since been deleted.
+  /// A row that names nobody is still a row that says somebody was here.
+  [[nodiscard]] QString session_account_label(const QString& user_id) const;
 
   /// Shows the current row in the pane, or nothing when there is none.
   void refresh_pane();
@@ -196,8 +240,12 @@ class AdminPanel : public QWidget {
   QHash<QString, Account> accounts_;
   /// The rows of the last `apply_audit`, kept for the pane's tail.
   QStringList audit_rows_;
+  /// The rows of the last `apply_sessions`, kept so the table can be drawn
+  /// again with names when the account list arrives after them.
+  QStringList session_rows_;
 
-  QTabWidget* tabs_ = nullptr;
+  QTabBar* tabs_ = nullptr;
+  QStackedWidget* pages_ = nullptr;
 
   QLineEdit* filter_ = nullptr;
   QLabel* filter_count_ = nullptr;
@@ -208,6 +256,11 @@ class AdminPanel : public QWidget {
   QTableWidget* rooms_ = nullptr;
   QPushButton* create_room_ = nullptr;
   QPushButton* close_room_ = nullptr;
+
+  QTableWidget* sessions_ = nullptr;
+  /// "2 online · 14 sessions", under the table.
+  QLabel* sessions_count_ = nullptr;
+  QPushButton* end_session_ = nullptr;
 
   QTableWidget* audit_ = nullptr;
 };

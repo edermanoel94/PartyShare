@@ -206,7 +206,7 @@ The text is trimmed and has to fit in 500 bytes, which is the server's own limit
 The server assigns nothing to it afterwards: the object identifier MongoDB gives the document is what the person acknowledges by, the same as for a notice the server wrote itself.
 
 Every change writes an audit entry, in the server's own vocabulary: `create_user`, `update_user`, `delete_user`, `restrict_user`, `delete_room`, `send_notice` and `end_session`, with the detail naming what actually moved.
-`end_session` is the one the server never writes for itself: from the panel, signing somebody out is a `kick` from a room or a ban, and a program with no room to name needed a third word.
+`end_session` is the word the server writes when an administrator signs somebody out from the panel's sessions tab, which is the same thing the `k` key here asks for; a `kick` names a room and a ban is a restriction, and neither is what this is.
 A `delete_room` entry carries the room in both `target_id` and `room_id`, which is what the server writes for its own: an entry the two programs disagree on is one somebody has to know the origin of before they can read it.
 When the change succeeds and the entry cannot be written, the change stands and the status line says so in the colour of a warning rather than a success.
 Refusing an administrative change because the log is unreachable protects the log at the expense of the thing the log is about, which is the trade [docs/13-security.md](../../docs/13-security.md) already states for the server.

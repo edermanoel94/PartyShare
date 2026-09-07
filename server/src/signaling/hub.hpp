@@ -451,12 +451,27 @@ class Hub {
                           const protocol::DeleteRoom& message);
   void handle_list_audit(std::vector<Outgoing>& out, Connection& connection,
                          const protocol::ListAudit& message);
+  void handle_list_sessions(std::vector<Outgoing>& out, Connection& connection,
+                            const protocol::ListSessions& message);
+
+  /// Signs one account out from the panel: `end_session_of`, with the
+  /// refusals the other handlers give, and an audit entry.
+  ///
+  /// The same exit `apply_restrictions_written_elsewhere` takes for a mark
+  /// tools/dbadmin left on the account, reached by a message instead. The
+  /// account is left exactly as it is, and the person may sign in again at
+  /// once; an administrator who wanted them kept out has `restrict_user`.
+  void handle_end_session(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::EndSession& message);
 
   /// The account list as an administrator sees it, with the salt and the hash
   /// left behind. Sent as the answer to list_users and after every change, so
   /// the panel never shows a state the server has already moved past.
   [[nodiscard]] protocol::UserList user_list() const;
   [[nodiscard]] protocol::RoomList room_list() const;
+  /// The sessions as the store keeps them, open ones first. The answer to
+  /// list_sessions and to end_session, for the reason user_list is.
+  [[nodiscard]] protocol::SessionList session_list(int limit) const;
 
   Options options_;
   MediaSignals* media_signals_ = nullptr;

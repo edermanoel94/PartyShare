@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QColor>
-#include <QFont>
 #include <QString>
 
 class QApplication;
@@ -72,18 +71,5 @@ void apply(QApplication& application);
 
 /// The stylesheet for `colors()`. Exposed for whoever wants to look at it.
 [[nodiscard]] QString stylesheet();
-
-/// The console's face, at `point_size`: the fixed-pitch font a terminal on
-/// this platform would use, for the administrator's account table and the
-/// figures beside it.
-///
-/// Asked for by name rather than through QFontDatabase::FixedFont, which on
-/// Windows answers Courier New - a typewriter face with serifs that reads as
-/// a fax rather than as a terminal. The first of these that is installed
-/// wins: Cascadia Mono ships with Windows 11 and Windows Terminal, Consolas
-/// with every Windows since Vista, SF Mono and Menlo with macOS, and the
-/// last two are what most Linux desktops have. A machine with none of them
-/// gets whatever Qt's monospace hint finds.
-[[nodiscard]] QFont console_font(qreal point_size);
 
 }  // namespace dv::ui::theme

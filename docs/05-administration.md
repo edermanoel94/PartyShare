@@ -144,6 +144,26 @@ announced to the room and to the account it is about.
 The per-participant menu sends one flag and leaves the rest alone, so silencing
 somebody does not lift a ban a colleague applied a minute earlier.
 
+The panel's `Users` tab is laid out as a console. A filter line over the table
+narrows it as you type, on any column, and says how many rows are left. The rows
+are in the platform's fixed-pitch face and read at a glance: a dot for an account
+that is signed in, the role in small capitals with administrators in the accent,
+and each restriction as a chip. The account you pick is shown in a pane beside
+the table: who they are, the four restrictions as boxes with a reason and an
+`Apply` that sends all four, the actions that still need a dialog (message, role,
+password reset, deletion), and the last five audit lines about them. On the
+administrator's own row the pane shows the account and offers nothing, since the
+server refuses all of it.
+
+The keys work from the table: `/` goes to the filter, the arrows move, `Enter`
+and `r` go to the restriction boxes, `m` messages, `b` bans or lifts a ban, `p`
+resets the password, `d` deletes and `n` creates an account. A right click over
+an account offers the same actions as a menu, with each restriction on its own
+entry that reads as what it will do (`Silence Ana in the chat`, `Let Ana use the
+chat again`). Those single entries send one flag the way the room's menu does.
+The ban is the one that asks first, for a reason to show the person, because it
+is the one that locks them out.
+
 ### From `dbadmin`, with no server running
 
 [tools/dbadmin](../tools/dbadmin/README.md) is a terminal front end for the same

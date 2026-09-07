@@ -21,7 +21,9 @@ are the same lines GitHub puts in the generated release notes, so the file in th
 repository and the release page never disagree. The Windows installer shows the
 file on its "What's new" page, and that is why the section is written before the
 tag rather than after the release: the installer is built from what the tag
-points at.
+points at. It is also why a pull request title is written in English, whatever
+language the commits under it speak: the title is the sentence the installer
+shows, on a page where everything else is English.
 
 | What was merged | What comes out |
 | --- | --- |
@@ -110,12 +112,12 @@ What it deliberately does not do, and why:
   platform's "open this", so it is checked where it becomes a link; anything
   else falls back to the releases page.
 
-**Check GitHub for new versions**, in the Connection group of the Settings
-dialog, turns it off, and then no request is made at all. It writes
-`[ui] check_for_updates` into this user's `config.ini`, which is also editable
-by hand and is what an administrator sets machine-wide. Off is the right setting
-on a LAN with no route out, where every check is a timeout, and on a network
-whose administrator decides what talks to the outside.
+There is no switch. Until 0.1.59 the Settings dialog had a box for it, writing
+`[ui] check_for_updates` into this user's `config.ini`, and what the switch
+bought was a room where three people run three versions and the one who unticked
+it never hears. On a LAN with no route out the check is a timeout nobody sees. A
+`config.ini` that still says `check_for_updates = false` loads as before, and the
+client's log says the line no longer does anything.
 
 The comparison lives in `shared/include/dv/core/version.hpp` and is tested in
 `tests/unit/test_version.cpp`; the request lives in

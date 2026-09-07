@@ -3,258 +3,260 @@
 Every version PartyShare has published, newest first. A version is one merge to
 master: `.github/workflows/tag.yml` writes the entry from the pull request title
 when it bumps the version, so this list and the GitHub releases say the same
-thing. The Windows installer shows it on its "What's new" page.
+thing. The Windows installer shows it on its "What's new" page, which is why the
+entries are in English: that page is where they are read, and everything else on
+it is.
 
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
 ## 0.1.59 (2026-09-07)
 
-- O DMG do macOS sobrevive a um hdiutil ocupado
+- The macOS DMG survives a busy hdiutil
 
 ## 0.1.58 (2026-09-06)
 
-- A tela de login pede o endereço do servidor e testa a conexão
+- The login screen asks for the server address and tests the connection
 
 ## 0.1.57 (2026-09-06)
 
-- O Settings volta a tela de login, sem sair da tela de escolher a sala
+- Settings is back on the login screen, and stays on the room-choosing screen
 
 ## 0.1.56 (2026-09-06)
 
-- O instalador do Windows ganha a licenca MIT e uma pagina de novidades
+- The Windows installer gains the MIT licence and a What's new page
 
 ## 0.1.55 (2026-09-06)
 
-- Move o Settings da tela de login para a tela de escolher a sala
+- Settings moves from the login screen to the room-choosing screen
 
 ## 0.1.54 (2026-09-04)
 
-- Sinaliza a sessao encerrada em vez de deixar o cliente na sala com "senha errada"
+- The ended session is announced instead of leaving the client in the room with "wrong password"
 
 ## 0.1.53 (2026-09-03)
 
-- O Admin entra na sala e a barra de status para de cortar no meio da palavra
+- Admin joins the room screen, and the status bar stops cutting words in half
 
 ## 0.1.52 (2026-09-03)
 
-- Etapas 6 a 12 do plano de áudio, numa branch só
+- Steps 6 to 12 of the audio plan, in one branch
 
 ## 0.1.51 (2026-09-03)
 
-- O nível da supressão de ruído vira uma escolha
+- The noise suppression level becomes a choice
 
 ## 0.1.50 (2026-09-03)
 
-- O controle de ganho passa a ser o de segunda geração
+- The gain control is now the second-generation one
 
 ## 0.1.49 (2026-09-03)
 
-- O áudio perdido passa a ser pedido de novo, nos dois trechos
+- Lost audio is asked for again, on both legs
 
 ## 0.1.48 (2026-09-03)
 
-- O áudio passa a viajar com redundância
+- Audio now travels with redundancy
 
 ## 0.1.47 (2026-09-03)
 
-- O .dmg do macOS passa a sair com áudio e vídeo
+- The macOS .dmg now ships with audio and video
 
 ## 0.1.46 (2026-09-03)
 
-- A tela para de congelar quando quem compartilha sai da sala
+- The screen stops freezing when whoever is sharing leaves the room
 
 ## 0.1.45 (2026-09-03)
 
-- O dbadmin passa a avisar e a encerrar a sessão de quem está conectado
+- dbadmin now warns and ends the session of whoever is connected
 
 ## 0.1.44 (2026-09-02)
 
-- Sair da sala zera o mudo, e a tela compartilha um monitor escolhido
+- Leaving the room resets mute, and the share picks a chosen monitor
 
 ## 0.1.43 (2026-09-02)
 
-- Avisa no rodape quando uma versao nova foi publicada
+- The footer says when a new version has been published
 
 ## 0.1.42 (2026-09-02)
 
-- Instalador do servidor para Linux e o tarball do servidor na release
+- A Linux server installer, and the server tarball in the release
 
 ## 0.1.41 (2026-09-02)
 
-- Capacidade por sala, ícones de estado e servidor offline na entrada
+- Room capacity, status icons and an offline server at sign-in
 
 ## 0.1.40 (2026-09-02)
 
-- O primeiro da sala passa a ter microfone no Windows
+- The first person in a room has a microphone on Windows
 
 ## 0.1.39 (2026-09-02)
 
-- Mensagem direta do administrador com OK, e presença com IP no dbadmin
+- Direct message from the administrator with an OK button, and presence with IP in dbadmin
 
 ## 0.1.38 (2026-09-02)
 
-- O que a auditoria E2E no macOS encontrou: cinco consertos
+- What the end-to-end audit on macOS found: five fixes
 
 ## 0.1.37 (2026-08-28)
 
-- O foco invisível, o crash ao sair e o nome que virava id
+- The invisible focus, the crash on exit and the name that turned into an id
 
 ## 0.1.36 (2026-08-27)
 
-- Os logs passam a dizer o nome de quem, e o nome da sala
+- The logs now say who, by name, and which room
 
 ## 0.1.35 (2026-08-27)
 
-- O capitulo do release passa a dizer o que a tag realmente produz
-- O teste do SFU desiste quando a conexao morre, em vez de esperar dez segundos
+- The release chapter now says what the tag really produces
+- The SFU test gives up when the connection dies, instead of waiting ten seconds
 
 ## 0.1.34 (2026-08-27)
 
-- A documentacao vira um livro de quinze capitulos
+- The documentation becomes a book of fifteen chapters
 
 ## 0.1.33 (2026-08-27)
 
-- O rodape passa a dizer qual build esta rodando
+- The footer now says which build is running
 
 ## 0.1.32 (2026-08-26)
 
-- As salas ganham nome, e quem nao der um fica com o proprio codigo
+- Rooms get names, and one that is not given one keeps its own code
 
 ## 0.1.31 (2026-08-26)
 
-- A senha do usuario comum, trocada por ele mesmo
+- An ordinary user's password, changed by that user
 
 ## 0.1.30 (2026-08-26)
 
-- Uma restricao escrita fora do servidor passa a valer na sessao que ja esta aberta
+- A restriction written outside the server now applies to a session that is already open
 
 ## 0.1.29 (2026-08-26)
 
-- Links clicaveis no chat, e um aviso quando alguem entra ou sai da sala
+- Clickable links in the chat, and an alert when somebody joins or leaves the room
 
 ## 0.1.28 (2026-08-26)
 
-- A tela que troca de dono e o microfone que volta mudo depois de uma reconexao
+- The screen that changes hands, and the microphone that came back muted after a reconnection
 
 ## 0.1.27 (2026-08-26)
 
-- O som da tela ganha um volume, e a supressao de ruido ganha uma caixa
+- The screen sound gets a volume, and noise suppression gets a checkbox
 
 ## 0.1.26 (2026-08-25)
 
-- O dbadmin ganha uma tela de salas, e uma mudança no Go para de rodar o CI inteiro
+- dbadmin gets a rooms screen, and a Go change stops running the whole CI
 
 ## 0.1.25 (2026-08-25)
 
-- Ver as salas não é administração, e o usuário comum tem direito a uma
+- Seeing the rooms is not administration, and an ordinary user is entitled to one
 
 ## 0.1.24 (2026-08-25)
 
-- Toda sala agora vai para o banco e sobrevive a quem estava nela
+- Every room now goes to the database and outlives whoever was in it
 
 ## 0.1.23 (2026-08-25)
 
-- O estado da conexão do SFU só existia em debug, que release não compila
+- The SFU connection state only existed in debug, which release does not compile
 
 ## 0.1.22 (2026-08-25)
 
-- O IP do cliente nos logs de conexão do servidor
+- The client's IP in the server's connection logs
 
 ## 0.1.21 (2026-08-25)
 
-- Trocar de servidor sem fechar o programa, e o status de rede de volta na tela principal
+- Switching servers without closing the program, and the network status back on the main screen
 
 ## 0.1.20 (2026-08-24)
 
-- Nao imprimir a senha do banco quando a conexao falha
+- Do not print the database password when the connection fails
 
 ## 0.1.19 (2026-08-24)
 
-- O gofmt acusava os dezessete arquivos do dbadmin, e nenhum estava torto
+- gofmt flagged all seventeen dbadmin files, and none of them was wrong
 
 ## 0.1.18 (2026-08-24)
 
-- Ouvir o audio da tela compartilhada
+- Hearing the shared screen's audio
 
 ## 0.1.17 (2026-08-24)
 
-- O teto do bitrate nao acompanhava a resolucao, e 1080p60 saia pela metade
+- The bitrate ceiling did not follow the resolution, and 1080p60 went out at half
 
 ## 0.1.16 (2026-08-24)
 
-- Validacao em Linux e macOS, e os cinco avisos que o clang-tidy achou
+- Validation on Linux and macOS, and the five warnings clang-tidy found
 
 ## 0.1.15 (2026-08-24)
 
-- Salvar no settings, metricas em grafico, e a renderizacao mais fluida
+- Save in Settings, metrics as charts, and smoother rendering
 
 ## 0.1.14 (2026-08-24)
 
-- Dois defeitos achados testando a release v0.1.13
+- Two defects found testing release v0.1.13
 
 ## 0.1.13 (2026-08-24)
 
-- Qualidade do compartilhamento de tela e codificacao por hardware no Windows
+- Screen share quality and hardware encoding on Windows
 
 ## 0.1.12 (2026-08-23)
 
-- O slider de volume desabilitado pintava a laje inteira
+- The disabled volume slider painted the whole slab
 
 ## 0.1.11 (2026-08-23)
 
-- O teste do dbadmin esperava a frase e olhava a tela atras dela
+- The dbadmin test waited for the sentence and looked at the screen behind it
 
 ## 0.1.10 (2026-08-23)
 
-- Uma interface com cantos, e um config.ini que nasce pronto e guarda o que voce escolhe
+- An interface with corners, and a config.ini that is born ready and keeps what you choose
 
 ## 0.1.9 (2026-08-23)
 
-- Moderação de sala: o que um administrador tira de uma conta, e não só de uma visita
+- Room moderation: what an administrator takes from an account, and not only from a visit
 
 ## 0.1.8 (2026-08-22)
 
-- Chat da sala, com a conversa vivendo exatamente enquanto a sala
+- Room chat, with the conversation living exactly as long as the room
 
 ## 0.1.7 (2026-08-22)
 
-- O glob que so casava na maquina de quem escreveu
+- The glob that only matched on the machine of whoever wrote it
 
 ## 0.1.6 (2026-08-22)
 
-- A chamada negociava tudo e nao carregava um pacote: duas copias da libsrtp num binario so
+- The call negotiated everything and carried no packet: two copies of libsrtp in one binary
 
 ## 0.1.5 (2026-08-22)
 
-- macOS: fazer a camada de midia linkar, e parar de publicar um bundle quebrado
+- macOS: make the media layer link, and stop publishing a broken bundle
 
 ## 0.1.4 (2026-08-21)
 
-- A MSI do Windows nunca teve media layer dentro, e ninguém tinha por onde saber
+- The Windows MSI never had the media layer inside, and there was no way to know
 
 ## 0.1.3 (2026-08-21)
 
-- A track existia e o teste mandava áudio nela; existir e estar aberta são momentos diferentes
+- The track existed and the test sent audio into it; existing and being open are different moments
 
 ## 0.1.2 (2026-08-21)
 
-- Um atalho não carrega argumento, e era só assim que se dizia onde estava o servidor
+- A shortcut carries no argument, and that was the only way to say where the server was
 
 ## 0.1.1 (2026-08-21)
 
-- As contas e a auditoria sem depender do servidor de pé
-- A primeira build do Windows, e os dois defeitos que ela achou
-- A assinatura cobria dois arquivos, e sete dos que faltavam são o motivo do bloqueio
-- O MSI instala: correção do relato do #5
-- O spike da libwebrtc roda no Windows, e o conflito de libc++ não existe lá
-- A camada de mídia roda no Windows, sobre uma build do fonte
-- Um caminho curto até um servidor de pé e dois clientes numa sala
-- O cancelador de eco não estava desligado, e o patch não falhava como eu disse
-- A tabela dizia qual flag desliga o cliente, mas não como subir só o servidor
-- O SFU pedia uma porta efêmera por participante, e o firewall pagava a conta
-- Subir a versão era algo que alguém tinha que lembrar, e agora é o merge que lembra
+- Accounts and the audit log without depending on a running server
+- The first Windows build, and the two defects it found
+- The signature covered two files, and seven of the missing ones are why it was blocked
+- The MSI installs: fix for the report in #5
+- The libwebrtc spike runs on Windows, and the libc++ conflict does not exist there
+- The media layer runs on Windows, on a build from source
+- A short path to a running server and two clients in a room
+- The echo canceller was not off, and the patch did not fail the way I said
+- The table said which flag turns the client off, but not how to bring up the server alone
+- The SFU asked for an ephemeral port per participant, and the firewall paid for it
+- Raising the version was something somebody had to remember, and now the merge remembers
 
 ## 0.1.0 (2026-08-20)
 
-- Primeira versão publicada por tag; o que veio antes está no histórico do git.
+- First version published by tag; what came before is in the git history.

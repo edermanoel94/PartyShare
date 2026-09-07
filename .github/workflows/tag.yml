@@ -250,8 +250,9 @@ jobs:
           # generated release notes list, so the file and the release page
           # agree. The Windows installer shows the file on its "What's new"
           # page, which is why it has to be written before the tag and not
-          # after. A push that reached master without a pull request falls
-          # back to its commit subject.
+          # after, and why a title is written in English: it is read on a page
+          # where everything else is. A push that reached master without a
+          # pull request falls back to its commit subject.
           titles="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
             --jq '.[].title' 2>/dev/null || true)"
           if [[ -z "$titles" ]]; then

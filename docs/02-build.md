@@ -66,6 +66,59 @@ The `windows-*` presets name `cl` as the compiler, so configure, build and test
 all have to run from a Developer Command Prompt or a shell that has sourced
 `vcvars64.bat`.
 
+### CLion
+
+CLion reads the presets above and offers each one as a profile, but the
+`windows-*` ones say nothing about where vcpkg, Qt and libwebrtc are on the
+machine: those paths are not the repository's to know. Put them in a
+`CMakeUserPresets.json` beside this file - it is ignored by git and implicitly
+includes `CMakePresets.json` - with one preset per configuration you want in
+the IDE:
+
+```json
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "clion-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.7.3/msvc2019_64"
+      }
+    },
+    {
+      "name": "clion-debug",
+      "inherits": ["windows-debug", "clion-base"],
+      "cacheVariables": { "DV_BUILD_CLIENT_MEDIA": "OFF" }
+    },
+    {
+      "name": "clion-release",
+      "inherits": ["windows-release", "clion-base"],
+      "cacheVariables": {
+        "DV_BUILD_CLIENT_MEDIA": "ON",
+        "DV_WEBRTC_ROOT": "C:/Users/you/.cache/partyshare/webrtc/dist"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "clion-debug", "configurePreset": "clion-debug" },
+    { "name": "clion-release", "configurePreset": "clion-release" }
+  ]
+}
+```
+
+Enable them under Settings, Build, CMake, and pick the Visual Studio toolchain:
+CLion sources `vcvars64.bat` for it, which is what the `cl` in the preset needs.
+The media layer is off in the Debug preset on purpose. The published libwebrtc
+is a release build against the dynamic CRT, and a Debug tree links against the
+debug CRT, so the two cannot be joined; the Debug profile is for the interface,
+the signaling and the server, and the Release profile (`RelWithDebInfo`, so it
+still steps through source) is the one that makes calls. A
+`VCPKG_INSTALLED_DIR` pointing at a tree another configuration already filled
+saves the first configure the vcpkg install.
+
 ## Options
 
 | Option | Default | Effect |

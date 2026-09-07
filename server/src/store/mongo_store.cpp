@@ -891,6 +891,26 @@ class MongoSessionStore final : public SessionStore {
     return open;
   }
 
+  [[nodiscard]] std::vector<SessionRecord> list(int limit) const override {
+    std::vector<SessionRecord> sessions;
+    try {
+      auto client = session_.pool.acquire();
+      // The first of the two indexes `ensure_indexes` makes, read in its own
+      // order: open rows first, because their `ended_at` is zero, and the one
+      // heard from most recently first within each group.
+      auto options = mongocxx::options::find{}
+                         .sort(make_document(kvp("ended_at", 1), kvp("last_seen_at", -1)))
+                         .limit(clamp_session_limit(limit));
+      auto cursor = (*client)[session_.database]["sessions"].find(make_document().view(), options);
+      for (const auto& document : cursor) {
+        sessions.push_back(session_from(document));
+      }
+    } catch (const mongocxx::exception& error) {
+      DV_LOG_ERROR("Could not read the sessions: {}", error.what());
+    }
+    return sessions;
+  }
+
  private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   Session& session_;

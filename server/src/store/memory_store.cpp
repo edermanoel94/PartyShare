@@ -310,6 +310,27 @@ std::vector<SessionRecord> MemorySessionStore::list_open() const {
   return open;
 }
 
+std::vector<SessionRecord> MemorySessionStore::list(int limit) const {
+  const auto wanted = static_cast<std::size_t>(clamp_session_limit(limit));
+
+  // Sorted rather than walked backwards, because the order asked for is not
+  // the order the rows were written in: an open row from Monday goes before
+  // an ended row from a minute ago. Stable, so two rows heard from in the
+  // same second keep the order they arrived in, which is what the Mongo
+  // implementation's index gives them.
+  std::vector<SessionRecord> sorted = sessions_;
+  std::ranges::stable_sort(sorted, [](const SessionRecord& a, const SessionRecord& b) {
+    if (a.open() != b.open()) {
+      return a.open();
+    }
+    return a.last_seen_at > b.last_seen_at;
+  });
+  if (sorted.size() > wanted) {
+    sorted.resize(wanted);
+  }
+  return sorted;
+}
+
 // --- audit -------------------------------------------------------------------
 
 std::optional<Error> MemoryAuditLog::append(models::AuditEntry entry) {

@@ -3,7 +3,6 @@
 #include <array>
 
 #include <QApplication>
-#include <QFont>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QString>
@@ -415,11 +414,11 @@ QTableWidget::item:selected, QTableView::item:selected {
 
 /* --- tabs ---------------------------------------------------------------- */
 
-QTabWidget::pane {
-  background: @{surface};
-  border: 1px solid @{border};
-  border-radius: @{card_radius}px;
-  top: -1px;
+/* A bare QTabBar on a line with other things, not a QTabWidget: the pages sit
+   under it with no frame, so there is no pane to draw and no base line under
+   the tabs. Each tab is a chip, and the selected one wears the accent wash. */
+QTabBar {
+  background: transparent;
 }
 QTabBar::tab {
   background: transparent;
@@ -591,22 +590,24 @@ QPushButton[emoji="cell"]:pressed {
 
 /* --- the administrator's console ----------------------------------------- */
 
-/* The filter over the account table: a prompt on a line, not a search box.
-   The window colour rather than the surface, so it reads as the console's
-   input rather than as one more field. */
+/* The filter over the account table. The window colour rather than the
+   surface, so it reads as the console's input line rather than as one more
+   field; the padding is every other field's, so it stands as tall as the
+   button beside it. */
 QLineEdit[console="true"] {
   background: @{window};
-  padding: 6px 10px;
 }
 QLineEdit[console="true"]:focus {
   border-color: @{accent};
 }
 
-/* The pane beside the table, a card of its own. */
+/* The pane beside the table. The table's radius and not a card's: the two
+   stand side by side at the same height, and corners that disagree between
+   neighbours are the first thing the eye lands on. */
 QFrame#accountPane {
   background: @{surface};
   border: 1px solid @{border};
-  border-radius: @{card_radius}px;
+  border-radius: @{control_radius}px;
 }
 /* The rules between its sections. */
 QFrame#rule {
@@ -781,16 +782,6 @@ const Colors& colors() {
 
 QString stylesheet() {
   return filled_stylesheet(current());
-}
-
-QFont console_font(qreal point_size) {
-  QFont mono;
-  mono.setFamilies({QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"),
-                    QStringLiteral("SF Mono"), QStringLiteral("Menlo"),
-                    QStringLiteral("DejaVu Sans Mono"), QStringLiteral("Liberation Mono")});
-  mono.setStyleHint(QFont::Monospace);
-  mono.setPointSizeF(point_size);
-  return mono;
 }
 
 void apply(QApplication& application) {

@@ -131,6 +131,31 @@ class SessionStore {
   /// written to is a store whose two implementations cannot be shown to agree
   /// about what they wrote.
   [[nodiscard]] virtual std::vector<SessionRecord> list_open() const = 0;
+
+  /// The newest `limit` sessions, open and ended alike: the open ones first,
+  /// and within each group the one heard from most recently first.
+  ///
+  /// What the administrator's panel reads, and the one question about this
+  /// collection the server answers for somebody else. The order is what makes
+  /// a page of a few hundred enough: the top of it answers "who is here", and
+  /// the rest answers "which address was Bruno on last Tuesday" for as far
+  /// back as the page reaches. `limit` is clamped to the range below.
+  [[nodiscard]] virtual std::vector<SessionRecord> list(int limit) const = 0;
+
+  /// How many sessions `list` returns when the caller asks for no particular
+  /// number, and the ceiling it clamps any request to. The same ladder
+  /// tools/dbadmin climbs, for the same reason: the first number answers who
+  /// is here, and the last one is as much history as a person scrolls.
+  static constexpr int kDefaultLimit = 200;
+  static constexpr int kMaxLimit = 2000;
 };
+
+/// Clamps a requested limit into the range the store allows.
+[[nodiscard]] constexpr int clamp_session_limit(int requested) noexcept {
+  if (requested <= 0) {
+    return SessionStore::kDefaultLimit;
+  }
+  return requested > SessionStore::kMaxLimit ? SessionStore::kMaxLimit : requested;
+}
 
 }  // namespace dv::server::store

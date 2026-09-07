@@ -249,6 +249,8 @@ class CallSession {
     std::function<void(std::vector<protocol::UserSummary>)> on_user_list;
     std::function<void(std::vector<protocol::RoomSummary>)> on_room_list;
     std::function<void(std::vector<models::AuditEntry>)> on_audit_list;
+    /// The answer to list_sessions, and to end_session.
+    std::function<void(std::vector<protocol::SessionSummary>)> on_session_list;
 
     /// This session was removed from its room by an administrator, with
     /// whatever reason they gave. The room has already been left by the time
@@ -620,6 +622,15 @@ class CallSession {
   [[nodiscard]] Result<std::monostate> delete_room(const std::string& room_id);
 
   [[nodiscard]] Result<std::monostate> list_audit(int limit = 0, const std::string& actor_id = {});
+
+  /// Who has been connected and from where, open sessions first. See
+  /// protocol::ListSessions for the order and the cap.
+  [[nodiscard]] Result<std::monostate> list_sessions(int limit = 0);
+  /// Signs `user_id` out without touching the account: they may sign in
+  /// again at once. `reason` is shown to them and to their room, and empty
+  /// asks for the server's own sentence. Answered with `on_session_list`.
+  [[nodiscard]] Result<std::monostate> end_session(const std::string& user_id,
+                                                   const std::string& reason);
 
   [[nodiscard]] State state() const;
   [[nodiscard]] models::User local_user() const;

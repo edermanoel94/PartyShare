@@ -94,6 +94,12 @@ enum class MessageType : std::uint8_t {
   DeleteRoom,
   ListAudit,
   AuditList,
+  // Who has been connected and from where, and signing one of them out,
+  // section 4.7 of docs/06-protocol.md. The same screen tools/dbadmin has,
+  // reached through the server instead of through the database.
+  ListSessions,
+  SessionList,
+  EndSession,
 };
 
 // --- client to server --------------------------------------------------------
@@ -618,6 +624,62 @@ struct AuditList {
   friend bool operator==(const AuditList&, const AuditList&) = default;
 };
 
+/// One account's stay on the server, as the server wrote it down: the account,
+/// where the connection came from, when it arrived, when it was last heard
+/// from, and when it left.
+///
+/// The account is an identifier and not a name, like every other reference in
+/// this protocol, and a panel resolves it against the `user_list` it already
+/// holds. A session whose account has since been deleted resolves to nothing,
+/// and is shown as the identifier rather than dropped: a row that names nobody
+/// is still a row that says somebody was here.
+struct SessionSummary {
+  std::string id;
+  std::string user_id;
+  /// As the transport reported it, and empty when it did not.
+  std::string ip;
+  /// Seconds since the Unix epoch, UTC, all three.
+  std::int64_t connected_at = 0;
+  std::int64_t last_seen_at = 0;
+  /// Zero while the session is open.
+  std::int64_t ended_at = 0;
+
+  friend bool operator==(const SessionSummary&, const SessionSummary&) = default;
+};
+
+/// Asks for the sessions the server has written down, the open ones first and
+/// then the ended ones, newest first within each.
+struct ListSessions {
+  /// Capped by the server. Zero or absent asks for the default.
+  int limit = 0;
+
+  friend bool operator==(const ListSessions&, const ListSessions&) = default;
+};
+
+/// The answer to `list_sessions`, and to `end_session`.
+struct SessionList {
+  std::vector<SessionSummary> sessions;
+
+  friend bool operator==(const SessionList&, const SessionList&) = default;
+};
+
+/// Signs one account out, and touches nothing else about it: out of its room,
+/// tokens revoked, the room told, and the person free to sign in again at once.
+/// What a ban does without the ban, and the same thing tools/dbadmin asks for
+/// by marking the account.
+///
+/// Names the account and not the session, because an account has at most one
+/// connection here - a second login takes the first one's place - so the two
+/// are the same thing, and the account is what the panel has in hand.
+struct EndSession {
+  std::string user_id;
+  /// Shown to the person and to the room. Empty asks for the server's own
+  /// sentence.
+  std::string reason;
+
+  friend bool operator==(const EndSession&, const EndSession&) = default;
+};
+
 // --- transport level ---------------------------------------------------------
 
 /// Named ErrorMessage to avoid colliding with dv::Error, which represents a
@@ -648,7 +710,7 @@ using Message =
                  ChatMessage, ListChat, ChatHistory, SendNotice, Notice, AcknowledgeNotice,
                  ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute, RestrictUser,
                  UserRestricted, ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms,
-                 RoomList, DeleteRoom, ListAudit, AuditList>;
+                 RoomList, DeleteRoom, ListAudit, AuditList, ListSessions, SessionList, EndSession>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

@@ -26,8 +26,9 @@
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QStyle>
-#include <QTabWidget>
+#include <QTabBar>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -53,58 +54,97 @@ constexpr int kCreatedColumn = 5;
 /// door has the rest.
 constexpr int kAuditTail = 5;
 
+/// The columns of the session table, in order. The same five tools/dbadmin
+/// shows, in its order: the account and whether they are here are the whole
+/// question, the address is the other half of what the screen is for, and of
+/// the two times the one that decides whether the state is true comes first.
+constexpr int kSessionAccountColumn = 0;
+constexpr int kSessionStateColumn = 1;
+constexpr int kSessionAddressColumn = 2;
+constexpr int kSessionSeenColumn = 3;
+constexpr int kSessionConnectedColumn = 4;
+
+/// Carried on a session row's first cell beside kIdRole, which holds the
+/// session: the account it belongs to, which is what ending it names, and the
+/// state it was drawn in, which is what decides whether it can be.
+constexpr int kSessionUserRole = Qt::UserRole + 4;
+constexpr int kSessionStateRole = Qt::UserRole + 5;
+
+/// A time the server never wrote, or an address the transport did not give,
+/// as a dash rather than as a blank: a blank reads as a cell that failed.
+[[nodiscard]] QString or_dash(const QString& text) {
+  return text.isEmpty() ? QStringLiteral("-") : text;
+}
+
 }  // namespace
 
 AdminPanel::AdminPanel(client::app::CallSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
   auto* outer = new QVBoxLayout(this);
+  outer->setSpacing(10);
 
+  // One line: the title, the tabs and the way out, on one baseline and
+  // against the same two margins as everything under them. The tabs used to
+  // sit on a line of their own over a framed pane, with Back a line above
+  // and the page's own buttons a frame's width inside it: three rows and
+  // three right edges, none of which agreed.
   auto* header = new QHBoxLayout();
+  header->setSpacing(12);
   auto* title = new QLabel(QStringLiteral("Admin"), this);
   QFont bold = title->font();
   bold.setBold(true);
   title->setFont(bold);
+  tabs_ = new QTabBar(this);
+  // A bare tab bar stretches its tabs across whatever width it is given, and
+  // draws a base line under them for a pane that is not there. These are
+  // chips, sized to their word.
+  tabs_->setExpanding(false);
+  tabs_->setDrawBase(false);
+  tabs_->addTab(QStringLiteral("Users"));
+  tabs_->addTab(QStringLiteral("Rooms"));
+  tabs_->addTab(QStringLiteral("Sessions"));
+  tabs_->addTab(QStringLiteral("Audit"));
   auto* back = new QPushButton(QStringLiteral("Back"), this);
   header->addWidget(title);
+  header->addWidget(tabs_);
   header->addStretch();
   header->addWidget(back);
   outer->addLayout(header);
 
-  tabs_ = new QTabWidget(this);
-  tabs_->addTab(build_users_tab(), QStringLiteral("Users"));
-  tabs_->addTab(build_rooms_tab(), QStringLiteral("Rooms"));
-  tabs_->addTab(build_audit_tab(), QStringLiteral("Audit"));
-  outer->addWidget(tabs_, 1);
+  // The pages, in the order of the tabs. No frame around them: the tables and
+  // the pane are the cards, and a card around cards was a second set of
+  // corners.
+  pages_ = new QStackedWidget(this);
+  pages_->addWidget(build_users_tab());
+  pages_->addWidget(build_rooms_tab());
+  pages_->addWidget(build_sessions_tab());
+  pages_->addWidget(build_audit_tab());
+  outer->addWidget(pages_, 1);
 
   connect(back, &QPushButton::clicked, this, &AdminPanel::closed);
-  connect(tabs_, &QTabWidget::currentChanged, this, &AdminPanel::on_tab_changed);
+  // Connected once the pages exist: a tab bar announces its first tab as it
+  // is added, and the slot turns a page that would not be there yet.
+  connect(tabs_, &QTabBar::currentChanged, this, &AdminPanel::on_tab_changed);
 }
 
 QWidget* AdminPanel::build_users_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
   column->setSpacing(8);
-  // The console's face at the size the rest of the interface is set in.
-  const QFont mono = theme::console_font(page->font().pointSizeF());
 
   // The filter line, with the one button that is about no account in
-  // particular beside it.
+  // particular beside it, flush with Back on the line above.
   auto* top = new QHBoxLayout();
   top->setSpacing(8);
-  auto* prompt = new QLabel(QStringLiteral(">"), page);
-  prompt->setProperty("accent", true);
-  prompt->setFont(mono);
   filter_ = new QLineEdit(page);
   filter_->setProperty("console", true);
-  filter_->setFont(mono);
-  filter_->setPlaceholderText(QStringLiteral("filter by username, name, role or restriction"));
+  filter_->setPlaceholderText(QStringLiteral("Filter by username, name, role or restriction"));
   filter_->setClearButtonEnabled(true);
   filter_count_ = new QLabel(page);
   filter_count_->setProperty("hint", true);
-  filter_count_->setFont(mono);
   create_user_ = new QPushButton(QStringLiteral("New account"), page);
   create_user_->setProperty("accent", true);
-  top->addWidget(prompt);
   top->addWidget(filter_, 1);
   top->addWidget(filter_count_);
   top->addWidget(create_user_);
@@ -116,7 +156,6 @@ QWidget* AdminPanel::build_users_tab() {
       make_table({QString(), QStringLiteral("User"), QStringLiteral("Name"), QStringLiteral("Role"),
                   QStringLiteral("Restrictions"), QStringLiteral("Created")},
                  page);
-  users_->setFont(mono);
   users_->setItemDelegate(new AccountDelegate(users_));
   // No grid: the rows are read across, and a lattice between cells that hold
   // a dot and a chip is lines for their own sake.
@@ -138,11 +177,10 @@ QWidget* AdminPanel::build_users_tab() {
 
   // What the keys do, written where a terminal writes it. They work from the
   // table, which is where the arrows already do.
-  auto* keys = new QLabel(QStringLiteral("/ filter   ↑↓ move   ⏎ open   m message   r restrict   "
-                                         "b ban   p password   d delete   n new account"),
+  auto* keys = new QLabel(QStringLiteral("/ filter · ↑↓ move · ⏎ open · m message · r restrict · "
+                                         "b ban · p password · d delete · n new account"),
                           page);
   keys->setProperty("hint", true);
-  keys->setFont(mono);
   column->addWidget(keys);
 
   connect(create_user_, &QPushButton::clicked, this, &AdminPanel::on_create_user);
@@ -165,6 +203,8 @@ QWidget* AdminPanel::build_users_tab() {
 QWidget* AdminPanel::build_rooms_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(8);
 
   // No "Persistent" column: it read "yes" on every row from the moment every
   // room started outliving its participants, and a column with one value in it
@@ -193,9 +233,55 @@ QWidget* AdminPanel::build_rooms_tab() {
   return page;
 }
 
+QWidget* AdminPanel::build_sessions_tab() {
+  auto* page = new QWidget(this);
+  auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(8);
+
+  sessions_ =
+      make_table({QStringLiteral("Account"), QStringLiteral("State"), QStringLiteral("Address"),
+                  QStringLiteral("Last seen"), QStringLiteral("Connected")},
+                 page);
+  sessions_->setShowGrid(false);
+  // The slack goes to the address, which is the one column whose width is
+  // not known in advance: an IPv6 address is as long as it is.
+  QHeaderView* columns = sessions_->horizontalHeader();
+  columns->setStretchLastSection(false);
+  columns->setSectionResizeMode(QHeaderView::ResizeToContents);
+  columns->setSectionResizeMode(kSessionAddressColumn, QHeaderView::Stretch);
+  column->addWidget(sessions_, 1);
+
+  // How many are here, and the one thing this screen can do about a row.
+  auto* controls = new QHBoxLayout();
+  sessions_count_ = new QLabel(page);
+  sessions_count_->setProperty("hint", true);
+  end_session_ = new QPushButton(QStringLiteral("End session..."), page);
+  end_session_->setProperty("danger", true);
+  end_session_->setToolTip(
+      QStringLiteral("Signs them out at once. Nothing is taken from the account, and they may "
+                     "sign in again straight away."));
+  controls->addWidget(sessions_count_);
+  controls->addStretch();
+  controls->addWidget(end_session_);
+  column->addLayout(controls);
+
+  auto* keys = new QLabel(QStringLiteral("↑↓ move · k end session"), page);
+  keys->setProperty("hint", true);
+  column->addWidget(keys);
+
+  connect(end_session_, &QPushButton::clicked, this, &AdminPanel::on_end_session);
+  sessions_->installEventFilter(this);
+
+  fill_sessions();
+  return page;
+}
+
 QWidget* AdminPanel::build_audit_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(8);
 
   audit_ = make_table({QStringLiteral("When"), QStringLiteral("Who"), QStringLiteral("Action"),
                        QStringLiteral("Target"), QStringLiteral("Room"), QStringLiteral("Detail")},
@@ -224,7 +310,10 @@ void AdminPanel::refresh() {
   if (!send(session_.list_rooms())) {
     return;
   }
-  (void)send(session_.list_audit());
+  if (!send(session_.list_audit())) {
+    return;
+  }
+  (void)send(session_.list_sessions());
 }
 
 bool AdminPanel::eventFilter(QObject* watched, QEvent* event) {
@@ -242,9 +331,19 @@ bool AdminPanel::eventFilter(QObject* watched, QEvent* event) {
     return true;
   }
 
-  // Bare keys only. Ctrl+C in the table is still a copy, and a modifier is
-  // how somebody types a letter that is not a command.
-  if (watched != users_ || (key->modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier) {
+  // Bare keys only. Ctrl+C in a table is still a copy, and a modifier is how
+  // somebody types a letter that is not a command.
+  if ((key->modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier) {
+    return QWidget::eventFilter(watched, event);
+  }
+  if (watched == sessions_) {
+    if (key->key() == Qt::Key_K) {
+      on_end_session();
+      return true;
+    }
+    return QWidget::eventFilter(watched, event);
+  }
+  if (watched != users_) {
     return QWidget::eventFilter(watched, event);
   }
   switch (key->key()) {
@@ -277,10 +376,11 @@ bool AdminPanel::eventFilter(QObject* watched, QEvent* event) {
   }
 }
 
-void AdminPanel::on_tab_changed(int /*index*/) {
+void AdminPanel::on_tab_changed(int index) {
+  pages_->setCurrentIndex(index);
   // The panel stays open while other people are doing things, so what it shows
   // goes stale on its own. Asking again when a tab is brought forward costs
-  // one message and is the moment somebody is about to read it.
+  // a few messages and is the moment somebody is about to read it.
   refresh();
 }
 
@@ -335,6 +435,9 @@ void AdminPanel::apply_users(const QStringList& rows) {
   fill_accounts(rows);
   on_filter_changed(filter_->text());
   refresh_pane();
+  // The session table names accounts and decides who is online from this
+  // list, so it is drawn again with what just arrived.
+  fill_sessions();
 }
 
 void AdminPanel::fill_accounts(const QStringList& rows) {
@@ -463,10 +566,10 @@ QStringList AdminPanel::audit_tail(const QString& user_id) const {
     if (fields.value(4) != user_id) {
       continue;
     }
-    // "09-07 15:07  bruno  restrict user": the day and the minute, who, and
+    // "09-07 15:07 · bruno · restrict user": the day and the minute, who, and
     // the action with its underscores taken out. The detail is a sentence
     // and the Audit tab has it.
-    lines.push_back(QStringLiteral("%1  %2  %3")
+    lines.push_back(QStringLiteral("%1 · %2 · %3")
                         .arg(fields.value(1).mid(5, 11), fields.value(2),
                              fields.value(3).replace(QLatin1Char('_'), QLatin1Char(' '))));
     if (lines.size() == kAuditTail) {
@@ -487,6 +590,163 @@ void AdminPanel::apply_audit(const QStringList& rows) {
   if (const QString user_id = pane_->account_id(); !user_id.isEmpty()) {
     pane_->show_audit(audit_tail(user_id));
   }
+}
+
+void AdminPanel::apply_sessions(const QStringList& rows) {
+  // The rows are the ones MainWindow's on_session_list builds: session id,
+  // account id, address, and the three times as text - connected, last seen,
+  // ended - with a time the server never wrote as an empty field.
+  session_rows_ = rows;
+  fill_sessions();
+}
+
+void AdminPanel::fill_sessions() {
+  // Restored by identity, for the reason fill_accounts does: the rows move as
+  // sessions open and close, and `k` lands on whatever is selected.
+  const QString selected = selected_id(sessions_);
+  const theme::Colors& colours = theme::colors();
+  int online = 0;
+
+  sessions_->setRowCount(static_cast<int>(session_rows_.size()));
+  for (int row = 0; row < session_rows_.size(); ++row) {
+    const QStringList fields = session_rows_.at(row).split(QLatin1Char('\t'));
+    const QString id = fields.value(0);
+    const QString user_id = fields.value(1);
+    const SessionState state = session_state(fields);
+    online += state == SessionState::Online ? 1 : 0;
+
+    auto* account = new QTableWidgetItem(session_account_label(user_id));
+    account->setData(kIdRole, id);
+    account->setData(kSessionUserRole, user_id);
+    account->setData(kSessionStateRole, static_cast<int>(state));
+    // The identifier in full, which is the one thing the column cannot show
+    // and the thing that matches a row in the server's log.
+    account->setToolTip(user_id);
+
+    // The one cell somebody reads this table for, in a colour: the exception
+    // is what should catch the eye, and here the exception is somebody being
+    // here.
+    auto* status = new QTableWidgetItem();
+    switch (state) {
+      case SessionState::Online:
+        status->setText(QStringLiteral("online"));
+        status->setForeground(QBrush(colours.success));
+        break;
+      case SessionState::Stale:
+        status->setText(QStringLiteral("stale"));
+        status->setForeground(QBrush(colours.warn));
+        status->setToolTip(
+            QStringLiteral("Open, but the server is not holding it: what a server killed rather "
+                           "than stopped leaves behind. It is closed the next time one starts."));
+        break;
+      case SessionState::Ended:
+        status->setText(QStringLiteral("ended"));
+        status->setForeground(QBrush(colours.muted));
+        break;
+    }
+
+    auto* address = new QTableWidgetItem(or_dash(fields.value(2)));
+    auto* seen = new QTableWidgetItem(or_dash(fields.value(4)));
+    auto* connected = new QTableWidgetItem(or_dash(fields.value(3)));
+    if (state == SessionState::Ended) {
+      // The rows that are history read as history.
+      for (QTableWidgetItem* item : {address, seen, connected}) {
+        item->setForeground(QBrush(colours.muted));
+      }
+    }
+
+    const std::array<std::pair<int, QTableWidgetItem*>, 5> cells{{
+        {kSessionAccountColumn, account},
+        {kSessionStateColumn, status},
+        {kSessionAddressColumn, address},
+        {kSessionSeenColumn, seen},
+        {kSessionConnectedColumn, connected},
+    }};
+    for (const auto& [column, item] : cells) {
+      item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+      sessions_->setItem(row, column, item);
+    }
+    if (!selected.isEmpty() && id == selected) {
+      sessions_->selectRow(row);
+    }
+  }
+
+  sessions_count_->setText(
+      QStringLiteral("%1 online · %2 sessions").arg(online).arg(session_rows_.size()));
+}
+
+AdminPanel::SessionState AdminPanel::session_state(const QStringList& fields) const {
+  if (!fields.value(5).isEmpty()) {
+    return SessionState::Ended;
+  }
+  const auto account = accounts_.constFind(fields.value(1));
+  return account != accounts_.constEnd() && account->online ? SessionState::Online
+                                                            : SessionState::Stale;
+}
+
+QString AdminPanel::session_account_label(const QString& user_id) const {
+  const auto account = accounts_.constFind(user_id);
+  if (account != accounts_.constEnd()) {
+    return account->username;
+  }
+  // The first eight characters, which is what the pane and the server's log
+  // show of an identifier; the whole of it is in the tooltip.
+  return user_id.left(8) + QStringLiteral("…");
+}
+
+void AdminPanel::on_end_session() {
+  const int row = sessions_->currentRow();
+  const QTableWidgetItem* cell = row >= 0 ? sessions_->item(row, kSessionAccountColumn) : nullptr;
+  if (cell == nullptr) {
+    return;
+  }
+  const QString user_id = cell->data(kSessionUserRole).toString();
+  const auto state = static_cast<SessionState>(cell->data(kSessionStateRole).toInt());
+
+  // Refused here, with a sentence about the row, rather than sent to be
+  // refused: the state is on screen, and the server's answer would be a code.
+  // The sentences are tools/dbadmin's, for the same three refusals.
+  switch (state) {
+    case SessionState::Ended:
+      emit failed(QStringLiteral("invalid_target"),
+                  QStringLiteral("this session has already ended"));
+      return;
+    case SessionState::Stale:
+      emit failed(QStringLiteral("invalid_target"),
+                  QStringLiteral("this session is not answering, so no server is holding it; "
+                                 "nobody is signed out by ending it"));
+      return;
+    case SessionState::Online:
+      break;
+  }
+  if (user_id == QString::fromStdString(session_.local_user().id)) {
+    emit failed(QStringLiteral("invalid_target"),
+                QStringLiteral("an administrator cannot end their own session from here"));
+    return;
+  }
+
+  // The same shape as a ban's question, because it is the same kind of
+  // decision about a person who is mid-sentence: what will happen, when, and
+  // what will not. Broken into lines by hand: the dialog's label does not
+  // wrap, and one long sentence makes a box wider than the window.
+  const QString name = session_account_label(user_id);
+  bool accepted = false;
+  const QString reason = QInputDialog::getText(
+      this, QStringLiteral("End the session of %1").arg(name),
+      QStringLiteral("%1 is signed out at once: out of the room, tokens revoked, and everybody "
+                     "in the room told.\nNothing is taken from the account, and they may sign "
+                     "in again straight away.\nTo keep them out, restrict the account on the "
+                     "Users tab instead.\n\nReason, shown to them (optional)")
+          .arg(name),
+      QLineEdit::Normal, QString(), &accepted);
+  if (!accepted) {
+    return;
+  }
+
+  act(session_.end_session(user_id.toStdString(), reason.toStdString()));
+  // The answer is the new session list. The dot on the account table and the
+  // count under this one follow the account list, which is asked for as well.
+  (void)send(session_.list_users());
 }
 
 void AdminPanel::on_restrict(const protocol::RestrictUser& change) {

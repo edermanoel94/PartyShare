@@ -1013,6 +1013,18 @@ Result<std::monostate> CallSession::list_audit(int limit, const std::string& act
   return signaling_.send(protocol::ListAudit{.limit = limit, .actor_id = actor_id});
 }
 
+Result<std::monostate> CallSession::list_sessions(int limit) {
+  return signaling_.send(protocol::ListSessions{.limit = limit});
+}
+
+Result<std::monostate> CallSession::end_session(const std::string& user_id,
+                                                const std::string& reason) {
+  if (user_id.empty()) {
+    return Result<std::monostate>::failure("invalid_value", "an account has to be named");
+  }
+  return signaling_.send(protocol::EndSession{.user_id = user_id, .reason = reason});
+}
+
 models::Role CallSession::role() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return local_user_.role;
@@ -1418,6 +1430,18 @@ void CallSession::handle_signal(protocol::Message message) {
     }
     if (handlers.on_audit_list) {
       handlers.on_audit_list(entries->entries);
+    }
+    return;
+  }
+
+  if (const auto* sessions = std::get_if<protocol::SessionList>(&message)) {
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_session_list) {
+      handlers.on_session_list(sessions->sessions);
     }
     return;
   }

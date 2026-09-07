@@ -639,4 +639,55 @@ TEST(Protocol, AChatPayloadThatIsNotAnObjectIsRefused) {
   EXPECT_EQ(parsed.error().code, "invalid_type");
 }
 
+// --- sessions ----------------------------------------------------------------
+
+TEST(RoundTrip, ListSessions) {
+  EXPECT_EQ(round_trip(ListSessions{}), ListSessions{});
+  EXPECT_EQ(round_trip(ListSessions{500}), ListSessions{500});
+}
+
+TEST(RoundTrip, SessionListCarriesEveryFieldOfEveryRow) {
+  SessionList original;
+  original.sessions.push_back(SessionSummary{.id = "68b0f2",
+                                             .user_id = "user456",
+                                             .ip = "203.0.113.7",
+                                             .connected_at = 1755676800,
+                                             .last_seen_at = 1755677100,
+                                             .ended_at = 0});
+  original.sessions.push_back(SessionSummary{.id = "68b0f3",
+                                             .user_id = "user789",
+                                             .ip = "",
+                                             .connected_at = 1755600000,
+                                             .last_seen_at = 1755603600,
+                                             .ended_at = 1755603600});
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(RoundTrip, EndSession) {
+  const EndSession original{"user456", "please reconnect on the wired network"};
+  EXPECT_EQ(round_trip(original), original);
+}
+
+TEST(Parse, EndSessionNeedsAnAccountAndNothingElse) {
+  const auto refused = parse(R"({"type":"end_session"})");
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "missing_field");
+
+  const auto parsed = parse(R"({"type":"end_session","user_id":"user456"})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(std::get<EndSession>(parsed.value()).reason, "");
+}
+
+TEST(Parse, ASessionRowOmitsWhatTheServerNeverWrote) {
+  // A row from a document written by hand, or by a version of the server that
+  // had no address to record: the account is the one thing it has to say.
+  const auto parsed = parse(R"({"type":"session_list","sessions":[{"user_id":"user456"}]})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  const auto& list = std::get<SessionList>(parsed.value());
+  ASSERT_EQ(list.sessions.size(), 1U);
+  EXPECT_EQ(list.sessions.front().user_id, "user456");
+  EXPECT_TRUE(list.sessions.front().ip.empty());
+  EXPECT_EQ(list.sessions.front().ended_at, 0);
+}
+
 }  // namespace

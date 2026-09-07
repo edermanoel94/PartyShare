@@ -127,6 +127,7 @@ class MemorySessionStore final : public SessionStore {
   [[nodiscard]] std::optional<Error> close(const std::string& id) override;
   [[nodiscard]] std::size_t close_open() override;
   [[nodiscard]] std::vector<SessionRecord> list_open() const override;
+  [[nodiscard]] std::vector<SessionRecord> list(int limit) const override;
 
  private:
   std::vector<SessionRecord> sessions_;

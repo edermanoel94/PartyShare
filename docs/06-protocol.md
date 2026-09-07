@@ -316,6 +316,8 @@ Promoting or demoting somebody therefore takes effect on their next action rathe
 | `list_rooms` | | |
 | `delete_room` | `room_id` | |
 | `list_audit` | | `limit`, `actor_id` |
+| `list_sessions` | | `limit` |
+| `end_session` | `user_id` | `reason` |
 | `send_notice` | `user_id`, `text` | |
 
 `send_notice` is described on its own in section 4.9, with the two messages that answer it.
@@ -330,6 +332,7 @@ It is listed here because the gate is the same one: telling an account something
 | `user_list` | `users` | |
 | `room_list` | `rooms` | |
 | `audit_list` | `entries` | |
+| `session_list` | `sessions` | |
 
 `kick_user` removes one participant from one room.
 They stay connected and authenticated: only the room membership ends, so they can join another room, or the same one again unless the account was also removed.
@@ -444,7 +447,7 @@ No password, salt or hash appears here, and none is defined for any message in t
 }
 ```
 
-`action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
+`action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`, `end_session`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
 
 A `restrict_user` entry names the flags that moved and what they became, and the reason if one was given: `silenced=true reason=off topic`.
 What moved and not the resulting set, because a log that only ever states the result leaves the reader to diff it against an entry they have to go and find.
@@ -454,6 +457,34 @@ Entries come back newest first.
 An empty or absent `actor_id` means every actor.
 
 Ordinary participation is not recorded: joining, leaving, sharing a screen and muting yourself produce no entry, because a log full of them is a log nobody reads.
+
+`list_sessions` asks for what the server has written down about who has been connected: one row per sign-in, the open ones first and then the ended ones, and within each the one heard from most recently first.
+`limit` is clamped by the server, and zero or absent asks for its default of 200.
+`sessions` is an array of:
+
+```json
+{
+  "id": "68b0f2...",
+  "user_id": "user456",
+  "ip": "203.0.113.7",
+  "connected_at": 1755676800,
+  "last_seen_at": 1755677100,
+  "ended_at": 0
+}
+```
+
+All three times are seconds since the Unix epoch, UTC.
+`last_seen_at` moves on every heartbeat the server exchanges with that connection, and `ended_at` is zero while the session is open.
+`ip` is the address as the transport reported it, and is empty when it reported none; a server behind a proxy sees the proxy.
+`user_id` is an identifier and not a name, like every other reference here, and a client resolves it against the `user_list` it already holds; an account deleted since leaves rows that resolve to nothing, and they are still rows that say somebody was here.
+A row that is open whose account `user_list` says is not online is one the server failed to close, or one another server left behind: a client should show it as neither online nor ended.
+
+`end_session` signs one account out, and changes nothing about the account: `session_ended` to the person, then `user_kicked` and `user_left` to their room if they are in one, the tokens revoked, and the person free to sign in again at once.
+It is the same exit a ban takes, without the ban, and the same one `tools/dbadmin` asks for by marking the account.
+`reason` is shown to the person and to the room; empty asks for the server's own sentence, "the session was ended by an administrator".
+It names the account rather than the session because an account has at most one connection - a second login takes the first one's place - so the two are the same thing.
+Two refusals, both `invalid_target`: an administrator's own account, because signing yourself out is not administration, and an account that is not signed in, because there is nothing to end and an unchanged list would leave the sender guessing whether anything happened.
+It is answered with the whole new `session_list`, for the reason the account changes are answered with `user_list`; the audit entry is `end_session`, with `reason` as its detail.
 
 ### 4.8 An account's own password
 
@@ -569,7 +600,7 @@ These are messages written to a named person, and a record with a subject and no
 {"type": "session_ended", "reason": "the session was ended by an administrator"}
 ```
 
-Sent to a connection whose session the server has taken away without the client asking: the account was banned (section 4.7), the account was deleted, whether by `delete_user` or by somebody editing the database while the person was signed in, an operator signed the person out from `tools/dbadmin`, or the password was replaced (section 4.8).
+Sent to a connection whose session the server has taken away without the client asking: the account was banned (section 4.7), the account was deleted, whether by `delete_user` or by somebody editing the database while the person was signed in, an administrator signed the person out with `end_session` or an operator did from `tools/dbadmin`, or the password was replaced (section 4.8).
 Every one of those goes through one place on the server, and this is the first thing that place does.
 `reason` is the sentence the room is told, when there is a room, and is for a person to read.
 
@@ -600,7 +631,7 @@ This table says what a role may send, not who they may send it about.
 Sending `chat_message` is open to everybody; sending one into a room you are not in is not, and that rule lives with the handler rather than here.
 `acknowledge_notice` is the same shape of rule: anybody may send one, and the server accepts it only for a notice addressed to them.
 
-Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `session_ended`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list` and `error`.
+Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `session_ended`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list`, `session_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
 
 ## 5. Error codes

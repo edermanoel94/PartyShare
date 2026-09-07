@@ -49,6 +49,8 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
            proto::MessageType::DeleteUser,
            proto::MessageType::DeleteRoom,
            proto::MessageType::ListAudit,
+           proto::MessageType::ListSessions,
+           proto::MessageType::EndSession,
            proto::MessageType::SendNotice,
        }) {
     EXPECT_EQ(access_for(type), Access::AdminOnly) << proto::type_name(type);
@@ -86,6 +88,7 @@ TEST(Permissions, AnnouncementsAreRefusedToEverybody) {
            proto::MessageType::UserList,
            proto::MessageType::RoomList,
            proto::MessageType::AuditList,
+           proto::MessageType::SessionList,
            proto::MessageType::Error,
        }) {
     EXPECT_EQ(access_for(type), Access::ServerToClient) << proto::type_name(type);
@@ -136,7 +139,7 @@ TEST(Permissions, EveryMessageTypeIsClassified) {
   //
   // Walks by name rather than by value, because type_from_name only answers
   // for names the protocol actually defines.
-  for (int raw = 0; raw <= static_cast<int>(proto::MessageType::AuditList); ++raw) {
+  for (int raw = 0; raw <= static_cast<int>(proto::MessageType::EndSession); ++raw) {
     const auto type = static_cast<proto::MessageType>(raw);
     EXPECT_NE(proto::type_name(type), "unknown") << "message type " << raw << " has no wire name";
   }

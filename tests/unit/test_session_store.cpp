@@ -163,4 +163,41 @@ TEST(MemorySessionStore, TheCapNeverDropsAnOpenSession) {
   EXPECT_EQ(user_ids(store.list_open()), std::vector<std::string>{"user1"});
 }
 
+TEST(MemorySessionStore, TheListPutsWhoIsHereFirstAndThenTheHistory) {
+  MemorySessionStore store;
+
+  // Written in an order that is neither of the two the list has to produce:
+  // an old open row, a recent ended row, a newer open row, an older ended
+  // row. Open before ended whatever the times say, and within each group the
+  // one heard from most recently first.
+  ASSERT_TRUE(store.open(session_at("open-old", "203.0.113.1", 1000)).ok());
+  const auto recent = store.open(session_at("ended-recent", "203.0.113.2", 3000));
+  ASSERT_TRUE(recent.ok());
+  ASSERT_FALSE(store.close(recent.value().id).has_value());
+  ASSERT_TRUE(store.open(session_at("open-new", "203.0.113.3", 2000)).ok());
+  const auto older = store.open(session_at("ended-old", "203.0.113.4", 500));
+  ASSERT_TRUE(older.ok());
+  ASSERT_FALSE(store.close(older.value().id).has_value());
+
+  EXPECT_EQ(user_ids(store.list(0)),
+            (std::vector<std::string>{"open-new", "open-old", "ended-recent", "ended-old"}));
+}
+
+TEST(MemorySessionStore, TheListStopsAtTheLimitAndClampsIt) {
+  MemorySessionStore store;
+  for (int index = 0; index < 5; ++index) {
+    const auto opened = store.open(session_at("user", "203.0.113.7", 1000 + index));
+    ASSERT_TRUE(opened.ok());
+    ASSERT_FALSE(store.close(opened.value().id).has_value());
+  }
+
+  EXPECT_EQ(store.list(2).size(), 2U);
+  EXPECT_EQ(store.list(0).size(), 5U);
+  EXPECT_EQ(dv::server::store::clamp_session_limit(0),
+            dv::server::store::SessionStore::kDefaultLimit);
+  EXPECT_EQ(dv::server::store::clamp_session_limit(1'000'000),
+            dv::server::store::SessionStore::kMaxLimit);
+  EXPECT_EQ(dv::server::store::clamp_session_limit(7), 7);
+}
+
 }  // namespace

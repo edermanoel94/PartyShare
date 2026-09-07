@@ -11,8 +11,6 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-#include "ui/theme.hpp"
-
 namespace dv::ui {
 namespace {
 
@@ -32,7 +30,7 @@ constexpr int kPaneWidth = 300;
   return rule;
 }
 
-/// A small capitals heading over a section, in the console's face.
+/// A small capitals heading over a section.
 [[nodiscard]] QLabel* make_eyebrow(const QString& text, QWidget* parent) {
   auto* label = new QLabel(text.toUpper(), parent);
   label->setProperty("eyebrow", true);
@@ -88,8 +86,6 @@ AccountPane::AccountPane(QWidget* parent) : QFrame(parent) {
   name_->setFont(big);
   handle_ = new QLabel(body_);
   handle_->setProperty("hint", true);
-  const QFont mono = theme::console_font(font().pointSizeF());
-  handle_->setFont(mono);
   handle_->setTextInteractionFlags(Qt::TextSelectableByMouse);
   role_ = new QLabel(body_);
   role_->setProperty("eyebrow", true);
@@ -105,7 +101,6 @@ AccountPane::AccountPane(QWidget* parent) : QFrame(parent) {
   facts->setHorizontalSpacing(10);
   facts->setVerticalSpacing(3);
   created_ = new QLabel(body_);
-  created_->setFont(mono);
   status_ = new QLabel(body_);
   auto* created_key = new QLabel(QStringLiteral("Created"), body_);
   created_key->setProperty("hint", true);
@@ -174,7 +169,6 @@ AccountPane::AccountPane(QWidget* parent) : QFrame(parent) {
   column->addWidget(make_eyebrow(QStringLiteral("Audit"), body_));
   audit_ = new QLabel(body_);
   audit_->setProperty("hint", true);
-  audit_->setFont(mono);
   audit_->setWordWrap(true);
   audit_->setTextInteractionFlags(Qt::TextSelectableByMouse);
   column->addWidget(audit_);

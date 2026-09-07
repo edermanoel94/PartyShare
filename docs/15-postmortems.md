@@ -409,6 +409,42 @@ different place in each tree; and a missing `#include <array>` in
 `test_benchmark.cpp`, latent for as long as the file has existed, because
 libstdc++ brings it in by transitivity and the MSVC standard library does not.
 
+## 19. A vcpkg cache that never hit, for the whole life of the Windows job
+
+The Windows job took 16 minutes where Linux and macOS took four and a half, and
+the difference was one step: `Configure` ran for ten minutes on Windows and five
+seconds elsewhere. The other two restored their thirteen vcpkg ports from the
+binary cache; Windows built all thirteen from source, every run, with
+`openssl` taking most of it.
+
+**What was wrong.** The cache step saved and restored `~/.cache/vcpkg/archives`
+on all three platforms. That is where vcpkg keeps its binary cache on Linux and
+macOS. On Windows it keeps it in `%LOCALAPPDATA%\vcpkg\archives`, and the log
+said so on every run, in a line nobody had read:
+
+```text
+Restored 0 package(s) from C:\Users\runneradmin\AppData\Local\vcpkg\archives
+```
+
+So the step cached a directory vcpkg never wrote to. `Cache not found for input
+keys` on the way in, an empty save on the way out, and a green job either way:
+a cache that misses is not an error, it is a slower success.
+
+**Why it lasted.** Nothing failed. The job passed, the artifacts were right, and
+sixteen minutes reads as "Windows is slow" until it is put beside the same
+three steps on the other platforms. The release workflow's Windows job had the
+same path and the same silent miss.
+
+**The fix** is the path, chosen by `runner.os` in `ci.yml` and written out in
+`release.yml`, which only has the Windows job. Nothing about the key changed, so
+the first run after the fix still builds from source once, and every run after
+it restores.
+
+**What is worth knowing next time.** When a cache step is added, the thing to
+check is not that the step is green but that the tool it serves says it restored
+something. vcpkg prints the count and the directory in one line; a zero there
+with a green cache step above it is the whole diagnosis.
+
 ---
 
 ## Seen once, not yet reproduced

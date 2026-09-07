@@ -321,10 +321,15 @@ jobs:
           Add-Content $env:GITHUB_ENV "WIX=$root\"
           Add-Content $env:GITHUB_PATH $candle.Directory.FullName
 
+      # %LOCALAPPDATA%\vcpkg\archives, which is where vcpkg keeps its binary
+      # cache on Windows, and not ~/.cache/vcpkg/archives, which is where it
+      # keeps it everywhere else and where this step used to look. The key
+      # is the CI job's, so a release restores what the last CI run built.
+      # Entry 19 of docs/15-postmortems.md.
       - name: Restore the vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vcpkg/archives
+          path: ~/AppData/Local/vcpkg/archives
           key: vcpkg-windows-2022-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-windows-2022-
 

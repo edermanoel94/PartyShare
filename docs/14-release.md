@@ -291,6 +291,36 @@ The `.dmg` has the bundle, the shortcut to `/Applications`, a volume icon and th
 example configuration. It lacks a background image and icon positioning, which is
 appearance rather than function.
 
+`scripts/macos_dmg.sh` does the packaging and can be run locally against a
+staged tree:
+
+```sh
+scripts/macos_dmg.sh                          # stage/ -> ./partyshare-<v>-macos-<arch>.dmg
+scripts/macos_dmg.sh --stage-dir build/stage  # a tree staged somewhere else
+```
+
+It exists because of v0.1.58.
+The step used to be a single `hdiutil create -srcfolder` inline in the workflow, and after eleven releases it failed with `hdiutil: create failed - Resource busy`.
+That one line is five operations: it creates a read/write image, mounts it, copies the folder in, unmounts it, and converts the result to a compressed image.
+It reports a failure in any of the five as the same sentence, with nothing to say which.
+The one that failed was the unmount, which is only knowable from the job cleanup having to terminate an orphaned `diskimages-helper`, the process that backs a mounted image.
+The volume was still attached when `hdiutil` gave up.
+
+Three things the script does that the one line did not:
+
+- **The volume mounts under `build/dmg/mnt`, not `/Volumes/PartyShare`.**
+  A fixed name in `/Volumes` is one two jobs can collide on and a leftover mount can occupy.
+  A path under the build directory is neither, and the Finder does not go looking there.
+- **Spotlight indexing is turned off on the mounted volume.**
+  `mdworker` starts indexing a volume the moment it mounts and holds it while it does, which is the most likely thing to have been holding it in v0.1.58.
+  Turning it off means there is nothing to wait for at the unmount.
+- **The unmount has a retry policy rather than a command.**
+  It is the step that failed in the field, so it is allowed to be told twice before it is told forcefully, and a failure there stops the release rather than converting a still-mounted image into a corrupt `.dmg`.
+
+A release that loses a platform this way still publishes.
+The `publish` job runs on `always()` and ships whatever built, on the grounds that a partial release beats none, and since v0.1.58 it writes a warning into the release body naming the platforms that did not build.
+Before that it published the gap in silence, which reads on the releases page as a platform that was never supported.
+
 **The macOS client carries the media layer, and did not until v0.1.45.**
 Every `.dmg` up to v0.1.44 installed a client that connected, joined a room and
 answered every attempt to speak or share a screen with "This build has no media

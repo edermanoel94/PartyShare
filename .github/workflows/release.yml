@@ -800,33 +800,12 @@ jobs:
             --wait
           xcrun stapler staple stage/partyshare.app
 
-      # What a person sees when the image mounts: the application, and the
-      # Applications folder to drag it into. The symlink is the whole convention
-      # on macOS, and an image without it is one where the only thing to do is
-      # run the app from the disk image, which leaves it running from a mount
-      # that disappears.
+      # The packaging is a script rather than a run: block for the reason the
+      # AppImage's is. It is five hdiutil operations that each need their own
+      # error handling, and the one that broke v0.1.58 needs a retry policy
+      # that does not belong inline in YAML nobody can run locally.
       - name: Build the disk image
-        run: |
-          set -euo pipefail
-          VERSION=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
-          rm -rf dmg && mkdir -p dmg
-          cp -R stage/partyshare.app dmg/
-          ln -s /Applications dmg/Applications
-
-          # Beside the application, where it is read before anything is
-          # installed. The copy inside Contents/Resources is the one that
-          # survives the drag; this one is the one that gets noticed.
-          cp stage/share/doc/partyshare/config.ini dmg/
-
-          # The icon the mounted volume itself gets in the Finder sidebar. It
-          # needs the file, the custom icon attribute, and the directory marked
-          # as having one: any of the three missing and it falls back to the
-          # generic disk.
-          cp assets/partyshare.icns dmg/.VolumeIcon.icns
-          SetFile -a C dmg || true
-
-          hdiutil create -volname PartyShare -srcfolder dmg -ov -format UDZO \
-            "partyshare-${VERSION}-macos-${{ matrix.arch }}.dmg"
+        run: scripts/macos_dmg.sh --arch ${{ matrix.arch }}
 
       # Gatekeeper judges the disk image as well as the bundle inside it, so an
       # unsigned image carrying a signed application still warns on first open.
@@ -862,6 +841,41 @@ jobs:
         with:
           path: artifacts
 
+      # A release that is missing a platform looks exactly like a complete one
+      # on the releases page: the assets that are there are there, and nothing
+      # says the macOS image is absent because the job that builds it failed.
+      # Somebody on a Mac then reads the absence as "not supported yet". The
+      # results come from needs rather than from what landed in artifacts/,
+      # because a platform deliberately turned off is not a platform that
+      # failed, and only a job that ran and did not succeed is worth a warning.
+      - name: Note the platforms that did not build
+        env:
+          WINDOWS: ${{ needs.windows.result }}
+          MACOS: ${{ needs.macos.result }}
+          LINUX_SERVER: ${{ needs.linux-server.result }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [[ "$WINDOWS" == "success" ]] || missing="${missing}, Windows x64"
+          [[ "$MACOS" == "success" ]] || missing="${missing}, macOS arm64"
+          [[ "$LINUX_SERVER" == "success" ]] || missing="${missing}, servidor Linux x64"
+          missing="${missing#, }"
+
+          # Written as a file rather than a variable: a multi-line value going
+          # through GITHUB_ENV needs a heredoc delimiter, and action-gh-release
+          # reads a body from a path directly.
+          : > RELEASE_BODY.md
+          if [[ -n "$missing" ]]; then
+            {
+              echo "> [!WARNING]"
+              echo "> Esta release está incompleta: não saiu artefato para ${missing}."
+              echo "> Use a versão anterior nessa plataforma. O build está em"
+              echo "> ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+              echo
+            } > RELEASE_BODY.md
+            echo "incomplete release: ${missing}"
+          fi
+
       - name: Checksums
         run: |
           find artifacts -type f ! -name '*.zsync' -exec sha256sum {} + \
@@ -873,5 +887,6 @@ jobs:
           files: |
             artifacts/*/*
             SHA256SUMS
+          body_path: RELEASE_BODY.md
           generate_release_notes: true
           fail_on_unmatched_files: false

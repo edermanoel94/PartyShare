@@ -87,6 +87,19 @@ struct AudioConfig {
   /// instruments. See docs/16-audio-plan.md, step 5.
   std::string noise_suppression_level = "high";
   bool automatic_gain_control = true;
+  /// Whether the microphone is silenced between sentences. libwebrtc's own
+  /// voice detector judges every 10 ms block after the suppressor and the gain
+  /// control have run; the gate opens on the first block with a voice in it,
+  /// stays open 300 ms after the last, and closes over 100 ms. Only the voice
+  /// goes through it: the shared screen's sound is mixed in afterwards. Off
+  /// for an instrument or music. See docs/16-audio-plan.md, step 13.
+  bool voice_gate = true;
+  /// How sure the detector has to be before the gate opens: `low`, `moderate`,
+  /// `high` or `very_high`, its four modes. `low` opens on almost anything
+  /// above silence; `very_high` only on clear speech, and can take the start
+  /// off a word said quietly. `moderate` is the default the way `high` is the
+  /// suppressor's: a decision the listening test may move.
+  std::string voice_gate_level = "moderate";
   /// Empty means the system default device.
   std::string input_device;
   std::string output_device;
@@ -230,20 +243,13 @@ struct UiConfig {
   /// office is who this switch is for.
   bool room_sounds = true;
 
-  /// Whether the client asks GitHub, now and then, whether a release newer
-  /// than itself has been published.
-  ///
-  /// On by default, because the alternative is a room where three people run
-  /// three versions and nobody knows it. It is one request to one address,
-  /// carrying nothing but the version already written on the window, and the
-  /// answer only ever changes a line in the status bar - nothing is downloaded
-  /// and nothing is installed.
-  ///
-  /// The switch exists because "the client talks to the internet on its own"
-  /// is a real objection in the two places this program is meant to run: a LAN
-  /// with no route out, where every check is a timeout, and a network whose
-  /// administrator decides what reaches the outside. Off, no request is made
-  /// at all.
+  /// Retired. The client always asks GitHub whether a newer release exists -
+  /// one request to one address, carrying nothing but the version already
+  /// written on the window, whose answer only ever changes a line in the
+  /// status bar - and the box in Settings that wrote this key went with the
+  /// switch. The key is still read so that a config.ini which has it goes on
+  /// loading; a `false` is a warning in the client's log saying the line no
+  /// longer does anything. Not written anywhere any more.
   bool check_for_updates = true;
 };
 

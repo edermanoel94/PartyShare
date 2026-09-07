@@ -1,29 +1,59 @@
 #include "ui/admin_panel.hpp"
 
+#include <array>
+#include <utility>
+
 #include <dv/models/room.hpp>
 
-#include <QCheckBox>
+#include <QAction>
+#include <QBrush>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEvent>
+#include <QFont>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
+#include <QModelIndex>
 #include <QPlainTextEdit>
+#include <QPoint>
 #include <QPushButton>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QVBoxLayout>
 
+#include "ui/account_delegate.hpp"
 #include "ui/table.hpp"
+#include "ui/theme.hpp"
 
 namespace dv::ui {
+namespace {
+
+/// The columns of the account table, in order. Named because the fill puts
+/// something different in each and a column number says nothing on its own.
+constexpr int kStatusColumn = 0;
+constexpr int kUserColumn = 1;
+constexpr int kNameColumn = 2;
+constexpr int kRoleColumn = 3;
+constexpr int kRestrictionsColumn = 4;
+constexpr int kCreatedColumn = 5;
+
+/// How many audit lines the pane shows about one account. Five is what fits
+/// under the actions without the pane growing a scrollbar, and the tab next
+/// door has the rest.
+constexpr int kAuditTail = 5;
+
+}  // namespace
 
 AdminPanel::AdminPanel(client::app::CallSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
@@ -53,42 +83,82 @@ AdminPanel::AdminPanel(client::app::CallSession& session, QWidget* parent)
 QWidget* AdminPanel::build_users_tab() {
   auto* page = new QWidget(this);
   auto* column = new QVBoxLayout(page);
+  column->setSpacing(8);
+  // The console's face at the size the rest of the interface is set in.
+  const QFont mono = theme::console_font(page->font().pointSizeF());
 
-  users_ = make_table(
-      {QStringLiteral("Username"), QStringLiteral("Name"), QStringLiteral("Role"),
-       QStringLiteral("Created"), QStringLiteral("Online"), QStringLiteral("Restricted")},
-      page);
-  column->addWidget(users_, 1);
-
-  auto* controls = new QHBoxLayout();
+  // The filter line, with the one button that is about no account in
+  // particular beside it.
+  auto* top = new QHBoxLayout();
+  top->setSpacing(8);
+  auto* prompt = new QLabel(QStringLiteral(">"), page);
+  prompt->setProperty("accent", true);
+  prompt->setFont(mono);
+  filter_ = new QLineEdit(page);
+  filter_->setProperty("console", true);
+  filter_->setFont(mono);
+  filter_->setPlaceholderText(QStringLiteral("filter by username, name, role or restriction"));
+  filter_->setClearButtonEnabled(true);
+  filter_count_ = new QLabel(page);
+  filter_count_->setProperty("hint", true);
+  filter_count_->setFont(mono);
   create_user_ = new QPushButton(QStringLiteral("New account"), page);
   create_user_->setProperty("accent", true);
-  send_notice_ = new QPushButton(QStringLiteral("Message"), page);
-  change_role_ = new QPushButton(QStringLiteral("Change role"), page);
-  reset_password_ = new QPushButton(QStringLiteral("Reset password"), page);
-  restrict_user_ = new QPushButton(QStringLiteral("Restrictions"), page);
-  delete_user_ = new QPushButton(QStringLiteral("Delete"), page);
-  delete_user_->setProperty("danger", true);
-  controls->addWidget(create_user_);
-  // Next to the account controls and not among the restrictions, which is
-  // where it looks like it belongs. Telling somebody something is the one
-  // thing on this row that takes nothing away from them, and an administrator
-  // reaching for it after a warning rather than before one is the order this
-  // feature exists to make possible.
-  controls->addWidget(send_notice_);
-  controls->addWidget(change_role_);
-  controls->addWidget(reset_password_);
-  controls->addWidget(restrict_user_);
-  controls->addStretch();
-  controls->addWidget(delete_user_);
-  column->addLayout(controls);
+  top->addWidget(prompt);
+  top->addWidget(filter_, 1);
+  top->addWidget(filter_count_);
+  top->addWidget(create_user_);
+  column->addLayout(top);
+
+  auto* body = new QHBoxLayout();
+  body->setSpacing(10);
+  users_ =
+      make_table({QString(), QStringLiteral("User"), QStringLiteral("Name"), QStringLiteral("Role"),
+                  QStringLiteral("Restrictions"), QStringLiteral("Created")},
+                 page);
+  users_->setFont(mono);
+  users_->setItemDelegate(new AccountDelegate(users_));
+  // No grid: the rows are read across, and a lattice between cells that hold
+  // a dot and a chip is lines for their own sake.
+  users_->setShowGrid(false);
+  // The slack goes to the name, which is as long as somebody made it. The
+  // dot and the chips are sized to what they draw.
+  QHeaderView* columns = users_->horizontalHeader();
+  columns->setStretchLastSection(false);
+  columns->setSectionResizeMode(QHeaderView::ResizeToContents);
+  columns->setSectionResizeMode(kNameColumn, QHeaderView::Stretch);
+  columns->setMinimumSectionSize(20);
+  // The menu is built on demand from the row under the pointer, so there is
+  // nothing to enable or disable here.
+  users_->setContextMenuPolicy(Qt::CustomContextMenu);
+  pane_ = new AccountPane(page);
+  body->addWidget(users_, 1);
+  body->addWidget(pane_);
+  column->addLayout(body, 1);
+
+  // What the keys do, written where a terminal writes it. They work from the
+  // table, which is where the arrows already do.
+  auto* keys = new QLabel(QStringLiteral("/ filter   ↑↓ move   ⏎ open   m message   r restrict   "
+                                         "b ban   p password   d delete   n new account"),
+                          page);
+  keys->setProperty("hint", true);
+  keys->setFont(mono);
+  column->addWidget(keys);
 
   connect(create_user_, &QPushButton::clicked, this, &AdminPanel::on_create_user);
-  connect(send_notice_, &QPushButton::clicked, this, &AdminPanel::on_send_notice);
-  connect(change_role_, &QPushButton::clicked, this, &AdminPanel::on_change_role);
-  connect(reset_password_, &QPushButton::clicked, this, &AdminPanel::on_reset_password);
-  connect(restrict_user_, &QPushButton::clicked, this, &AdminPanel::on_restrict_user);
-  connect(delete_user_, &QPushButton::clicked, this, &AdminPanel::on_delete_user);
+  connect(filter_, &QLineEdit::textChanged, this, &AdminPanel::on_filter_changed);
+  connect(users_, &QTableWidget::itemSelectionChanged, this, &AdminPanel::on_account_selected);
+  connect(users_, &QTableWidget::customContextMenuRequested, this, &AdminPanel::on_user_menu);
+  connect(pane_, &AccountPane::restrict_requested, this, &AdminPanel::on_restrict);
+  connect(pane_, &AccountPane::message_requested, this, &AdminPanel::on_send_notice);
+  connect(pane_, &AccountPane::role_change_requested, this, &AdminPanel::on_change_role);
+  connect(pane_, &AccountPane::password_reset_requested, this, &AdminPanel::on_reset_password);
+  connect(pane_, &AccountPane::delete_requested, this, &AdminPanel::on_delete_user);
+
+  users_->installEventFilter(this);
+  filter_->installEventFilter(this);
+
+  on_filter_changed(QString());
   return page;
 }
 
@@ -157,6 +227,56 @@ void AdminPanel::refresh() {
   (void)send(session_.list_audit());
 }
 
+bool AdminPanel::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() != QEvent::KeyPress) {
+    return QWidget::eventFilter(watched, event);
+  }
+  auto* key = dynamic_cast<QKeyEvent*>(event);
+  if (key == nullptr) {
+    return QWidget::eventFilter(watched, event);
+  }
+
+  if (watched == filter_ && key->key() == Qt::Key_Escape) {
+    filter_->clear();
+    users_->setFocus(Qt::OtherFocusReason);
+    return true;
+  }
+
+  // Bare keys only. Ctrl+C in the table is still a copy, and a modifier is
+  // how somebody types a letter that is not a command.
+  if (watched != users_ || (key->modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier) {
+    return QWidget::eventFilter(watched, event);
+  }
+  switch (key->key()) {
+    case Qt::Key_Slash:
+      filter_->setFocus(Qt::OtherFocusReason);
+      filter_->selectAll();
+      return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_R:
+      pane_->focus_restrictions();
+      return true;
+    case Qt::Key_M:
+      on_send_notice();
+      return true;
+    case Qt::Key_B:
+      toggle_flag(selected_id(users_), Flag::Banned);
+      return true;
+    case Qt::Key_P:
+      on_reset_password();
+      return true;
+    case Qt::Key_D:
+      on_delete_user();
+      return true;
+    case Qt::Key_N:
+      on_create_user();
+      return true;
+    default:
+      return QWidget::eventFilter(watched, event);
+  }
+}
+
 void AdminPanel::on_tab_changed(int /*index*/) {
   // The panel stays open while other people are doing things, so what it shows
   // goes stale on its own. Asking again when a tab is brought forward costs
@@ -173,10 +293,18 @@ bool AdminPanel::send(const Result<std::monostate>& request) {
   return true;
 }
 
+void AdminPanel::act(const Result<std::monostate>& request) {
+  if (send(request)) {
+    (void)send(session_.list_audit());
+  }
+}
+
 void AdminPanel::apply_users(const QStringList& rows) {
   // Read here and not out of the table afterwards, because the table keeps
-  // only what it draws: ui::fill stops at the last column and the flags field
-  // is past it. The row is the one MainWindow's on_user_list builds.
+  // only what it draws. The row is the one MainWindow's on_user_list builds:
+  // id, username, display name, role, created, online, the restrictions as
+  // models::describe writes them, and the same four flags once more as one
+  // character each.
   accounts_.clear();
   accounts_.reserve(static_cast<int>(rows.size()));
   for (const QString& row : rows) {
@@ -185,10 +313,9 @@ void AdminPanel::apply_users(const QStringList& rows) {
     if (id.isEmpty()) {
       continue;
     }
-    // One character per flag, in the order Restrictions declares them. Bounds
-    // checked rather than indexed blindly: a row from an older client, or one
-    // that lost its tail somewhere, should leave the boxes as they were and
-    // not read off the end of a string.
+    // Bounds checked rather than indexed blindly: a row from an older client,
+    // or one that lost its tail somewhere, should leave the boxes as they
+    // were and not read off the end of a string.
     const QString flags = fields.value(7);
     const auto flag = [&flags](qsizetype at) {
       return flags.size() > at && flags.at(at) == QLatin1Char('1');
@@ -197,13 +324,156 @@ void AdminPanel::apply_users(const QStringList& rows) {
                              .username = fields.value(1),
                              .display_name = fields.value(2),
                              .role = models::role_from_string(fields.value(3).toStdString()),
+                             .online = fields.value(5) == QStringLiteral("yes"),
+                             .created = fields.value(4),
                              .restrictions = models::Restrictions{.banned = flag(0),
                                                                   .muted = flag(1),
                                                                   .silenced = flag(2),
                                                                   .screen_share_blocked = flag(3)},
                          });
   }
-  fill(users_, rows);
+  fill_accounts(rows);
+  on_filter_changed(filter_->text());
+  refresh_pane();
+}
+
+void AdminPanel::fill_accounts(const QStringList& rows) {
+  // Restored by identity rather than by row, for the reason ui::fill does:
+  // the order changes as accounts come and go, and a selection that jumps to
+  // a different account between a refresh and a key is how the wrong person
+  // gets deleted.
+  const QString selected = selected_id(users_);
+  const theme::Colors& colours = theme::colors();
+
+  users_->setRowCount(static_cast<int>(rows.size()));
+  for (int row = 0; row < rows.size(); ++row) {
+    const QStringList fields = rows.at(row).split(QLatin1Char('\t'));
+    const QString id = fields.value(0);
+    const QString flags = fields.value(7);
+    int bits = 0;
+    for (const auto& [at, bit] :
+         {std::pair{0, kAccountBanned}, std::pair{1, kAccountMuted}, std::pair{2, kAccountSilenced},
+          std::pair{3, kAccountScreenBlocked}}) {
+      if (flags.size() > at && flags.at(at) == QLatin1Char('1')) {
+        bits |= bit;
+      }
+    }
+    const bool online = fields.value(5) == QStringLiteral("yes");
+
+    auto* status = new QTableWidgetItem();
+    status->setData(kIdRole, id);
+    status->setData(kAccountCellRole, static_cast<int>(AccountCell::Status));
+    status->setData(kAccountOnlineRole, online);
+    status->setToolTip(online ? QStringLiteral("signed in") : QStringLiteral("not signed in"));
+
+    auto* user = new QTableWidgetItem(fields.value(1));
+    auto* name = new QTableWidgetItem(fields.value(2));
+    name->setForeground(QBrush(colours.muted));
+    auto* role = new QTableWidgetItem(fields.value(3));
+    role->setData(kAccountCellRole, static_cast<int>(AccountCell::Role));
+    // The text stays the sentence models::describe wrote, so the filter finds
+    // "silenced" and the tooltip can say it; the chips come from the bits.
+    auto* restrictions = new QTableWidgetItem(fields.value(6));
+    restrictions->setData(kAccountCellRole, static_cast<int>(AccountCell::Restrictions));
+    restrictions->setData(kAccountFlagsRole, bits);
+    auto* created = new QTableWidgetItem(fields.value(4));
+    created->setForeground(QBrush(colours.muted));
+
+    const std::array<std::pair<int, QTableWidgetItem*>, 6> cells{{
+        {kStatusColumn, status},
+        {kUserColumn, user},
+        {kNameColumn, name},
+        {kRoleColumn, role},
+        {kRestrictionsColumn, restrictions},
+        {kCreatedColumn, created},
+    }};
+    for (const auto& [column, item] : cells) {
+      item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+      if (item->toolTip().isEmpty() && !item->text().isEmpty()) {
+        item->setToolTip(item->text());
+      }
+      users_->setItem(row, column, item);
+    }
+    if (!selected.isEmpty() && id == selected) {
+      users_->selectRow(row);
+    }
+  }
+}
+
+void AdminPanel::on_filter_changed(const QString& text) {
+  const QString needle = text.trimmed().toLower();
+  int shown = 0;
+  for (int row = 0; row < users_->rowCount(); ++row) {
+    bool matches = needle.isEmpty();
+    if (!matches) {
+      // Everything a row says, the state of the dot included, so "online"
+      // and "admin" work as well as a name does.
+      QString haystack;
+      for (int column = kUserColumn; column <= kCreatedColumn; ++column) {
+        if (const QTableWidgetItem* item = users_->item(row, column); item != nullptr) {
+          haystack += item->text() + QLatin1Char(' ');
+        }
+      }
+      const QTableWidgetItem* status = users_->item(row, kStatusColumn);
+      haystack += status != nullptr && status->data(kAccountOnlineRole).toBool()
+                      ? QStringLiteral("online")
+                      : QStringLiteral("offline");
+      matches = haystack.toLower().contains(needle);
+    }
+    users_->setRowHidden(row, !matches);
+    shown += matches ? 1 : 0;
+  }
+  filter_count_->setText(QStringLiteral("%1/%2").arg(shown).arg(users_->rowCount()));
+}
+
+void AdminPanel::on_account_selected() {
+  refresh_pane();
+}
+
+void AdminPanel::refresh_pane() {
+  const QString user_id = selected_id(users_);
+  const auto account = accounts_.constFind(user_id);
+  if (user_id.isEmpty() || account == accounts_.constEnd()) {
+    pane_->show_nothing();
+    return;
+  }
+  pane_->show_account(view_of(user_id, *account));
+  pane_->show_audit(audit_tail(user_id));
+}
+
+AccountView AdminPanel::view_of(const QString& user_id, const Account& account) const {
+  return AccountView{
+      .id = user_id,
+      .username = account.username,
+      .display_name = account.display_name,
+      .admin = account.role == models::Role::Admin,
+      .online = account.online,
+      .created = account.created,
+      .restrictions = account.restrictions,
+      .is_me = user_id == QString::fromStdString(session_.local_user().id),
+  };
+}
+
+QStringList AdminPanel::audit_tail(const QString& user_id) const {
+  // The rows are the ones MainWindow's on_audit_list builds: id, when, who,
+  // action, target id, room, detail. Newest first, as the server sends them.
+  QStringList lines;
+  for (const QString& row : audit_rows_) {
+    QStringList fields = row.split(QLatin1Char('\t'));
+    if (fields.value(4) != user_id) {
+      continue;
+    }
+    // "09-07 15:07  bruno  restrict user": the day and the minute, who, and
+    // the action with its underscores taken out. The detail is a sentence
+    // and the Audit tab has it.
+    lines.push_back(QStringLiteral("%1  %2  %3")
+                        .arg(fields.value(1).mid(5, 11), fields.value(2),
+                             fields.value(3).replace(QLatin1Char('_'), QLatin1Char(' '))));
+    if (lines.size() == kAuditTail) {
+      break;
+    }
+  }
+  return lines;
 }
 
 void AdminPanel::apply_rooms(const QStringList& rows) {
@@ -211,7 +481,18 @@ void AdminPanel::apply_rooms(const QStringList& rows) {
 }
 
 void AdminPanel::apply_audit(const QStringList& rows) {
+  audit_rows_ = rows;
   fill(audit_, rows);
+  // The pane's tail is read from the same rows, and this is when they change.
+  if (const QString user_id = pane_->account_id(); !user_id.isEmpty()) {
+    pane_->show_audit(audit_tail(user_id));
+  }
+}
+
+void AdminPanel::on_restrict(const protocol::RestrictUser& change) {
+  // Nothing changes locally. The answer is the whole new user list, which is
+  // what refreshes the table, the accounts_ and the pane's boxes.
+  act(session_.restrict_user(change));
 }
 
 void AdminPanel::on_create_user() {
@@ -246,8 +527,7 @@ void AdminPanel::on_create_user() {
     return;
   }
 
-  (void)send(
-      session_.create_user(username->text().toStdString(), password->text().toStdString(),
+  act(session_.create_user(username->text().toStdString(), password->text().toStdString(),
                            display_name->text().toStdString(),
                            role->currentIndex() == 1 ? models::Role::Admin : models::Role::User));
 }
@@ -259,7 +539,7 @@ void AdminPanel::on_change_role() {
   }
 
   // The role the server last reported, not the word the Role column happens to
-  // be showing. Same reason the restrictions dialog reads from here.
+  // be showing. Same reason the pane reads from here.
   const auto account = accounts_.constFind(user_id);
   if (account == accounts_.constEnd()) {
     return;
@@ -268,7 +548,7 @@ void AdminPanel::on_change_role() {
   protocol::UpdateUser change;
   change.user_id = user_id.toStdString();
   change.role = account->role == models::Role::Admin ? models::Role::User : models::Role::Admin;
-  (void)send(session_.update_user(change));
+  act(session_.update_user(change));
 }
 
 void AdminPanel::on_reset_password() {
@@ -288,7 +568,7 @@ void AdminPanel::on_reset_password() {
   protocol::UpdateUser change;
   change.user_id = user_id.toStdString();
   change.password = password.toStdString();
-  (void)send(session_.update_user(change));
+  act(session_.update_user(change));
 }
 
 QString AdminPanel::label_for(const QString& user_id) const {
@@ -383,82 +663,131 @@ void AdminPanel::on_send_notice() {
   // reaches the status line through MainWindow::apply_notice_sent - and a
   // dialog that congratulated itself on having sent a message would be
   // claiming something it cannot know yet.
-  (void)send(session_.send_notice(user_id.toStdString(), text->toPlainText().toStdString()));
+  act(session_.send_notice(user_id.toStdString(), text->toPlainText().toStdString()));
 }
 
-void AdminPanel::on_restrict_user() {
-  const QString user_id = selected_id(users_);
-  if (user_id.isEmpty()) {
-    return;
-  }
-
-  // The four flags as the server sent them.
-  //
-  // This used to take the text of column 5 and split it on spaces, looking for
-  // the words models::describe writes. Two things were wrong with that and
-  // both are quiet. The column number assumes nothing has shifted, and a value
-  // carrying a tab shifted every column along - so the Restricted column would
-  // be showing the Online one, and every box would open unchecked. And
-  // describe() is documented as the display form, so the day its punctuation
-  // changes the boxes open unchecked as well, with nothing failing to compile.
-  //
-  // Unchecked is the dangerous way to be wrong here, because the dialog sends
-  // all four boxes on OK: an administrator opening it to add one restriction
-  // would have silently lifted the three that were already there.
+void AdminPanel::toggle_flag(const QString& user_id, Flag flag) {
   const auto account = accounts_.constFind(user_id);
-  if (account == accounts_.constEnd()) {
+  if (user_id.isEmpty() || account == accounts_.constEnd()) {
     return;
   }
-  const QString username = account->username;
-  const models::Restrictions current = account->restrictions;
-
-  QDialog dialog(this);
-  dialog.setWindowTitle(QStringLiteral("Restrictions for %1").arg(username));
-  auto* form = new QFormLayout(&dialog);
-
-  form->addRow(new QLabel(QStringLiteral("These stay with the account until they are lifted, "
-                                         "across rooms and across sign ins."),
-                          &dialog));
-
-  auto* banned = new QCheckBox(QStringLiteral("Cannot sign in"), &dialog);
-  auto* muted = new QCheckBox(QStringLiteral("Cannot use the microphone"), &dialog);
-  auto* silenced = new QCheckBox(QStringLiteral("Cannot write in the chat"), &dialog);
-  auto* blocked = new QCheckBox(QStringLiteral("Cannot share their screen"), &dialog);
-  banned->setChecked(current.banned);
-  muted->setChecked(current.muted);
-  silenced->setChecked(current.silenced);
-  blocked->setChecked(current.screen_share_blocked);
-
-  form->addRow(banned);
-  form->addRow(muted);
-  form->addRow(silenced);
-  form->addRow(blocked);
-
-  auto* reason = new QLineEdit(&dialog);
-  reason->setPlaceholderText(QStringLiteral("Shown to %1").arg(username));
-  form->addRow(QStringLiteral("Reason"), reason);
-
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  form->addRow(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-
-  if (dialog.exec() != QDialog::Accepted) {
+  if (user_id == QString::fromStdString(session_.local_user().id)) {
     return;
   }
+  const QString name = account->display_name.isEmpty() ? account->username : account->display_name;
+  const models::Restrictions now = account->restrictions;
 
-  // Every box is sent, because this dialog is the one place all four are
-  // decided together and the administrator has just looked at each of them.
-  // The per participant shortcuts in the room send one flag at a time, which
-  // is the case where leaving the rest absent matters.
   protocol::RestrictUser change;
   change.user_id = user_id.toStdString();
-  change.banned = banned->isChecked();
-  change.muted = muted->isChecked();
-  change.silenced = silenced->isChecked();
-  change.screen_share_blocked = blocked->isChecked();
-  change.reason = reason->text().toStdString();
-  (void)send(session_.restrict_user(change));
+  switch (flag) {
+    case Flag::Banned: {
+      change.banned = !now.banned;
+      if (*change.banned) {
+        bool accepted = false;
+        const QString reason = QInputDialog::getText(
+            this, QStringLiteral("Ban %1").arg(name),
+            QStringLiteral("%1 is signed out now and cannot sign in again until the ban is "
+                           "lifted.\nReason, shown to them (optional)")
+                .arg(name),
+            QLineEdit::Normal, QString(), &accepted);
+        if (!accepted) {
+          return;
+        }
+        change.reason = reason.toStdString();
+      }
+      break;
+    }
+    case Flag::Muted:
+      change.muted = !now.muted;
+      break;
+    case Flag::Silenced:
+      change.silenced = !now.silenced;
+      break;
+    case Flag::ScreenBlocked:
+      change.screen_share_blocked = !now.screen_share_blocked;
+      break;
+  }
+  act(session_.restrict_user(change));
+}
+
+void AdminPanel::on_user_menu(const QPoint& where) {
+  // The row under the pointer, made the current one first. The slots this
+  // menu reaches read the selection, and the pane follows it: an
+  // administrator who right-clicks one account should be looking at that
+  // account's boxes when the menu closes.
+  const QModelIndex index = users_->indexAt(where);
+  if (!index.isValid()) {
+    return;
+  }
+  users_->selectRow(index.row());
+
+  const QString user_id = selected_id(users_);
+  const auto account = accounts_.constFind(user_id);
+  if (user_id.isEmpty() || account == accounts_.constEnd()) {
+    return;
+  }
+  // Nothing here applies to yourself. The server refuses every one of these
+  // about the administrator sending them (invalid_target), and a menu of
+  // actions that will all be refused is worse than no menu.
+  if (user_id == QString::fromStdString(session_.local_user().id)) {
+    return;
+  }
+  const QString name = account->display_name.isEmpty() ? account->username : account->display_name;
+  const models::Restrictions now = account->restrictions;
+
+  QMenu menu(this);
+  QAction* notice = menu.addAction(QStringLiteral("Message %1...").arg(name));
+  QAction* role = menu.addAction(account->role == models::Role::Admin
+                                     ? QStringLiteral("Make %1 a user").arg(name)
+                                     : QStringLiteral("Make %1 an administrator").arg(name));
+  QAction* password = menu.addAction(QStringLiteral("Reset the password of %1...").arg(name));
+
+  // The four restrictions, one flag each, worded as what they do to the person
+  // rather than as the flag's name. The ban is the one that asks a question
+  // first: it is the one that locks somebody out, and a reason is worth more
+  // to somebody who cannot sign in to ask for one.
+  menu.addSeparator();
+  QAction* ban = menu.addAction(now.banned ? QStringLiteral("Lift the ban on %1").arg(name)
+                                           : QStringLiteral("Ban %1...").arg(name));
+  QAction* microphone =
+      menu.addAction(now.muted ? QStringLiteral("Let %1 use the microphone again").arg(name)
+                               : QStringLiteral("Stop %1 from using the microphone").arg(name));
+  QAction* chat =
+      menu.addAction(now.silenced ? QStringLiteral("Let %1 use the chat again").arg(name)
+                                  : QStringLiteral("Silence %1 in the chat").arg(name));
+  QAction* screen = menu.addAction(
+      now.screen_share_blocked ? QStringLiteral("Let %1 share their screen again").arg(name)
+                               : QStringLiteral("Stop %1 from sharing their screen").arg(name));
+  // All four together, with a reason: the boxes on the pane.
+  QAction* all = menu.addAction(QStringLiteral("Edit the restrictions"));
+
+  menu.addSeparator();
+  QAction* remove = menu.addAction(QStringLiteral("Delete %1...").arg(name));
+
+  const QAction* chosen = menu.exec(users_->viewport()->mapToGlobal(where));
+  if (chosen == nullptr) {
+    return;
+  }
+
+  if (chosen == notice) {
+    on_send_notice();
+  } else if (chosen == role) {
+    on_change_role();
+  } else if (chosen == password) {
+    on_reset_password();
+  } else if (chosen == all) {
+    pane_->focus_restrictions();
+  } else if (chosen == remove) {
+    on_delete_user();
+  } else if (chosen == ban) {
+    toggle_flag(user_id, Flag::Banned);
+  } else if (chosen == microphone) {
+    toggle_flag(user_id, Flag::Muted);
+  } else if (chosen == chat) {
+    toggle_flag(user_id, Flag::Silenced);
+  } else if (chosen == screen) {
+    toggle_flag(user_id, Flag::ScreenBlocked);
+  }
 }
 
 void AdminPanel::on_delete_user() {
@@ -467,7 +796,7 @@ void AdminPanel::on_delete_user() {
     return;
   }
 
-  // From the same place the other two take it, so that the name in the
+  // From the same place the other actions take it, so that the name in the
   // question is the name of the account the request will actually delete and
   // not whatever the Username column is drawing in that row.
   const auto account = accounts_.constFind(user_id);
@@ -483,7 +812,7 @@ void AdminPanel::on_delete_user() {
                                 .arg(username)) != QMessageBox::Yes) {
     return;
   }
-  (void)send(session_.delete_user(user_id.toStdString()));
+  act(session_.delete_user(user_id.toStdString()));
 }
 
 void AdminPanel::on_create_room() {

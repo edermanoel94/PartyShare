@@ -75,6 +75,7 @@
 #include "webrtc/impaired_socket_factory.hpp"
 #include "webrtc/screen_audio_frame_processor.hpp"
 #include "webrtc/video_encoder_factory.hpp"
+#include "webrtc/voice_gate_processor.hpp"
 
 namespace dv::client::media {
 namespace {
@@ -180,6 +181,22 @@ class Engine {
     config.gain_controller1.enabled = false;
     config.gain_controller2.enabled = automatic_gain_control;
     audio_processing_->ApplyConfig(config);
+  }
+
+  /// Moves the voice gate's switch and level, now, for every session in the
+  /// process. Nothing in the fallback path: the gate went with the builder.
+  void set_voice_gate(bool on, VoiceGateLevel level) {
+    if (voice_gate_ != nullptr) {
+      voice_gate_->configure(on, level);
+    }
+  }
+
+  /// What the gate is doing, for the statistics. Nothing without a module.
+  [[nodiscard]] std::optional<VoiceGateProcessor::State> voice_gate_state() const {
+    if (voice_gate_ == nullptr) {
+      return std::nullopt;
+    }
+    return voice_gate_->state();
   }
 
   /// Declines the echo canceller the device module offers, so that AEC3 does
@@ -531,13 +548,26 @@ class Engine {
     // setting changed in the dialog would go into the file and change nothing
     // anybody could hear. ApplyConfig on the module itself is the documented
     // way to move these while audio is flowing, and it needs a handle.
-    audio_processing_ = webrtc::BuiltinAudioProcessingBuilder(processing).Build(environment);
+    //
+    // The voice gate goes in at the same time, as the module's capture
+    // post-processor: the one hook at the end of the chain, after the gain
+    // control and before the frame processor below. A pointer is kept because
+    // the module takes ownership and offers no way to ask for it back, and
+    // the switch and the level have to be movable during a call. See
+    // webrtc/voice_gate_processor.hpp.
+    auto voice_gate = std::make_unique<VoiceGateProcessor>();
+    VoiceGateProcessor* voice_gate_handle = voice_gate.get();
+    audio_processing_ = webrtc::BuiltinAudioProcessingBuilder(processing)
+                            .SetCapturePostProcessing(std::move(voice_gate))
+                            .Build(environment);
     if (audio_processing_ != nullptr) {
+      voice_gate_ = voice_gate_handle;
       dependencies.audio_processing_builder = webrtc::CustomAudioProcessing(audio_processing_);
     } else {
       // Nothing to hold on to, so fall back to the arrangement that was here
       // before: the module is built inside the factory and the switches are
-      // whatever the file said at startup.
+      // whatever the file said at startup. The gate went with the builder
+      // that failed, so nothing is gated either.
       dependencies.audio_processing_builder =
           std::make_unique<webrtc::BuiltinAudioProcessingBuilder>(processing);
     }
@@ -579,6 +609,11 @@ class Engine {
   /// The processing module, kept so that the three switches can be moved during
   /// a call. Null in the fallback path, where nothing can be moved.
   webrtc::scoped_refptr<webrtc::AudioProcessing> audio_processing_;
+  /// The gate at the end of the module's capture chain. Owned by the module,
+  /// which outlives every use of this; the pointer is kept so that the switch
+  /// and the level can be moved during a call, and read back. Null in the
+  /// fallback path, where the gate was lost with the builder.
+  VoiceGateProcessor* voice_gate_ = nullptr;
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> audio_device_;
   std::atomic<bool> adaptive_audio_{false};
 
@@ -825,6 +860,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     // one built therefore carries the newest answer, not an older one.
     engine.set_audio_processing(options.echo_cancellation, options.noise_suppression,
                                 options.automatic_gain_control, options.noise_suppression_level);
+    engine.set_voice_gate(options.voice_gate, options.voice_gate_level);
     // The same round trip, for the same reason. The mixer is process wide and
     // survives every session, so the level a share goes out at has to be seeded
     // from the options the newest session was built with rather than left at
@@ -1071,6 +1107,10 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
                             NoiseSuppressionLevel noise_suppression_level) override {
     Engine::instance().set_audio_processing(echo_cancellation, noise_suppression,
                                             automatic_gain_control, noise_suppression_level);
+  }
+
+  void set_voice_gate(bool on, VoiceGateLevel level) override {
+    Engine::instance().set_voice_gate(on, level);
   }
 
   Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {
@@ -1434,6 +1474,16 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       collected.legacy_gain_control_active = config->gain_controller1.enabled;
       collected.noise_suppression_active = config->noise_suppression.enabled;
       collected.noise_suppression_level = Engine::from_webrtc(config->noise_suppression.level);
+    }
+
+    // The gate is read back from the processor itself, for the same reason:
+    // what is reported is what runs on the capture, not what was asked for.
+    if (const auto gate = Engine::instance().voice_gate_state()) {
+      collected.voice_gate_active = gate->enabled;
+      collected.voice_gate_level = gate->level;
+      collected.voice_gate_open = gate->open;
+      collected.voice_gate_blocks = gate->blocks;
+      collected.voice_gate_closed_blocks = gate->closed_blocks;
     }
 
     // Round trip time is only known from the other end's receiver reports.

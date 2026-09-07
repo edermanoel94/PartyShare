@@ -450,6 +450,15 @@ class CallSession {
   [[nodiscard]] bool noise_suppression() const;
   [[nodiscard]] media::NoiseSuppressionLevel noise_suppression_level() const;
   [[nodiscard]] bool automatic_gain_control() const;
+
+  /// Whether the microphone is silenced between sentences, and how sure the
+  /// detector has to be before the gate opens. Applied at once, during a call
+  /// if there is one, and remembered for the sessions that come after it, like
+  /// the three switches above. The level is kept while the gate is off, so
+  /// that turning it back on returns to it. See docs/16-audio-plan.md, step 13.
+  [[nodiscard]] Result<std::monostate> set_voice_gate(bool on, media::VoiceGateLevel level);
+  [[nodiscard]] bool voice_gate() const;
+  [[nodiscard]] media::VoiceGateLevel voice_gate_level() const;
   /// Who is sharing right now, empty when nobody is.
   [[nodiscard]] std::string screen_sharer() const;
 

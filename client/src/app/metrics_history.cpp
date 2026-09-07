@@ -3,16 +3,32 @@
 #include <cmath>
 
 namespace dv::client::app {
+namespace {
+
+/// The megabyte the task managers use, which is the one this figure will be
+/// read beside: 1024 squared, whatever the prefix ought to mean.
+constexpr double kBytesPerMegabyte = 1024.0 * 1024.0;
+
+}  // namespace
 
 MetricsHistory::MetricsHistory(double window_ms) : window_ms_(window_ms > 0.0 ? window_ms : 1.0) {}
 
 void MetricsHistory::observe(const media::AudioStats& stats, double at_ms) {
+  observe(stats, std::nullopt, at_ms);
+}
+
+void MetricsHistory::observe(const media::AudioStats& stats,
+                             const std::optional<ProcessUsage>& usage, double at_ms) {
   MetricsSample sample;
   sample.at_ms = at_ms;
   sample.round_trip_time_ms = stats.round_trip_time_ms;
   sample.jitter_ms = stats.jitter_ms;
   sample.send_kbps = stats.send_bitrate_kbps;
   sample.receive_kbps = stats.receive_bitrate_kbps;
+  if (usage) {
+    sample.cpu_percent = usage->cpu_percent;
+    sample.memory_mb = static_cast<double>(usage->resident_bytes) / kBytesPerMegabyte;
+  }
 
   // Counters that went backwards are a second call in the same window, not a
   // negative loss. WebRTC starts them again from zero for a new peer

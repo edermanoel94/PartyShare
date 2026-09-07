@@ -12,14 +12,11 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
-class QLineEdit;
 class QPushButton;
 class QSlider;
 class QSpinBox;
 
 namespace dv::ui {
-
-class UpdateChecker;
 
 /// Devices, monitor and bitrate, in one place.
 ///
@@ -29,15 +26,12 @@ class UpdateChecker;
 ///
 /// Changes apply as they are made rather than on closing: a microphone that
 /// only takes effect after a dialog is dismissed cannot be tested by speaking
-/// into it.
-///
-/// The server address is the one exception, and it is not one of degree. Every
-/// other setting here describes how this machine behaves, and can be changed
-/// under a running call without the call noticing. The address says which
-/// server the room and everybody in it live on, so applying it at once would
-/// not be a setting taking effect, it would be hanging up. It is adopted at the
-/// next sign-in instead, and the row says so rather than leaving somebody to
-/// wonder whether it took.
+/// into it. Every setting here describes how this machine behaves, and can be
+/// changed under a running call without the call noticing. The server address
+/// is the one that could not - it says which server the room and everybody in
+/// it live on, so applying it at once would have been hanging up - and it is
+/// not here: the sign-in screen asks for it, at the one moment it can be
+/// adopted, and tests it.
 ///
 /// Keeping them is a separate act, and that is what the Save button is for.
 /// The two used to be one - every change went straight into this user's
@@ -58,11 +52,7 @@ class SettingsDialog : public QDialog {
   Q_OBJECT
 
  public:
-  /// `updates` is the process's one release check, which this dialog owns the
-  /// switch for. It has to outlive the dialog, which it does: MainWindow holds
-  /// the same reference and this is opened from it.
-  SettingsDialog(client::app::CallSession& session, UpdateChecker& updates,
-                 QWidget* parent = nullptr);
+  explicit SettingsDialog(client::app::CallSession& session, QWidget* parent = nullptr);
 
  protected:
   /// The one door out of a QDialog: the Close button, the window's own close
@@ -71,7 +61,6 @@ class SettingsDialog : public QDialog {
   void done(int result) override;
 
  private slots:
-  void on_signaling_url_changed();
   void on_input_changed(int index);
   void on_output_changed(int index);
   void on_bitrate_changed();
@@ -79,9 +68,9 @@ class SettingsDialog : public QDialog {
   void on_quality_changed();
   void on_screen_audio_changed();
   void on_noise_suppression_changed();
+  void on_voice_gate_changed();
   void on_screen_volume_changed(int percent);
   void on_room_sounds_changed(bool on);
-  void on_update_checks_changed(bool on);
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -173,26 +162,7 @@ class SettingsDialog : public QDialog {
   /// Makes the storage line pick up a change to its `error` property.
   void restyle();
 
-  /// Says what the address on the row will and will not do, and why one was
-  /// refused. Never empty: a row with nothing under it reads as a setting that
-  /// behaves like the others on this page, and this one does not.
-  void show_signaling_hint(const QString& refusal = {});
-
   client::app::CallSession& session_;
-  UpdateChecker& updates_;
-
-  /// Where the next sign-in connects. A line edit and not a box of choices,
-  /// because the address of a server nobody has connected to yet cannot be
-  /// offered as one.
-  QLineEdit* signaling_url_ = nullptr;
-  QLabel* signaling_hint_ = nullptr;
-  /// Whether the client may ask GitHub about newer releases.
-  ///
-  /// In the connection group and not beside the room chime, though both are
-  /// `[ui]` settings, because the question somebody is answering here is not
-  /// "do I want to be told" but "may this program talk to the internet on its
-  /// own" - which is the same question the server address above it asks.
-  QCheckBox* update_checks_ = nullptr;
 
   QComboBox* input_ = nullptr;
   QComboBox* output_ = nullptr;
@@ -205,6 +175,11 @@ class SettingsDialog : public QDialog {
   /// text editor and a restart, and since docs/16-audio-plan.md step 5 the
   /// same box holds how hard it bites: off, then the four levels.
   QComboBox* noise_suppression_ = nullptr;
+  /// Whether the microphone is silenced between sentences, and how sure the
+  /// detector has to be before it opens: off, then the four levels, the same
+  /// shape as the suppressor's box above it and holding its two keys the same
+  /// way. See docs/16-audio-plan.md, step 13.
+  QComboBox* voice_gate_ = nullptr;
   /// Under the microphone box, and empty unless the device delivers less than
   /// a voice needs: a headset in communications mode captures 16 kHz, and
   /// nothing downstream can put back what it never captured. Only says

@@ -93,10 +93,12 @@ if(TARGET dv::client_core)
     unit/test_network_quality.cpp
     unit/test_network_impairment.cpp
     unit/test_metrics_history.cpp
+    unit/test_process_usage.cpp
     unit/test_smoothing.cpp
     unit/test_chat_links.cpp
     unit/test_server_address.cpp
     unit/test_noise_suppression_level.cpp
+    unit/test_voice_gate.cpp
     unit/test_microphone_hint.cpp
   )
   list(APPEND dv_integration_sources
@@ -198,6 +200,7 @@ if(DV_BUILD_CLIENT_MEDIA)
     integration/test_media_end_to_end.cpp
     integration/test_network_impairment.cpp
     integration/test_screen_capture.cpp
+    integration/test_voice_gate_processor.cpp
   )
 
   target_link_libraries(dv_media_tests PRIVATE

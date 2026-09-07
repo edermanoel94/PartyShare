@@ -78,39 +78,15 @@ UpdateChecker::UpdateChecker(QObject* parent) : QObject(parent), timer_(new QTim
   connect(timer_, &QTimer::timeout, this, &UpdateChecker::check);
 }
 
-void UpdateChecker::set_enabled(bool on) {
-  if (on == enabled_) {
-    return;
-  }
-  enabled_ = on;
-
-  if (!on) {
-    timer_->stop();
-    // A request already on its way is not cancelled, because cancelling it
-    // achieves nothing this does not: check() and handle() both refuse to act
-    // while this is off, so the answer arrives, is dropped, and the reply
-    // deletes itself. Aborting would be one more failure path for the same
-    // outcome.
-    DV_LOG_INFO("Update check: off");
-    return;
-  }
-
+void UpdateChecker::start() {
   timer_->start();
   // The first one on its own short delay rather than on the timer's, which
-  // would not come round for six hours. At startup that is because the check
-  // worth having is the one that happens while somebody is looking at the
-  // window they just opened; from the settings dialog it is because somebody
-  // who has just ticked the box is asking the question.
+  // would not come round for six hours: the check worth having is the one
+  // that happens while somebody is looking at the window they just opened.
   QTimer::singleShot(kFirstCheckDelayMs, this, &UpdateChecker::check);
 }
 
 void UpdateChecker::check() {
-  // The delayed first check above outlives a box being unticked in the two
-  // seconds after it was ticked, so this is not redundant with set_enabled.
-  if (!enabled_) {
-    return;
-  }
-
   QNetworkRequest request{QUrl(QLatin1String(kLatestReleaseEndpoint))};
   // The two headers GitHub's REST API asks for, and one it insists on: a
   // request with no User-Agent is answered with 403 whoever sends it.
@@ -134,13 +110,6 @@ void UpdateChecker::handle(QNetworkReply* reply) {
   // Whatever happens below, this reply is finished with. deleteLater rather
   // than delete, because this runs inside the reply's own finished signal.
   reply->deleteLater();
-
-  // Switched off while this was in flight. Reading it would be harmless and
-  // acting on it would not: a notice appearing after somebody turned the
-  // feature off is the one thing the switch promises will not happen.
-  if (!enabled_) {
-    return;
-  }
 
   if (reply->error() != QNetworkReply::NoError) {
     // Not a warning. A client on a network with no way out would raise one of

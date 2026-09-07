@@ -352,10 +352,18 @@ jobs:
         with:
           arch: x64
 
+      # Where vcpkg keeps what it built is not the same place on every
+      # platform: ~/.cache/vcpkg/archives on Linux and macOS, and
+      # %LOCALAPPDATA%\vcpkg\archives on Windows. This step cached the first
+      # path on all three, so on Windows it saved a directory vcpkg never
+      # wrote to and restored nothing from it: "Restored 0 package(s)" on
+      # every run, then all thirteen ports built from source, and a Configure
+      # step of ten minutes beside the five seconds the other two spend in
+      # it. Entry 19 of docs/15-postmortems.md.
       - name: Restore the vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vcpkg/archives
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/vcpkg/archives' || '~/.cache/vcpkg/archives' }}
           key: vcpkg-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-${{ matrix.os }}-
 

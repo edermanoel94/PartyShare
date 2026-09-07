@@ -201,9 +201,9 @@ TEST_F(SignalingClientTest, RejectsAUrlThatIsNotWebSocket) {
 }
 
 TEST_F(SignalingClientTest, AnAddressChangedBeforeConnectingIsTheOneUsed) {
-  // The settings dialog is reachable from the login screen, and this is what
-  // it is reachable for: a client whose configured address is wrong has to be
-  // able to be pointed somewhere else without the program being restarted.
+  // The login screen has a field for the address, and this is what the field
+  // is for: a client whose configured address is wrong has to be able to be
+  // pointed somewhere else without the program being restarted.
   Recorder& recorder = new_recorder();
   SignalingClient client(SignalingClient::Options{"ws://127.0.0.1:1"});
   recorder.attach(client);
@@ -219,8 +219,10 @@ TEST_F(SignalingClientTest, AnAddressChangedBeforeConnectingIsTheOneUsed) {
 TEST_F(SignalingClientTest, AnAddressChangedMidCallIsNotAdoptedByAReconnection) {
   // The half that matters. A socket that drops has to come back on the server
   // the call was placed on: the room, and everybody in it, exist only there.
-  // Without this, changing the address in the settings dialog would move a
-  // running call at the first hiccup, to a server that has never heard of it.
+  // Without this, an address changed under a running call would move the call
+  // at the first hiccup, to a server that has never heard of it. No screen
+  // changes it mid-call any more - the row left Settings for the login form -
+  // and the contract is kept for the next thing that does.
   Recorder& recorder = new_recorder();
   SignalingClient::Options options;
   options.url = url();
@@ -232,7 +234,7 @@ TEST_F(SignalingClientTest, AnAddressChangedMidCallIsNotAdoptedByAReconnection) 
   ASSERT_TRUE(client.connect().ok());
   ASSERT_TRUE(recorder.wait_for_state(SignalingClient::State::Connected, kTimeout));
 
-  // Somebody opens settings during the call and types a different server.
+  // A different server is set while the call is up.
   client.set_url("ws://127.0.0.1:1");
   EXPECT_EQ(client.url(), "ws://127.0.0.1:1");
   EXPECT_TRUE(client.is_connected()) << "changing the address must not touch the open socket";

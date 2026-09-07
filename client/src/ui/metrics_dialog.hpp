@@ -5,6 +5,7 @@
 
 #include "app/call_session.hpp"
 #include "app/metrics_history.hpp"
+#include "app/process_usage.hpp"
 
 class QLabel;
 class QTimer;
@@ -25,6 +26,13 @@ class MetricsChart;
 /// judgement with its working shown - the word comes from three measurements,
 /// and when it turns amber the only useful question is which of the three did
 /// it, which one word cannot answer.
+///
+/// Under the network, what the program itself is costing the computer: its
+/// share of the processors and the memory it has resident, the two numbers a
+/// task manager would show for it, charted on the same clock as the call so
+/// that a stutter can be read against a spike in either. Not part of the
+/// verdict: a call can be perfect on a busy machine and broken on an idle
+/// one, and the status bar's one word is about the network.
 ///
 /// It reads the session directly rather than waiting for the metrics callback.
 /// That callback fires every five seconds, which is the right cadence for a
@@ -60,6 +68,8 @@ class MetricsDialog : public QDialog {
 
   client::app::CallSession& session_;
   client::app::MetricsHistory history_;
+  /// What this process costs, read on the same poll as the call's numbers.
+  client::app::ProcessUsageMeter meter_;
 
   /// One clock for the whole window. Four charts each reading their own would
   /// put the same reading at four slightly different places on four axes that
@@ -78,6 +88,11 @@ class MetricsDialog : public QDialog {
   /// audio the jitter buffer had to invent, with the buffer's own depth beside
   /// it. docs/16-audio-plan.md, step 9.
   MetricsChart* concealment_ = nullptr;
+  /// This process's share of every core together, and its resident memory.
+  /// Neither has thresholds: there is no figure at which either becomes a
+  /// problem for the call, only figures that explain one.
+  MetricsChart* cpu_ = nullptr;
+  MetricsChart* memory_ = nullptr;
 
   QLabel* verdict_ = nullptr;
   /// The verdict on screen, so the label is only restyled when it changes.

@@ -1,13 +1,19 @@
 #pragma once
 
+#include <cstdint>
+
 #include <QHash>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
 
 #include "app/call_session.hpp"
+#include "ui/account_pane.hpp"
 
+class QEvent;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QTableWidget;
 class QTabWidget;
@@ -19,6 +25,15 @@ namespace dv::ui {
 /// A page of its own rather than a dialog, because managing a dozen accounts
 /// is not something anyone does in one glance and a modal window would trap
 /// them there while a call is going on.
+///
+/// The accounts tab is laid out as a console: a filter line over a table in
+/// the platform's fixed-pitch face, rows that say their state with a dot, a
+/// coloured role and chips rather than with words, and beside the table a
+/// pane showing the account that is picked - its four restrictions as boxes,
+/// the actions that still need a dialog, and the last audit lines about it.
+/// The keys work from the table and are written under it. What this replaced
+/// was a grid of six columns, six buttons and a dialog per action, none of
+/// which could be read at a glance or driven without the mouse.
 ///
 /// Everything here is a request to the server and an answer that arrives
 /// later, never a local edit: this widget holds no state that the server does
@@ -78,14 +93,35 @@ class AdminPanel : public QWidget {
   void on_send_notice();
   void on_change_role();
   void on_reset_password();
-  void on_restrict_user();
   void on_delete_user();
   void on_create_room();
   void on_close_room();
   void on_tab_changed(int index);
+  /// The right-click menu on an account: everything the pane does, and each
+  /// restriction on its own, for the row under the pointer.
+  void on_user_menu(const QPoint& where);
+  /// Another row is current: the pane follows.
+  void on_account_selected();
+  /// The filter line changed: rows that do not match are hidden, not removed,
+  /// so the selection and the identifiers stay where they are.
+  void on_filter_changed(const QString& text);
+  /// Apply was pressed on the pane.
+  void on_restrict(const protocol::RestrictUser& change);
 
-  // Not redundant: the section above is `private slots:`, which Qt's moc
-  // needs as its own specifier, and these members are not slots.
+ protected:
+  /// The keys of the console, watched on the two widgets they belong to.
+  ///
+  /// In the table, a bare letter is a command: `/` goes to the filter, Return
+  /// and `r` to the restriction boxes, `m` messages, `b` bans, `p` resets the
+  /// password, `d` deletes, `n` creates. In the filter, Escape clears it and
+  /// hands the keyboard back to the table, which is the way out of a search
+  /// everywhere else. Watched rather than bound as QShortcuts: a shortcut
+  /// only fires while the window is the active one, and these are meant to
+  /// work wherever the key press itself is delivered.
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
+  // Not redundant: the section above is `protected:`, for an override, and
+  // these are the widget's own members.
   // NOLINTNEXTLINE(readability-redundant-access-specifiers)
  private:
   QWidget* build_users_tab();
@@ -94,13 +130,13 @@ class AdminPanel : public QWidget {
 
   /// What the server last said about one account, as it said it.
   ///
-  /// The role and the restrictions are here because the two dialogs that
-  /// change them need to know what they are now, and the only other place to
-  /// find that is the table - where they exist as the sentence
-  /// models::describe wrote and the word models::to_string wrote, in cells
-  /// whose column number depends on nothing having shifted. Reading a
-  /// rendering back as though it were protocol is a decision that fails
-  /// quietly: the boxes open wrong and the dialog sends all four.
+  /// The role and the restrictions are here because the pane and the menu
+  /// need to know what they are now, and the only other place to find that
+  /// is the table - where they exist as chips a delegate drew and a word in
+  /// small capitals, in cells whose column number depends on nothing having
+  /// shifted. Reading a rendering back as though it were protocol is a
+  /// decision that fails quietly: the boxes open wrong and Apply sends all
+  /// four.
   ///
   /// The username rides along so that the dialogs can title themselves without
   /// reaching into a cell either.
@@ -111,29 +147,63 @@ class AdminPanel : public QWidget {
     /// models::user_label, which is what turns the two into one string.
     QString display_name;
     models::Role role = models::Role::User;
+    bool online = false;
+    QString created;
     models::Restrictions restrictions;
   };
+
+  /// One of the four, for the menu entries and the `b` key that turn a single
+  /// flag on or off.
+  enum class Flag : std::uint8_t { Banned, Muted, Silenced, ScreenBlocked };
+
+  /// Rebuilds the account table from the rows of `apply_users`, keeping the
+  /// selection by identifier. The table's own fill rather than ui::fill,
+  /// because its cells carry what the delegate draws.
+  void fill_accounts(const QStringList& rows);
+
+  /// Shows the current row in the pane, or nothing when there is none.
+  void refresh_pane();
+
+  /// The pane's view of one account.
+  [[nodiscard]] AccountView view_of(const QString& user_id, const Account& account) const;
+
+  /// The last few audit lines whose target is `user_id`, newest first, one
+  /// line each.
+  [[nodiscard]] QStringList audit_tail(const QString& user_id) const;
+
+  /// Turns one restriction the other way for `user_id`, the other three left
+  /// absent so that this cannot undo what somebody else applied. See
+  /// protocol::RestrictUser for why absent and false are different requests.
+  /// Applying a ban asks for a reason first, because it is the one that locks
+  /// somebody out.
+  void toggle_flag(const QString& user_id, Flag flag);
 
   /// Sends `request`, turning a local failure into the `failed` signal.
   /// Answers whether it went out, so a caller making several requests can stop
   /// at the first failure instead of reporting the same dead socket again.
   bool send(const Result<std::monostate>& request);
 
+  /// Sends an action about an account, and then asks for the audit log, so
+  /// that the pane's tail shows the line the action just wrote. The two go
+  /// down the same socket in order, so the answer to the second is the log
+  /// after the first.
+  void act(const Result<std::monostate>& request);
+
   client::app::CallSession& session_;
 
   /// The accounts of the last `apply_users`, by user id. Cleared and rebuilt
   /// with each one, so an account that has gone leaves with it.
   QHash<QString, Account> accounts_;
+  /// The rows of the last `apply_audit`, kept for the pane's tail.
+  QStringList audit_rows_;
 
   QTabWidget* tabs_ = nullptr;
 
+  QLineEdit* filter_ = nullptr;
+  QLabel* filter_count_ = nullptr;
   QTableWidget* users_ = nullptr;
+  AccountPane* pane_ = nullptr;
   QPushButton* create_user_ = nullptr;
-  QPushButton* send_notice_ = nullptr;
-  QPushButton* change_role_ = nullptr;
-  QPushButton* reset_password_ = nullptr;
-  QPushButton* restrict_user_ = nullptr;
-  QPushButton* delete_user_ = nullptr;
 
   QTableWidget* rooms_ = nullptr;
   QPushButton* create_room_ = nullptr;

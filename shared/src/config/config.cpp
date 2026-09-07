@@ -210,7 +210,9 @@ std::vector<std::string> split_list(std::string_view text) {
 }
 
 /// The four steps the noise suppressor offers, spelled the way
-/// `audio.noise_suppression_level` spells them.
+/// `audio.noise_suppression_level` spells them. The voice gate's level,
+/// `audio.voice_gate_level`, uses the same four words for the detector's four
+/// modes, and is checked with this.
 bool is_noise_suppression_level(std::string_view text) {
   return text == "low" || text == "moderate" || text == "high" || text == "very_high";
 }
@@ -308,6 +310,10 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
           is_noise_suppression_level(value) && as_text(config.audio.noise_suppression_level);
     } else if (key == "automatic_gain_control") {
       understood = as_bool(config.audio.automatic_gain_control);
+    } else if (key == "voice_gate") {
+      understood = as_bool(config.audio.voice_gate);
+    } else if (key == "voice_gate_level") {
+      understood = is_noise_suppression_level(value) && as_text(config.audio.voice_gate_level);
     } else if (key == "input_device") {
       understood = as_text(config.audio.input_device);
     } else if (key == "output_device") {
@@ -662,6 +668,8 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
       read_field(audio, "noise_suppression", base.audio.noise_suppression);
       read_field(audio, "noise_suppression_level", base.audio.noise_suppression_level);
       read_field(audio, "automatic_gain_control", base.audio.automatic_gain_control);
+      read_field(audio, "voice_gate", base.audio.voice_gate);
+      read_field(audio, "voice_gate_level", base.audio.voice_gate_level);
       read_field(audio, "input_device", base.audio.input_device);
       read_field(audio, "output_device", base.audio.output_device);
     }
@@ -834,6 +842,8 @@ void apply_environment(Config& config) {
   apply_env_bool("DV_AUDIO_NOISE_SUPPRESSION", config.audio.noise_suppression);
   apply_env_string("DV_AUDIO_NOISE_SUPPRESSION_LEVEL", config.audio.noise_suppression_level);
   apply_env_bool("DV_AUDIO_AUTOMATIC_GAIN_CONTROL", config.audio.automatic_gain_control);
+  apply_env_bool("DV_AUDIO_VOICE_GATE", config.audio.voice_gate);
+  apply_env_string("DV_AUDIO_VOICE_GATE_LEVEL", config.audio.voice_gate_level);
   apply_env_string("DV_AUDIO_INPUT_DEVICE", config.audio.input_device);
   apply_env_string("DV_AUDIO_OUTPUT_DEVICE", config.audio.output_device);
 
@@ -1035,6 +1045,9 @@ std::optional<Error> validate(const Config& config) {
     return invalid_value("audio.noise_suppression_level",
                          "must be low, moderate, high or very_high");
   }
+  if (!is_noise_suppression_level(config.audio.voice_gate_level)) {
+    return invalid_value("audio.voice_gate_level", "must be low, moderate, high or very_high");
+  }
   if (config.screen_audio.mode != "none" && config.screen_audio.mode != "system" &&
       config.screen_audio.mode != "process") {
     return invalid_value("screen_audio.mode", "must be none, system or process");
@@ -1119,6 +1132,8 @@ std::string to_json(const Config& config) {
                        {"noise_suppression", config.audio.noise_suppression},
                        {"noise_suppression_level", config.audio.noise_suppression_level},
                        {"automatic_gain_control", config.audio.automatic_gain_control},
+                       {"voice_gate", config.audio.voice_gate},
+                       {"voice_gate_level", config.audio.voice_gate_level},
                        {"input_device", config.audio.input_device},
                        {"output_device", config.audio.output_device}}},
                      {"screen_audio",
@@ -1140,9 +1155,7 @@ std::string to_json(const Config& config) {
                       {{"level", config.logging.level},
                        {"file_path", config.logging.file_path},
                        {"log_to_console", config.logging.log_to_console}}},
-                     {"ui",
-                      {{"room_sounds", config.ui.room_sounds},
-                       {"check_for_updates", config.ui.check_for_updates}}},
+                     {"ui", {{"room_sounds", config.ui.room_sounds}}},
                      {"server",
                       {{"bind_address", config.server.bind_address},
                        {"port", config.server.port},

@@ -42,13 +42,25 @@ else()
   set(dv_sound_sources src/ui/sound_stub.cpp)
 endif()
 
+# What this process costs the machine, for the metrics window. Reading it is
+# a platform API on every platform; the arithmetic over two readings is not.
+# See client/src/app/process_usage.hpp.
+if(WIN32)
+  set(dv_process_usage_sources src/app/process_usage_windows.cpp)
+else()
+  set(dv_process_usage_sources src/app/process_usage_posix.cpp)
+endif()
+
 add_library(dv_client_core STATIC
   ${dv_loopback_sources}
+  ${dv_process_usage_sources}
   src/audio/audio_sources.hpp
   src/audio/block_pacer.hpp
   src/audio/loopback_capturer.hpp
   src/audio/screen_audio_mixer.cpp
   src/audio/screen_audio_mixer.hpp
+  src/audio/voice_gate.cpp
+  src/audio/voice_gate.hpp
   src/app/call_session.cpp
   src/app/call_session.hpp
   src/app/chat_links.cpp
@@ -56,6 +68,8 @@ add_library(dv_client_core STATIC
   src/app/metrics_history.cpp
   src/app/metrics_history.hpp
   src/app/network_quality.hpp
+  src/app/process_usage.cpp
+  src/app/process_usage.hpp
   src/app/server_address.cpp
   src/app/server_address.hpp
   src/app/smoothing.hpp
@@ -119,6 +133,8 @@ if(DV_BUILD_CLIENT_MEDIA)
     src/webrtc/libwebrtc_media_session.cpp
     src/webrtc/libwebrtc_screen_capturer.cpp
     src/webrtc/screen_audio_frame_processor.hpp
+    src/webrtc/voice_gate_processor.cpp
+    src/webrtc/voice_gate_processor.hpp
   )
 
   target_include_directories(dv_client_media PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -234,6 +250,10 @@ qt_add_executable(dv_client
   ${dv_client_resources}
   ${dv_sound_sources}
   src/main.cpp
+  src/ui/account_delegate.cpp
+  src/ui/account_delegate.hpp
+  src/ui/account_pane.cpp
+  src/ui/account_pane.hpp
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
   src/ui/chat_view.cpp
@@ -242,6 +262,8 @@ qt_add_executable(dv_client
   src/ui/chimes.hpp
   src/ui/elided_label.cpp
   src/ui/elided_label.hpp
+  src/ui/emoji_picker.cpp
+  src/ui/emoji_picker.hpp
   src/ui/main_window.cpp
   src/ui/main_window.hpp
   src/ui/metrics_chart.cpp

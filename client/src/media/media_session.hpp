@@ -82,6 +82,40 @@ enum class NoiseSuppressionLevel : std::uint8_t { Low, Moderate, High, VeryHigh 
   return std::nullopt;
 }
 
+/// How sure the voice gate's detector has to be before the gate opens, in the
+/// four modes libwebrtc's detector offers, 0 to 3. Higher is stricter: it calls
+/// fewer blocks a voice, and misses more of the quiet ones. The same four
+/// words as the suppressor's level, and a type of its own so that the two
+/// cannot be handed to each other. See docs/16-audio-plan.md, step 13.
+enum class VoiceGateLevel : std::uint8_t { Low, Moderate, High, VeryHigh };
+
+/// The spelling `audio.voice_gate_level` uses for each level, and back, on the
+/// same terms as the suppressor's.
+[[nodiscard]] constexpr std::string_view to_string(VoiceGateLevel level) noexcept {
+  switch (level) {
+    case VoiceGateLevel::Low:
+      return "low";
+    case VoiceGateLevel::Moderate:
+      return "moderate";
+    case VoiceGateLevel::High:
+      return "high";
+    case VoiceGateLevel::VeryHigh:
+      return "very_high";
+  }
+  return "moderate";
+}
+
+[[nodiscard]] constexpr std::optional<VoiceGateLevel> parse_voice_gate_level(
+    std::string_view text) noexcept {
+  for (const VoiceGateLevel level : {VoiceGateLevel::Low, VoiceGateLevel::Moderate,
+                                     VoiceGateLevel::High, VoiceGateLevel::VeryHigh}) {
+    if (text == to_string(level)) {
+      return level;
+    }
+  }
+  return std::nullopt;
+}
+
 /// What section 22 of SPEC.md asks to be measured, read from the WebRTC stats.
 struct AudioStats {
   double round_trip_time_ms = 0;
@@ -154,6 +188,16 @@ struct AudioStats {
   /// hard, since docs/16-audio-plan.md step 5 made the level a setting.
   bool noise_suppression_active = false;
   NoiseSuppressionLevel noise_suppression_level = NoiseSuppressionLevel::High;
+  /// The voice gate, read back from the processor at the end of the same
+  /// chain: whether it is on, how sure its detector has to be, whether it is
+  /// letting the microphone through right now, and how many 10 ms blocks it
+  /// has judged and closed since the capture format was set. Zero blocks with
+  /// the gate on means it is not running. See docs/16-audio-plan.md, step 13.
+  bool voice_gate_active = false;
+  VoiceGateLevel voice_gate_level = VoiceGateLevel::Moderate;
+  bool voice_gate_open = true;
+  std::uint64_t voice_gate_blocks = 0;
+  std::uint64_t voice_gate_closed_blocks = 0;
 
   /// True while what the screen is playing is being mixed into this
   /// participant's audio. See `start_screen_audio`.
@@ -429,6 +473,15 @@ class MediaSession {
                                     bool automatic_gain_control,
                                     NoiseSuppressionLevel noise_suppression_level) = 0;
 
+  /// Switches the voice gate and sets its level while the call runs.
+  ///
+  /// The gate is a post-processor of the same module, so it is moved the same
+  /// way the three blocks above are: on the module, now, and not through the
+  /// options a session was built with. The level is kept while the gate is
+  /// off, so turning it back on returns to it. See docs/16-audio-plan.md,
+  /// step 13.
+  virtual void set_voice_gate(bool on, VoiceGateLevel level) = 0;
+
   /// The range the screen encoder may use, in kbps. Section 6 of SPEC.md puts
   /// it between 1.5 and 3 Mbps by default, and makes it configurable.
   ///
@@ -479,6 +532,10 @@ struct MediaSessionOptions {
   bool noise_suppression = true;
   NoiseSuppressionLevel noise_suppression_level = NoiseSuppressionLevel::High;
   bool automatic_gain_control = true;
+  /// Whether the microphone is silenced between sentences, and how sure the
+  /// detector has to be before the gate opens. See MediaSession::set_voice_gate.
+  bool voice_gate = true;
+  VoiceGateLevel voice_gate_level = VoiceGateLevel::Moderate;
 
   /// How loud a screen share's sound starts, as a percentage. See
   /// MediaSession::set_screen_audio_volume.

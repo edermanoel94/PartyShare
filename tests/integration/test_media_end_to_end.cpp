@@ -323,6 +323,41 @@ TEST_F(MediaEndToEndTest, TheNoiseSuppressionLevelFollowsTheSelectorMidCall) {
       << "the suppressor did not come back at the level asked for";
 }
 
+TEST_F(MediaEndToEndTest, TheVoiceGateFollowsTheSelectorMidCall) {
+  // Read back from the processor the module runs, like the suppressor's level
+  // above: the assertion is that the switch and the level the dialog sets are
+  // the ones on the capture chain, during the call.
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+  ASSERT_TRUE(ana.wait_until_in_call());
+
+  const auto gate_is = [&](bool on, media::VoiceGateLevel level) {
+    return [&ana, on, level] {
+      const media::AudioStats stats = ana.session().stats();
+      return stats.voice_gate_active == on && stats.voice_gate_level == level;
+    };
+  };
+
+  EXPECT_TRUE(wait_until(gate_is(true, media::VoiceGateLevel::Moderate), 5000ms))
+      << "the gate did not start on at the configured level";
+
+  ASSERT_TRUE(ana.session().set_voice_gate(true, media::VoiceGateLevel::VeryHigh).ok());
+  EXPECT_TRUE(wait_until(gate_is(true, media::VoiceGateLevel::VeryHigh), 5000ms))
+      << "the level chosen mid-call did not reach the processor";
+
+  ASSERT_TRUE(ana.session().set_voice_gate(false, media::VoiceGateLevel::VeryHigh).ok());
+  EXPECT_TRUE(wait_until(gate_is(false, media::VoiceGateLevel::VeryHigh), 5000ms))
+      << "the gate kept running after being turned off";
+
+  // Back to where every other case in this process expects it.
+  ASSERT_TRUE(ana.session().set_voice_gate(true, media::VoiceGateLevel::Moderate).ok());
+  EXPECT_TRUE(wait_until(gate_is(true, media::VoiceGateLevel::Moderate), 5000ms))
+      << "the gate did not come back at the level asked for";
+}
+
 TEST_F(MediaEndToEndTest, TheAudioPipelineWorksOnAVirtualDevice) {
   const char* virtual_input = std::getenv("DV_VIRTUAL_INPUT_DEVICE");
   if (virtual_input == nullptr) {

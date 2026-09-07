@@ -72,20 +72,12 @@ configuration error [invalid_ini]: line 2: no such setting as [network] signalli
 The client saves what you pick in **Settings** into this user's `config.ini`: the
 microphone, the output device, the screen resolution and frame rate, both ends of
 the bitrate range, the share sound mode and its volume, noise suppression, the
-room chime, and whether it checks for new versions. The monitor is the one thing
+voice gate and the room chime. The monitor is the one thing
 on that screen that is not saved, because it is which screen to share next
 rather than a setting. With more than one monitor the **Share screen** button
 asks the same question in a menu each time a share starts, and the box in
 Settings follows whatever was last chosen either way. Left alone, the primary
 monitor is shared - one screen, never every screen stitched side by side.
-
-**Check GitHub for new versions** sits in the Connection group rather than beside
-the room chime, though both are `[ui]` settings. The question it answers is not
-"do I want to be told" but "may this program talk to the internet on its own",
-which is the same question the server address above it asks. Unticking it stops
-the check immediately — an answer already on its way is dropped rather than
-shown — and ticking it schedules one a few seconds out, so it is not a switch
-whose effect cannot be seen for six hours.
 
 **Resolution and frame rate** are `video.width`, `video.height` and `video.fps`,
 and the dialog offers 720p and 1080p at 30 or 60 fps. Both take effect at once,
@@ -160,11 +152,13 @@ form, and `DV_SECTION_KEY` in the environment.
 | `noise_suppression_level` | `high` | How hard it bites: `low`, `moderate`, `high` or `very_high`, which take 6, 12, 18 and 21 dB off the noise. `high` is what Chrome ships and what every call had before the level was a setting, so it stays the default until somebody has listened to `moderate`, which spares consonants and instruments. [Chapter 16](16-audio-plan.md), step 5 |
 | `echo_cancellation` | true | Turning it off only makes sense with headphones, and not always |
 | `automatic_gain_control` | true | Off leaves your voice the size the microphone caught it, which is better for an instrument and worse for conversation. On is libwebrtc's second generation controller, AGC2, since [chapter 16](16-audio-plan.md) step 4: it drives the microphone volume and adds a digital gain that only moves on speech and stops at a noise floor |
+| `voice_gate` | true | Silences the microphone between sentences. libwebrtc's own voice detector judges every 10 ms block after the suppressor and the gain control have run; the gate opens on the first block with a voice in it, stays open 300 ms after the last and closes over 100 ms, ramped so that neither edge clicks. Only the voice goes through it: the shared screen's sound is mixed in afterwards. Off for an instrument or music. [Chapter 16](16-audio-plan.md), step 13 |
+| `voice_gate_level` | `moderate` | How sure the detector has to be before the gate opens: `low`, `moderate`, `high` or `very_high`, its four modes. `low` opens on almost anything above silence; `very_high` only on clear speech, and can take the start off a word said quietly. Kept while the gate is off, like the suppressor's level, and like it a default the listening test may move |
 
-Only noise suppression appears in the settings dialog, as one selector holding
-both keys: off, then the four levels. It applies at once, mid-call included, and
-"off" keeps the level the file had, so turning it back on returns to it. The
-other two blocks are this file only.
+Noise suppression and the voice gate appear in the settings dialog, each as one
+selector holding both of its keys: off, then the four levels. Both apply at
+once, mid-call included, and "off" keeps the level the file had, so turning
+either back on returns to it. The other two blocks are this file only.
 
 ### `[screen_audio]`
 
@@ -188,14 +182,17 @@ understood is the one unacceptable answer.
 | Key | Default | |
 | --- | --- | --- |
 | `room_sounds` | true | The chime when somebody joins or leaves. [Chapter 10](10-join-leave-alerts.md) |
-| `check_for_updates` | true | Ask GitHub whether a newer release exists. The **Updates** box in Settings writes this. [Chapter 14](14-release.md#how-anybody-finds-out-there-is-a-new-version) |
 
-`check_for_updates` is one HTTPS request to one address, five seconds after the
-window opens and every six hours after that. It carries nothing but the version
-already written in the status bar, downloads nothing and installs nothing: the
-whole result is that line becoming `0.1.41 · 0.1.42 available`, with a link to
-the release page. Off, no request is made at all — which is the right setting
-for a machine with no route out, where every check is a timeout.
+The client also asks GitHub whether a newer release exists, and there is no key
+for it: one HTTPS request to one address, five seconds after the window opens
+and every six hours after that. It carries nothing but the version already
+written in the status bar, downloads nothing and installs nothing: the whole
+result is that line becoming `0.1.41 · 0.1.42 available`, with a link to the
+release page, and a machine with no route out gets a timeout it never sees.
+`check_for_updates` was the key behind a box in Settings until 0.1.59; a file
+that still has it loads as before, and a `false` is a warning in the client's
+log saying the line no longer does anything.
+[Chapter 14](14-release.md#how-anybody-finds-out-there-is-a-new-version)
 
 ### `[logging]`
 

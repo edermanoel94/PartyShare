@@ -520,23 +520,20 @@ TEST(ConfigIni, ReadsWhetherTheRoomChimeIsOn) {
   EXPECT_TRUE(on.value().ui.room_sounds);
 }
 
-TEST(ConfigIni, ReadsWhetherTheClientMayAskAboutNewReleases) {
-  // On by default, so that somebody running a version behind everybody else in
-  // the room finds out. Off has to work and has to mean it: on a LAN with no
-  // route out, every check is a timeout, and there are networks whose
-  // administrator decides what talks to the outside.
-  EXPECT_TRUE(Config{}.ui.check_for_updates);
-
+TEST(ConfigIni, AFileThatSwitchedTheUpdateCheckOffStillLoads) {
+  // The box in Settings that wrote this key is gone and the check always runs,
+  // but a config.ini written while the box existed has to go on loading: a
+  // startup error over a line that used to be fine is the one outcome worse
+  // than a line that does nothing. main() says in the log that it does nothing,
+  // which is why the value is still read rather than dropped on the floor.
   const auto off = dv::config::parse_ini("[ui]\ncheck_for_updates = false\n", Config{});
   ASSERT_TRUE(off.ok()) << off.error().message;
   EXPECT_FALSE(off.value().ui.check_for_updates);
-  // The two keys of the section are independent, which is what stops turning
-  // one off from quietly turning the other off with it.
   EXPECT_TRUE(off.value().ui.room_sounds);
 
-  const auto on = dv::config::parse_json(R"({"ui": {"check_for_updates": false}})", Config{});
-  ASSERT_TRUE(on.ok()) << on.error().message;
-  EXPECT_FALSE(on.value().ui.check_for_updates);
+  const auto json = dv::config::parse_json(R"({"ui": {"check_for_updates": false}})", Config{});
+  ASSERT_TRUE(json.ok()) << json.error().message;
+  EXPECT_FALSE(json.value().ui.check_for_updates);
 }
 
 TEST(ConfigIni, ReadsWhatAShareShouldCarryBesidesThePicture) {
@@ -623,6 +620,47 @@ TEST(ConfigIni, ReadsTheNoiseSuppressionLevel) {
   }
 }
 
+TEST(Config, TheVoiceGateStartsOnAtTheDetectorsSecondMode) {
+  // On, because silence between sentences is what step 13 of
+  // docs/16-audio-plan.md is for; moderate, because the detector's first mode
+  // opens on almost anything and its last takes the start off quiet words.
+  // Like the suppressor's level, a decision the listening test may move, and
+  // one line here when it does.
+  EXPECT_TRUE(Config{}.audio.voice_gate);
+  EXPECT_EQ(Config{}.audio.voice_gate_level, "moderate");
+}
+
+TEST(ConfigIni, ReadsTheVoiceGate) {
+  // The settings dialog writes both keys, so a build that cannot read them
+  // back is a selector that forgets itself between runs.
+  const auto off = dv::config::parse_ini("[audio]\nvoice_gate = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().audio.voice_gate);
+  for (const char* level : {"low", "moderate", "high", "very_high"}) {
+    const auto parsed =
+        dv::config::parse_ini(std::string("[audio]\nvoice_gate_level = ") + level + "\n", Config{});
+    ASSERT_TRUE(parsed.ok()) << level << ": " << parsed.error().message;
+    EXPECT_EQ(parsed.value().audio.voice_gate_level, level);
+  }
+}
+
+TEST(Config, ValidationRefusesAVoiceGateLevelTheDetectorDoesNotHave) {
+  Config config;
+  config.audio.voice_gate_level = "strict";
+  const auto failure = dv::config::validate(config);
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->code, "invalid_value");
+  EXPECT_NE(failure->message.find("audio.voice_gate_level"), std::string::npos);
+}
+
+TEST(Config, TheEnvironmentTurnsTheVoiceGateOff) {
+  // The way back named in docs/16-audio-plan.md, step 13, so it has to work.
+  const ScopedEnv env("DV_AUDIO_VOICE_GATE", "false");
+  Config config;
+  dv::config::apply_environment(config);
+  EXPECT_FALSE(config.audio.voice_gate);
+}
+
 TEST(ConfigIni, ReadsWhetherTheScreenAudioLimiterIsOn) {
   // On by default, and the key exists to turn it off: docs/16-audio-plan.md,
   // step 8.
@@ -651,6 +689,7 @@ TEST(ConfigIni, RefusesWhatItCannotApply) {
       {"[audio]\nechho_cancellation = yes\n", "a misspelled boolean key"},
       {"[audio]\necho_cancellation = yeah\n", "a boolean that is not one"},
       {"[audio]\nnoise_suppression_level = loud\n", "a suppression level that is not one"},
+      {"[audio]\nvoice_gate_level = strict\n", "a gate level that is not one"},
       {"[screen_audio]\nmodo = system\n", "a misspelled screen audio key"},
       {"[video]\nauto_bitrate = sometimes\n", "a mode that is not a boolean"},
       {"[server]\nport = 70000\n", "a port out of range"},

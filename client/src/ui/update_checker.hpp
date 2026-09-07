@@ -41,26 +41,22 @@ class UpdateChecker : public QObject {
  public:
   explicit UpdateChecker(QObject* parent = nullptr);
 
-  /// Turns the check on or off.
+  /// Starts asking: once shortly after this call, then every few hours.
   ///
-  /// Off is the state one of these is born in, so main() switching it on from
-  /// `[ui] check_for_updates` is the only way a request is ever made. On, it
-  /// checks once shortly afterwards and then every few hours; off, the timer
-  /// stops, a request already in flight is ignored when it lands, and nothing
-  /// new is sent.
+  /// Idle is the state one of these is born in, and nothing reaches the
+  /// network before this. main() calls it once the window is shown, so that
+  /// no question to GitHub comes between starting the program and seeing it;
+  /// the first request is on a delay of its own besides. Meant to be called
+  /// once: a second call restarts the beat and asks again shortly.
   ///
-  /// The settings dialog calls this as the box is ticked, before anything is
-  /// written to config.ini - the same arrangement ui::set_chimes_enabled has,
-  /// and for the same reason: unticking a box because you want something to
-  /// stop should stop it now rather than at the next launch.
-  ///
-  /// Switching it on schedules a check on the same short delay startup uses,
-  /// rather than waiting for the next six hourly beat. Somebody who has just
-  /// ticked the box is somebody asking the question.
-  void set_enabled(bool on);
-
-  /// Whether a check would be made. What the settings dialog shows.
-  [[nodiscard]] bool enabled() const { return enabled_; }
+  /// There is no way to turn it off. There used to be - a box in Settings and
+  /// `[ui] check_for_updates` behind it - and what the switch bought was a
+  /// room where three people run three versions and the one who unticked it
+  /// never hears. The check is one request to one address carrying the version
+  /// already written on the window, and a client that cannot make it - no
+  /// route out, a proxy that refuses - fails quietly and tries again at the
+  /// next beat, which costs nothing anybody can see.
+  void start();
 
  signals:
   /// A release newer than this build exists.
@@ -103,7 +99,6 @@ class UpdateChecker : public QObject {
 
   QNetworkAccessManager network_;
   QTimer* timer_ = nullptr;
-  bool enabled_ = false;
   /// The version already announced, so that a six hourly check does not raise
   /// the same news at every beat. Empty until something has been found.
   QString announced_;

@@ -53,6 +53,7 @@ has an acceptance criterion.
 | 10 | Audio in congestion control | Spike | 2 days, with a stop | — |
 | 11 | A second track for the screen sound | Client and server | 2 to 3 weeks | Stop criterion in the spike |
 | 12 | The new Windows ADM | Toolchain | 1 week | `DV_AUDIO_LEGACY_ADM=1` |
+| 13 | Voice gate | Client | 1 day | `voice_gate = false` |
 
 ## 3. Step 1: RED, every packet carries the previous frame
 
@@ -646,3 +647,77 @@ merge. The client side, `CreateWindowsCoreAudioAudioDeviceModule` behind
 
 Device enumeration with different semantics; the microphone switching test is
 what catches it. `DV_AUDIO_LEGACY_ADM=1` in the environment.
+
+## 15. Step 13: a voice gate
+
+Client. One day. Keys `voice_gate` and `voice_gate_level`.
+
+Silence between sentences. The suppressor takes the stationary part of the room
+off the voice and leaves the rest - a keyboard, a door, the unevenness of a fan
+- and even at `very_high` what it leaves is heard by everybody, all the time,
+because the microphone is always open. A gate closes it while nobody is
+speaking, which is the change a listener notices most: not a quieter room, but
+no room at all between one sentence and the next. It does nothing for the noise
+*under* a voice; that is a denoiser's job, and a denoiser is the step after this
+one if this one is not enough.
+
+**Verified.** The processing module runs its capture chain in a fixed order -
+high pass, AEC3, the suppressor, the band merge, AGC2, then the capture
+post-processor (`audio_processing_impl.cc`, `ProcessCaptureStreamLocked`) - and
+`BuiltinAudioProcessingBuilder::SetCapturePostProcessing` is the hook for that
+last step. The library's own detector, `WebRtcVad_Process`, takes 48 kHz in
+10 ms blocks in this build (`webrtc_vad.c`, `kValidRates`), which is exactly
+what the module hands the post-processor, so nothing is resampled on the way.
+The screen sound joins in the frame processor, after the module, so the gate
+never sees it. The module's deprecated transient suppressor, which was for
+keyboards, is not compiled into this build at all; the field is a no-op.
+
+### Changes
+
+- `audio::VoiceGate`, the envelope: open within the block a voice arrives in,
+  10 ms; hold 300 ms after the last block with a voice; close over 100 ms.
+  Ramped per sample, so that neither edge clicks. Pure, and tested by saying
+  "voice" and "silence".
+- `media::VoiceGateProcessor`, a `webrtc::CustomProcessing`: converts the first
+  channel to 16 bit for the detector, asks it, and applies the envelope to
+  every channel. The detector is an interface, so the processor is tested with
+  a scripted one; the one that ships wraps `WebRtcVad_*`, with the four modes
+  as the four levels.
+- `Engine`: the processor is installed at build time and kept as a pointer,
+  `set_voice_gate` moves the switch and the level during a call, and the
+  statistics read its state back: on, level, open, blocks judged and closed.
+- Configuration: `[audio] voice_gate = true`, `voice_gate_level = low |
+  moderate | high | very_high`, the detector's modes 0 to 3. `moderate` by
+  default: a decision, like step 5's, and the listening test decides.
+  `DV_AUDIO_VOICE_GATE` and `DV_AUDIO_VOICE_GATE_LEVEL` in the environment.
+- `MediaSession::set_voice_gate`, `CallSession::set_voice_gate`, and a "Voice
+  gate" selector in Settings, the same shape as the suppressor's.
+- Docs: chapter 3, `config.ini`.
+
+### Tests
+
+- `test_voice_gate.cpp`: the envelope, block by block, both edges and the hold.
+- `test_voice_gate_processor.cpp`, in the media suite: the processor over a
+  real `AudioBuffer` with a scripted detector, and the library's detector on
+  silence and on a buzz with the shape of a voice.
+- `test_media_end_to_end.cpp`: the switch and the level follow the selector
+  mid-call, read back from the processor.
+- `test_config.cpp`: both keys, the refusal, the environment.
+- Manual, owed: a sentence with a pause in the middle, heard on the other
+  client at the four levels; a quiet speaker at `high`; the first word after a
+  long silence. The microphone level in the room drops to nothing while the
+  gate is closed, which is how to see it working without a second client.
+
+### Acceptance
+
+The room goes silent between sentences on the other client, and no first word
+is lost at `moderate`. Landed on 7 September 2026 with the default on at
+`moderate`, unheard: the way back is one key.
+
+### Risk and way back
+
+The detector's misses. A first word said softly can lose its first 10 ms, and
+at `very_high` more than that. Music and an instrument are not a voice to it,
+which is the same case the suppressor has, with the same answer: the selector
+has an Off. `voice_gate = false`, or `DV_AUDIO_VOICE_GATE=0` in the
+environment.

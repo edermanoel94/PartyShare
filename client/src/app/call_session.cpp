@@ -90,7 +90,7 @@ Result<std::monostate> CallSession::connect_and_authenticate(const std::string& 
   }
 
   // signaling_.url() and not options_.signaling_url: the address can have been
-  // changed in the settings dialog since this session was built, and this line
+  // changed on the sign-in screen since this session was built, and this line
   // is what the status bar shows while the connection is being made.
   set_state(State::Connecting, signaling_.url());
 
@@ -696,6 +696,33 @@ bool CallSession::automatic_gain_control() const {
 media::NoiseSuppressionLevel CallSession::noise_suppression_level() const {
   const std::lock_guard<std::mutex> lock(mutex_);
   return options_.media.noise_suppression_level;
+}
+
+Result<std::monostate> CallSession::set_voice_gate(bool on, media::VoiceGateLevel level) {
+  std::shared_ptr<media::MediaSession> session;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    options_.media.voice_gate = on;
+    options_.media.voice_gate_level = level;
+    session = audio_;
+  }
+  if (session) {
+    session->set_voice_gate(on, level);
+  }
+  // Remembered with no call running, for the reason set_audio_processing
+  // gives: the next session is built from these options, and building it is
+  // what seeds the process.
+  return std::monostate{};
+}
+
+bool CallSession::voice_gate() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.voice_gate;
+}
+
+media::VoiceGateLevel CallSession::voice_gate_level() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return options_.media.voice_gate_level;
 }
 
 std::string CallSession::input_device() const {

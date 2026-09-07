@@ -304,6 +304,12 @@ int run(int argc, char* argv[]) {
       dv::client::media::parse_noise_suppression_level(config.audio.noise_suppression_level)
           .value_or(dv::client::media::NoiseSuppressionLevel::High);
   session_options.media.automatic_gain_control = config.audio.automatic_gain_control;
+  // The same arrangement for the gate's level: refused by the configuration
+  // before this runs, so the fallback is the file's own default.
+  session_options.media.voice_gate = config.audio.voice_gate;
+  session_options.media.voice_gate_level =
+      dv::client::media::parse_voice_gate_level(config.audio.voice_gate_level)
+          .value_or(dv::client::media::VoiceGateLevel::Moderate);
   session_options.media.input_device = config.audio.input_device;
   session_options.media.output_device = config.audio.output_device;
   // The video section of the configuration, which until M8 was parsed, logged
@@ -354,18 +360,14 @@ int run(int argc, char* argv[]) {
   // session first and leave the window's destructor talking to nothing.
   dv::client::app::CallSession session(session_options);
 
-  // Before the window, because the window is handed a reference to it: the
-  // settings dialog carries the switch for it, and a dialog cannot be given
-  // something that does not exist yet. It is therefore destroyed after the
-  // window, which is safe in both directions - Qt severs a connection when
-  // either end is destroyed, and nothing in here touches a widget on the way
-  // out.
+  // Before the window and therefore destroyed after it, which is safe in both
+  // directions: Qt severs a connection when either end is destroyed, and
+  // nothing in here touches a widget on the way out.
   //
-  // Idle as constructed. Nothing reaches the network until it is switched on
-  // below.
+  // Idle as constructed. Nothing reaches the network until start() below.
   dv::ui::UpdateChecker updates;
 
-  dv::ui::MainWindow window(session, updates);
+  dv::ui::MainWindow window(session);
   window.show();
 
   QObject::connect(&updates, &dv::ui::UpdateChecker::update_available, &window,
@@ -374,13 +376,15 @@ int run(int argc, char* argv[]) {
   // come between starting the program and seeing it. The first request is on a
   // delay of its own besides, and the answer, if there is one, only ever
   // rewrites a line in the status bar.
-  if (config.ui.check_for_updates) {
-    updates.set_enabled(true);
-  } else {
-    // Named here rather than left to UpdateChecker, which has no idea why it
-    // was not switched on. Said out loud because the silence is otherwise
-    // indistinguishable from a check that is running and finding nothing.
-    DV_LOG_INFO("Update check: off, [ui] check_for_updates is false");
+  updates.start();
+  if (!config.ui.check_for_updates) {
+    // The key that used to switch this off is still read, so that a file
+    // written while Settings had a box for it goes on loading, and it is said
+    // out loud that the line no longer does anything: silence here would read
+    // as the check being off, and it is not.
+    DV_LOG_WARN(
+        "[ui] check_for_updates = false no longer does anything: the client always asks GitHub "
+        "for a newer release");
   }
 
   const auto startup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

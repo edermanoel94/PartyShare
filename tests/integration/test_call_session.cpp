@@ -70,6 +70,8 @@ struct FakeMediaState {
   std::atomic<bool> echo_cancellation{true};
   std::atomic<bool> noise_suppression{true};
   std::atomic<bool> automatic_gain_control{true};
+  std::atomic<bool> voice_gate{true};
+  std::atomic<media::VoiceGateLevel> voice_gate_level{media::VoiceGateLevel::Moderate};
   /// Set to make start_screen_audio fail, the way a Windows too old to capture
   /// per process does.
   std::string screen_audio_failure;
@@ -225,6 +227,11 @@ class FakeMediaSession : public media::MediaSession {
     state_->echo_cancellation = echo_cancellation;
     state_->noise_suppression = noise_suppression;
     state_->automatic_gain_control = automatic_gain_control;
+  }
+
+  void set_voice_gate(bool on, media::VoiceGateLevel level) override {
+    state_->voice_gate = on;
+    state_->voice_gate_level = level;
   }
 
   dv::Result<std::monostate> set_video_bitrate(int min_kbps, int max_kbps) override {

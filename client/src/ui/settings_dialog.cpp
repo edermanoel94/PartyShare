@@ -14,7 +14,6 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -27,7 +26,6 @@
 #include "audio/microphone_hint.hpp"
 #include "audio/screen_audio_mixer.hpp"
 #include "ui/chimes.hpp"
-#include "ui/update_checker.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::ui {
@@ -88,43 +86,17 @@ void restyle_for_property(QWidget* widget) {
 
 }  // namespace
 
-SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker& updates,
-                               QWidget* parent)
-    : QDialog(parent), session_(session), updates_(updates) {
+SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* parent)
+    : QDialog(parent), session_(session) {
   setWindowTitle(QStringLiteral("Settings"));
   setMinimumWidth(520);
 
   auto* layout = new QVBoxLayout(this);
 
-  // First, above the devices, because it is the only row here that has to be
-  // right before anything else works. A microphone chosen against the wrong
-  // server is a microphone in a call that never happens.
-  auto* connection = new QGroupBox(QStringLiteral("Connection"), this);
-  auto* connection_form = new QFormLayout(connection);
-  signaling_url_ = new QLineEdit(connection);
-  // The built-in default, asked of the configuration rather than typed here
-  // again: two copies of one address is how a placeholder comes to name a
-  // server the program no longer starts on.
-  signaling_url_->setPlaceholderText(QString::fromStdString(config::NetworkConfig{}.signaling_url));
-  signaling_url_->setText(QString::fromStdString(session_.signaling_url()));
-  signaling_hint_ = new QLabel(QString{}, connection);
-  signaling_hint_->setWordWrap(true);
-  signaling_hint_->setProperty("hint", true);
-  // Its state comes from the checker itself and not from the configuration
-  // read at startup, for the reason the room chime's box gives below: main()
-  // has already put one into the other, and asking the thing that actually
-  // decides means the box cannot disagree with what will happen next.
-  update_checks_ = new QCheckBox(QStringLiteral("Check GitHub for new versions"), connection);
-  update_checks_->setChecked(updates_.enabled());
-  update_checks_->setToolTip(
-      QStringLiteral("One request to github.com, shortly after this window opens and every few "
-                     "hours after that. Nothing is downloaded and nothing is installed: a newer "
-                     "release becomes a link beside the version in the status bar."));
-
-  connection_form->addRow(QStringLiteral("Server"), signaling_url_);
-  connection_form->addRow(signaling_hint_);
-  connection_form->addRow(QStringLiteral("Updates"), update_checks_);
-
+  // The audio group first. There used to be a Connection group above it, with
+  // the server address and then only the switch for the release check: the
+  // address went to the sign-in screen, which asks for it at the one moment it
+  // can be adopted, and the switch went when the check stopped having one.
   auto* audio = new QGroupBox(QStringLiteral("Audio"), this);
   auto* audio_form = new QFormLayout(audio);
   input_ = new QComboBox(audio);
@@ -151,6 +123,29 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
     noise_suppression_->setCurrentIndex(std::max(0, noise_suppression_->findData(current)));
   }
 
+  // The gate's box, the same shape as the suppressor's and for the same
+  // reason: off, then how sure the detector has to be, in the configuration's
+  // own words. What each level costs is in the tooltip rather than in the
+  // row, because the row has to fit beside a label.
+  voice_gate_ = new QComboBox(audio);
+  voice_gate_->addItem(QStringLiteral("Off"), QStringLiteral("off"));
+  voice_gate_->addItem(QStringLiteral("Low"), QStringLiteral("low"));
+  voice_gate_->addItem(QStringLiteral("Moderate"), QStringLiteral("moderate"));
+  voice_gate_->addItem(QStringLiteral("High"), QStringLiteral("high"));
+  voice_gate_->addItem(QStringLiteral("Very high"), QStringLiteral("very_high"));
+  voice_gate_->setToolTip(
+      QStringLiteral("Silences the microphone between sentences, so the room is not heard while "
+                     "you are not speaking. Higher levels need clearer speech to open, and can "
+                     "take the start off a word said quietly. The shared screen's sound is never "
+                     "gated."));
+  {
+    const QString current = session_.voice_gate()
+                                ? QString::fromStdString(std::string(
+                                      client::media::to_string(session_.voice_gate_level())))
+                                : QStringLiteral("off");
+    voice_gate_->setCurrentIndex(std::max(0, voice_gate_->findData(current)));
+  }
+
   // Its state comes from ui::chimes_enabled and not from the configuration
   // that was read at startup: main() has already put one into the other, and
   // asking the thing that actually decides means the box cannot disagree with
@@ -162,6 +157,7 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   audio_form->addRow(microphone_hint_);
   audio_form->addRow(QStringLiteral("Output"), output_);
   audio_form->addRow(QStringLiteral("Noise suppression"), noise_suppression_);
+  audio_form->addRow(QStringLiteral("Voice gate"), voice_gate_);
   audio_form->addRow(QStringLiteral("Room sounds"), room_sounds_);
 
   auto* video = new QGroupBox(QStringLiteral("Screen"), this);
@@ -259,10 +255,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   // sentence and the value column is as wide as a spin box.
   video_form->addRow(quality_hint_);
 
-  auto* note = new QLabel(
-      QStringLiteral("Changes take effect immediately, including during a call. The server "
-                     "above is the exception, for the reason written beside it."),
-      this);
+  auto* note =
+      new QLabel(QStringLiteral("Changes take effect immediately, including during a call."), this);
   note->setProperty("hint", true);
 
   // At the bottom rather than under the audio rows, because the bitrate is kept
@@ -292,14 +286,12 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   // and the window's own close box all arrive at done() by the same route.
   connect(close, &QPushButton::clicked, this, &QDialog::reject);
 
-  layout->addWidget(connection);
   layout->addWidget(audio);
   layout->addWidget(video);
   layout->addWidget(note);
   layout->addWidget(storage_);
   layout->addWidget(buttons);
 
-  show_signaling_hint();
   load_devices();
   load_monitors();
   load_quality();
@@ -328,15 +320,6 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
 
   // Connected after the initial values are in, so that filling the widgets
   // does not look like the user changing something.
-  //
-  // editingFinished and not textChanged, for the reason the spin boxes have
-  // keyboard tracking off: typing ws://192.168.1.10:8080 one character at a
-  // time would announce forty addresses, thirty-nine of them refused, and the
-  // row would spend the whole time red at somebody who is typing correctly.
-  // It fires on Enter and on losing the focus, and clicking Save takes the
-  // focus, so a typed address is never left behind by the button.
-  connect(signaling_url_, &QLineEdit::editingFinished, this,
-          &SettingsDialog::on_signaling_url_changed);
   connect(input_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_input_changed);
   connect(output_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_output_changed);
   // valueChanged and not editingFinished, which only fires when the box gives
@@ -354,6 +337,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
           &SettingsDialog::on_screen_audio_changed);
   connect(noise_suppression_, &QComboBox::currentIndexChanged, this,
           &SettingsDialog::on_noise_suppression_changed);
+  connect(voice_gate_, &QComboBox::currentIndexChanged, this,
+          &SettingsDialog::on_voice_gate_changed);
   show_microphone_hint();
   // valueChanged and not sliderReleased, so that dragging is audible while it
   // happens. That is the whole way this control can be got right: nobody knows
@@ -362,61 +347,6 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, UpdateChecker&
   // and each one replaces the last rather than queueing behind it.
   connect(screen_volume_, &QSlider::valueChanged, this, &SettingsDialog::on_screen_volume_changed);
   connect(room_sounds_, &QCheckBox::toggled, this, &SettingsDialog::on_room_sounds_changed);
-  connect(update_checks_, &QCheckBox::toggled, this, &SettingsDialog::on_update_checks_changed);
-}
-
-void SettingsDialog::show_signaling_hint(const QString& refusal) {
-  signaling_hint_->setProperty("error", !refusal.isEmpty());
-  signaling_hint_->setText(
-      refusal.isEmpty()
-          ? QStringLiteral(
-                "Where the next sign-in connects. A call already running stays on the server it "
-                "was placed on, so this never interrupts one - and it does not need PartyShare "
-                "restarted either: leave the room and sign in again.")
-          : refusal);
-  restyle_for_property(signaling_hint_);
-}
-
-void SettingsDialog::on_signaling_url_changed() {
-  const QString typed = signaling_url_->text().trimmed();
-
-  // Refused here, in front of whoever typed it, and not left for the sign-in
-  // or for the file. dv::config::validate refuses the same two things when
-  // config.ini is written, and a refusal that arrives after this dialog has
-  // been closed is a refusal nobody reads.
-  if (typed.isEmpty()) {
-    show_signaling_hint(
-        QStringLiteral("A server address is needed, so this one was not applied. The last one is "
-                       "still in use."));
-    return;
-  }
-  if (!typed.startsWith(QStringLiteral("ws://")) && !typed.startsWith(QStringLiteral("wss://"))) {
-    show_signaling_hint(
-        QStringLiteral("A server address starts with ws:// or wss://, so this one was not "
-                       "applied. The last one is still in use."));
-    return;
-  }
-
-  // Put back trimmed, so that what is on screen is what was applied. A space
-  // on the end is invisible and would otherwise travel into config.ini and
-  // come back as a server nobody can reach.
-  if (typed != signaling_url_->text()) {
-    const QSignalBlocker quiet(signaling_url_);
-    signaling_url_->setText(typed);
-  }
-
-  // editingFinished also fires on merely tabbing through the field. Staging a
-  // value identical to the one in use would light the Save button up over
-  // nothing to write, and the button is this dialog's only word for whether
-  // anything is outstanding.
-  if (typed.toStdString() == session_.signaling_url()) {
-    show_signaling_hint();
-    return;
-  }
-
-  session_.set_signaling_url(typed.toStdString());
-  stage({{.section = "network", .key = "signaling_url", .value = typed.toStdString()}});
-  show_signaling_hint();
 }
 
 void SettingsDialog::load_audio_sources() {
@@ -542,6 +472,26 @@ void SettingsDialog::on_noise_suppression_changed() {
   stage(settings);
 }
 
+void SettingsDialog::on_voice_gate_changed() {
+  const std::string choice = voice_gate_->currentData().toString().toStdString();
+  const bool on = choice != "off";
+  // "Off" keeps the level the session had, for the reason the suppressor's box
+  // gives: turning the gate back on returns to it.
+  const client::media::VoiceGateLevel level =
+      on ? client::media::parse_voice_gate_level(choice).value_or(session_.voice_gate_level())
+         : session_.voice_gate_level();
+  if (const auto applied = session_.set_voice_gate(on, level); !applied) {
+    DV_LOG_WARN("Could not set the voice gate: {}", applied.error().message);
+  }
+  std::vector<config::IniSetting> settings{
+      config::IniSetting{.section = "audio", .key = "voice_gate", .value = on ? "true" : "false"}};
+  if (on) {
+    settings.push_back(
+        config::IniSetting{.section = "audio", .key = "voice_gate_level", .value = choice});
+  }
+  stage(settings);
+}
+
 void SettingsDialog::load_devices() {
   fill_devices(input_, client::media::input_devices(),
                QString::fromStdString(session_.input_device()),
@@ -558,9 +508,9 @@ void SettingsDialog::show_storage() {
   if (file.empty()) {
     save_->setEnabled(false);
     storage_->setText(
-        QStringLiteral("This system does not say where settings belong, so the server, the "
-                       "devices, the sound and the screen settings chosen here last only until "
-                       "the program closes."));
+        QStringLiteral("This system does not say where settings belong, so the devices, the "
+                       "sound and the screen settings chosen here last only until the program "
+                       "closes."));
     restyle();
     return;
   }
@@ -573,9 +523,7 @@ void SettingsDialog::show_storage() {
   const QString where = QString::fromStdString(file.string());
   if (pending_.empty()) {
     storage_->setText(
-        QStringLiteral("The server, the devices, the sound and the screen settings are kept "
-                       "in %1")
-            .arg(where));
+        QStringLiteral("The devices, the sound and the screen settings are kept in %1").arg(where));
   } else if (pending_.size() == 1) {
     storage_->setText(
         QStringLiteral("One change is in use now and is not in %1 yet. Save puts it there.")
@@ -866,18 +814,6 @@ void SettingsDialog::on_room_sounds_changed(bool on) {
   // somebody reaches for because a sound just went off.
   set_chimes_enabled(on);
   stage({{.section = "ui", .key = "room_sounds", .value = on ? "true" : "false"}});
-}
-
-void SettingsDialog::on_update_checks_changed(bool on) {
-  // Applied before it is staged, like the chime above. Unticking this is
-  // somebody saying "stop talking to the internet", and the honest answer to
-  // that is to stop now rather than at the next launch - which is also why
-  // UpdateChecker drops an answer that lands after the switch has moved.
-  //
-  // Ticking it schedules a check a few seconds out, so the box is not a switch
-  // whose effect cannot be observed for six hours.
-  updates_.set_enabled(on);
-  stage({{.section = "ui", .key = "check_for_updates", .value = on ? "true" : "false"}});
 }
 
 void SettingsDialog::on_auto_bitrate_changed(bool automatic) {

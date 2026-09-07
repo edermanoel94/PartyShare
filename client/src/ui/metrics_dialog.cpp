@@ -8,6 +8,7 @@
 #include <QColor>
 #include <QDialogButtonBox>
 #include <QFont>
+#include <QHBoxLayout>
 #include <QHideEvent>
 #include <QLabel>
 #include <QPointF>
@@ -81,8 +82,8 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   // and reopening it should start again rather than resume.
   setModal(false);
   setAttribute(Qt::WA_DeleteOnClose);
-  resize(560, 660);
-  setMinimumSize(420, 460);
+  resize(560, 780);
+  setMinimumSize(420, 560);
 
   auto* layout = new QVBoxLayout(this);
 
@@ -131,7 +132,28 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   concealment_->set_thresholds(client::app::kFairConcealmentPercent,
                                client::app::kPoorConcealmentPercent);
 
-  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_}) {
+  // What PartyShare itself is costing this computer, side by side because
+  // both move slowly: a minute of memory on half the width is still a line
+  // that can be read. Titled with the program's name so nobody reads them as
+  // the machine's totals.
+  auto* cost = new QLabel(
+      QStringLiteral("What PartyShare itself costs this computer. CPU is its share of every "
+                     "core together, as the task manager counts it; memory is what it has "
+                     "resident. Neither has a say in the verdict."),
+      this);
+  cost->setWordWrap(true);
+  cost->setProperty("hint", true);
+
+  cpu_ = new MetricsChart(QStringLiteral("PartyShare CPU (%)"), QStringLiteral("%"), this);
+  cpu_->set_lines({{QStringLiteral("cpu"), colours.accent}});
+  memory_ = new MetricsChart(QStringLiteral("PartyShare memory (MB)"), QStringLiteral("MB"), this);
+  memory_->set_lines({{QStringLiteral("resident"), colours.accent}});
+
+  auto* cost_row = new QHBoxLayout();
+  cost_row->addWidget(cpu_, 1);
+  cost_row->addWidget(memory_, 1);
+
+  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_, cpu_, memory_}) {
     chart->set_window(kWindowMs);
   }
 
@@ -149,6 +171,8 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
   layout->addWidget(jitter_, 1);
   layout->addWidget(loss_, 1);
   layout->addWidget(concealment_, 1);
+  layout->addWidget(cost);
+  layout->addLayout(cost_row, 1);
   layout->addWidget(buttons);
 
   poller_->setInterval(kPollMs);
@@ -164,6 +188,9 @@ MetricsDialog::MetricsDialog(client::app::CallSession& session, QWidget* parent)
 void MetricsDialog::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
   drawn_at_ms_ = clock_.elapsed();
+  // A fresh interval, so the first CPU figure after a minimised spell is
+  // not the average of the whole time nobody was looking.
+  meter_.reset();
   poller_->start();
   frames_->start();
   // One reading straight away, so the charts do not open on "waiting" for a
@@ -194,7 +221,7 @@ void MetricsDialog::poll() {
   }
 
   const client::media::AudioStats stats = session_.stats();
-  history_.observe(stats, static_cast<double>(clock_.elapsed()));
+  history_.observe(stats, meter_.read(), static_cast<double>(clock_.elapsed()));
   hand_over();
   show_verdict(stats);
 }
@@ -209,7 +236,10 @@ void MetricsDialog::hand_over() {
   std::vector<QPointF> jitter;
   std::vector<QPointF> loss;
   std::vector<QPointF> concealment;
-  for (std::vector<QPointF>* series : {&up, &down, &round_trip, &jitter, &loss, &concealment}) {
+  std::vector<QPointF> cpu;
+  std::vector<QPointF> memory;
+  for (std::vector<QPointF>* series :
+       {&up, &down, &round_trip, &jitter, &loss, &concealment, &cpu, &memory}) {
     series->reserve(count);
   }
 
@@ -220,6 +250,15 @@ void MetricsDialog::hand_over() {
     jitter.emplace_back(sample.at_ms, sample.jitter_ms);
     loss.emplace_back(sample.at_ms, sample.loss_percent);
     concealment.emplace_back(sample.at_ms, sample.concealment_percent);
+    // Left out rather than drawn as zero when there is no figure: the first
+    // reading has no CPU share, and a zero there would open the chart with a
+    // dip that never happened.
+    if (sample.cpu_percent) {
+      cpu.emplace_back(sample.at_ms, *sample.cpu_percent);
+    }
+    if (sample.memory_mb) {
+      memory.emplace_back(sample.at_ms, *sample.memory_mb);
+    }
   }
 
   network_->set_points(two_lines(std::move(up), std::move(down)));
@@ -227,6 +266,8 @@ void MetricsDialog::hand_over() {
   jitter_->set_points(one_line(std::move(jitter)));
   loss_->set_points(one_line(std::move(loss)));
   concealment_->set_points(one_line(std::move(concealment)));
+  cpu_->set_points(one_line(std::move(cpu)));
+  memory_->set_points(one_line(std::move(memory)));
 }
 
 void MetricsDialog::show_verdict(const client::media::AudioStats& stats) {
@@ -270,7 +311,7 @@ void MetricsDialog::animate() {
   drawn_at_ms_ = now;
 
   const auto at = static_cast<double>(now);
-  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_}) {
+  for (MetricsChart* chart : {network_, round_trip_, jitter_, loss_, concealment_, cpu_, memory_}) {
     chart->advance(at, elapsed);
   }
 }

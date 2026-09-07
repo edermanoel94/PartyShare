@@ -181,4 +181,43 @@ TEST(NiceCeilingTest, NothingMeasuredStillLeavesAnAxisToDrawOn) {
   EXPECT_GT(nice_ceiling(-5.0), 0.0);
 }
 
+TEST(MetricsHistoryTest, AReadingWithoutTheProcessCarriesNoProcessFigures) {
+  MetricsHistory history(60000.0);
+  history.observe(reading(100, 0), 0.0);
+
+  ASSERT_EQ(history.samples().size(), 1U);
+  EXPECT_FALSE(history.samples().back().cpu_percent.has_value());
+  EXPECT_FALSE(history.samples().back().memory_mb.has_value());
+}
+
+TEST(MetricsHistoryTest, TheProcessFiguresRideOnTheSameSampleAsTheNetworkOnes) {
+  MetricsHistory history(60000.0);
+  dv::client::app::ProcessUsage usage;
+  usage.cpu_percent = 12.5;
+  // 300 MiB, in the megabyte the task managers count in.
+  usage.resident_bytes = 300ULL * 1024ULL * 1024ULL;
+  history.observe(reading(100, 0), usage, 200.0);
+
+  ASSERT_EQ(history.samples().size(), 1U);
+  const auto& sample = history.samples().back();
+  EXPECT_DOUBLE_EQ(sample.at_ms, 200.0);
+  ASSERT_TRUE(sample.cpu_percent.has_value());
+  EXPECT_DOUBLE_EQ(*sample.cpu_percent, 12.5);
+  ASSERT_TRUE(sample.memory_mb.has_value());
+  EXPECT_DOUBLE_EQ(*sample.memory_mb, 300.0);
+}
+
+TEST(MetricsHistoryTest, AFirstProcessReadingHasMemoryAndNoShare) {
+  // What app::ProcessUsageMeter hands over on its first reading: the share
+  // needs an interval, the memory does not.
+  MetricsHistory history(60000.0);
+  dv::client::app::ProcessUsage usage;
+  usage.resident_bytes = 1024ULL * 1024ULL;
+  history.observe(reading(100, 0), usage, 0.0);
+
+  EXPECT_FALSE(history.samples().back().cpu_percent.has_value());
+  ASSERT_TRUE(history.samples().back().memory_mb.has_value());
+  EXPECT_DOUBLE_EQ(*history.samples().back().memory_mb, 1.0);
+}
+
 }  // namespace

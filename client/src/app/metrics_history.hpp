@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 
+#include "app/process_usage.hpp"
 #include "media/media_session.hpp"
 
 namespace dv::client::app {
@@ -35,6 +37,15 @@ struct MetricsSample {
   /// and jitter and shrinks back on a clean link, so this is the latency the
   /// network is currently costing on top of the codec's own.
   double jitter_buffer_ms = 0.0;
+  /// What this process was costing the machine when the reading was taken:
+  /// its share of every core together, in percent, and its resident memory
+  /// in megabytes. Both empty when the caller had no reading to give, and
+  /// the share empty on the first reading besides, which has no interval
+  /// behind it: see app::ProcessUsage. Kept on the same sample as the
+  /// network figures so that the charts of the two share one time axis and
+  /// a spike in one can be read against the other.
+  std::optional<double> cpu_percent;
+  std::optional<double> memory_mb;
 };
 
 /// The readings of the last window, and the counters needed to turn the
@@ -55,6 +66,12 @@ class MetricsHistory {
   /// is the one that has to plot it on an axis, and two clocks read a
   /// microsecond apart put the newest point a microsecond off the right edge.
   void observe(const media::AudioStats& stats, double at_ms);
+
+  /// The same, with what the process was costing at the time. `usage` may
+  /// be empty on a platform that cannot say, in which case the sample
+  /// carries the network figures alone.
+  void observe(const media::AudioStats& stats, const std::optional<ProcessUsage>& usage,
+               double at_ms);
 
   [[nodiscard]] const std::deque<MetricsSample>& samples() const noexcept { return samples_; }
   [[nodiscard]] bool empty() const noexcept { return samples_.empty(); }

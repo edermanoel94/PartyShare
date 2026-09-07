@@ -38,8 +38,6 @@ class ChatView;
 class ElidedLabel;
 class MetricsDialog;
 class ScreenView;
-class UpdateChecker;
-
 /// The interface of section 19 of SPEC.md: three screens and a settings
 /// dialog, over the core built in M2 to M6.
 ///
@@ -64,11 +62,10 @@ class MainWindow : public QMainWindow {
   Q_OBJECT
 
  public:
-  /// `updates` has to outlive this window. It is not started here and not read
-  /// here: the window passes it to the settings dialog, which is where it can
-  /// be switched on and off, and hears about a new release through the
-  /// announce_update slot below.
-  MainWindow(client::app::CallSession& session, UpdateChecker& updates, QWidget* parent = nullptr);
+  /// The release check is not handed in: this window hears about a new
+  /// release through the announce_update slot below, and that is the whole of
+  /// its acquaintance with it.
+  explicit MainWindow(client::app::CallSession& session, QWidget* parent = nullptr);
   ~MainWindow() override;
 
  public slots:
@@ -246,10 +243,10 @@ class MainWindow : public QMainWindow {
   ///
   /// Failing to write is a line in the log and not a refusal: the sign-in it
   /// is part of works either way, and a full disk is not a reason to be kept
-  /// out of a room. The settings dialog keeps its own pending list and its
-  /// own Save button for the same key; this is the one setting that is asked
-  /// for by a form whose only button is "go", and a form like that does not
-  /// get a second button for "and remember".
+  /// out of a room. The settings dialog keeps a pending list and a Save
+  /// button for what it holds; this key is asked for by a form whose only
+  /// button is "go", and a form like that does not get a second button for
+  /// "and remember".
   void remember_server_address(const std::string& url);
 
   void build_login_page();
@@ -319,16 +316,12 @@ class MainWindow : public QMainWindow {
   void refresh_room_title();
 
   client::app::CallSession& session_;
-  /// Held only to hand to the settings dialog, which is where the switch for
-  /// it lives. This window neither starts it nor asks it anything; what it
-  /// hears from it arrives through announce_update.
-  UpdateChecker& updates_;
 
   QStackedWidget* pages_ = nullptr;
 
   // Login.
   /// Where the server is, as an IP or a name. See build_login_page for why
-  /// this is on the form and not only in config.ini and the settings dialog.
+  /// this is on the form and not only in config.ini.
   QLineEdit* server_ = nullptr;
   QPushButton* test_server_button_ = nullptr;
   QLabel* server_hint_ = nullptr;

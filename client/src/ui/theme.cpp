@@ -3,6 +3,7 @@
 #include <array>
 
 #include <QApplication>
+#include <QFont>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QString>
@@ -521,6 +522,136 @@ QScrollBar::add-page, QScrollBar::sub-page {
   background: transparent;
 }
 
+)qss";
+
+/// The rest of the sheet, from the chat down. Two literals rather than one
+/// because MSVC refuses a single string literal over 16380 bytes (C2026), and
+/// the sheet crossed that line; filled_stylesheet joins them.
+constexpr const char* kStyleSheetContinued = R"qss(
+/* --- chat ---------------------------------------------------------------- */
+
+/* The button that opens the emoji picker, beside the message field. Quiet: a
+   bordered box between a bordered field and a filled Send button was three
+   shapes fighting for one row, and it was shorter than either of the other
+   two. The border comes up under the pointer, the padding goes, and the glyph
+   gets the size an emoji needs to read as a face rather than as a dot. The
+   focus rule names the property for the reason the button block above does:
+   at equal specificity the later rule wins, and QPushButton:focus is later. */
+QPushButton[emoji="true"] {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: @{control_radius}px;
+  padding: 0;
+  font-size: 15pt;
+}
+QPushButton[emoji="true"]:hover {
+  background: @{surface_hover};
+  border-color: @{border_strong};
+}
+QPushButton[emoji="true"]:pressed {
+  background: @{surface_pressed};
+}
+QPushButton[emoji="true"]:focus {
+  border: 1px solid @{accent};
+  padding: 0;
+}
+QPushButton[emoji="true"]:disabled {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* The picker: a card, drawn the way a menu is, rather than forty bordered
+   buttons on a bare window. The widget carries WA_StyledBackground, without
+   which a plain QWidget ignores this rule, and WA_TranslucentBackground, so
+   that what lies outside the rounded corners is nothing rather than a square
+   of window colour. See ui/emoji_picker.cpp. */
+QWidget#emojiPicker {
+  background: @{surface};
+  border: 1px solid @{border};
+  border-radius: @{control_radius}px;
+}
+/* Each emoji in it: a flat square that lights up under the pointer or the
+   focus, in the same wash a selected list row wears. */
+QPushButton[emoji="cell"] {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0;
+  font-size: 17pt;
+}
+QPushButton[emoji="cell"]:hover,
+QPushButton[emoji="cell"]:focus {
+  background: @{accent_soft};
+  border: 1px solid transparent;
+  padding: 0;
+}
+QPushButton[emoji="cell"]:pressed {
+  background: @{surface_pressed};
+}
+
+/* --- the administrator's console ----------------------------------------- */
+
+/* The filter over the account table: a prompt on a line, not a search box.
+   The window colour rather than the surface, so it reads as the console's
+   input rather than as one more field. */
+QLineEdit[console="true"] {
+  background: @{window};
+  padding: 6px 10px;
+}
+QLineEdit[console="true"]:focus {
+  border-color: @{accent};
+}
+
+/* The pane beside the table, a card of its own. */
+QFrame#accountPane {
+  background: @{surface};
+  border: 1px solid @{border};
+  border-radius: @{card_radius}px;
+}
+/* The rules between its sections. */
+QFrame#rule {
+  background: @{border};
+  border: none;
+}
+/* Small capitals over a section: the text is upper cased where it is set,
+   because a stylesheet cannot ask for it. */
+QLabel[eyebrow="true"] {
+  color: @{muted};
+  font-size: 11px;
+  font-weight: 700;
+}
+QLabel[eyebrow="true"][accent="true"] {
+  color: @{accent};
+}
+
+/* A button that is a line of text until the pointer is on it. The pane holds
+   four side by side, and four bordered boxes would be a second toolbar. The
+   focus rule names the property for the reason the button block does. */
+QPushButton[quiet="accent"], QPushButton[quiet="danger"] {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 5px 8px;
+  text-align: left;
+}
+QPushButton[quiet="accent"] {
+  color: @{accent};
+}
+QPushButton[quiet="danger"] {
+  color: @{danger};
+}
+QPushButton[quiet="accent"]:hover {
+  background: @{accent_soft};
+  border-color: transparent;
+}
+QPushButton[quiet="danger"]:hover {
+  background: @{danger_soft};
+  border-color: transparent;
+}
+QPushButton[quiet="accent"]:focus, QPushButton[quiet="danger"]:focus {
+  border: 1px solid @{accent};
+  padding: 5px 8px;
+}
+
 /* --- chrome -------------------------------------------------------------- */
 
 /* The padding is not decoration: without it the status text starts in the
@@ -561,7 +692,7 @@ QMenu::separator {
 )qss";
 
 QString filled_stylesheet(const Colors& colors) {
-  QString sheet = QString::fromUtf8(kStyleSheet);
+  QString sheet = QString::fromUtf8(kStyleSheet) + QString::fromUtf8(kStyleSheetContinued);
 
   const std::array<std::pair<const char*, QColor>, 20> tokens{{
       {"window", colors.window},
@@ -650,6 +781,16 @@ const Colors& colors() {
 
 QString stylesheet() {
   return filled_stylesheet(current());
+}
+
+QFont console_font(qreal point_size) {
+  QFont mono;
+  mono.setFamilies({QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"),
+                    QStringLiteral("SF Mono"), QStringLiteral("Menlo"),
+                    QStringLiteral("DejaVu Sans Mono"), QStringLiteral("Liberation Mono")});
+  mono.setStyleHint(QFont::Monospace);
+  mono.setPointSizeF(point_size);
+  return mono;
 }
 
 void apply(QApplication& application) {

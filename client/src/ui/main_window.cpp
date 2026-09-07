@@ -23,7 +23,6 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QGraphicsOpacityEffect>
-#include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -60,6 +59,7 @@
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
 #include "ui/elided_label.hpp"
+#include "ui/emoji_picker.hpp"
 #include "ui/metrics_dialog.hpp"
 #include "ui/participant_delegate.hpp"
 #include "ui/password_dialog.hpp"
@@ -146,52 +146,9 @@ constexpr int kLinkOffline = -3;
   return field;
 }
 
-/// How many emoji the picker puts on a row. Eight of them at 34 pixels plus
-/// the spacing is about 290 wide, which fits under a sidebar that is 260 to
-/// 320 and does not hang off the side of the window.
-constexpr int kEmojiColumns = 8;
-
-/// What the picker offers.
-///
-/// Forty, chosen and not generated. The system picker already does the whole
-/// of Unicode with a search box, skin tones and a list of recents, and it will
-/// know about emoji that do not exist yet; competing with it would be a worse
-/// copy that goes out of date. What it cannot do is put the handful somebody
-/// reaches for during a call one click away, and that is what this is.
-///
-/// Ctrl+Cmd+Space on macOS and Win+. on Windows open the system one in this
-/// same field, so nothing here is a ceiling on what can be sent.
-[[nodiscard]] const QStringList& quick_emoji() {
-  // A function local static: a QStringList has a non-trivial constructor and
-  // cannot be constexpr, which is the case client/src/ui/.clang-tidy's naming
-  // rules call out.
-  // clang-format off
-  //
-  // Laid out eight to a line because that is how many go on a row of the
-  // picker, so the source has the shape of the thing on screen, and written as
-  // the characters themselves so that what is on offer can be read here rather
-  // than decoded. clang-format measures a line in bytes and an emoji is four
-  // of them, so left alone it reflows this to one per line and the grid goes.
-  static const QStringList kQuickEmoji = {
-      // Answers, which is most of what a chat during a call is for.
-      QStringLiteral("👍"), QStringLiteral("👎"), QStringLiteral("👌"), QStringLiteral("🙌"),
-      QStringLiteral("👏"), QStringLiteral("🙏"), QStringLiteral("💪"), QStringLiteral("🤝"),
-      // Faces.
-      QStringLiteral("😀"), QStringLiteral("😄"), QStringLiteral("😅"), QStringLiteral("😂"),
-      QStringLiteral("🙂"), QStringLiteral("😉"), QStringLiteral("😍"), QStringLiteral("🤔"),
-      QStringLiteral("😐"), QStringLiteral("😴"), QStringLiteral("😭"), QStringLiteral("😱"),
-      QStringLiteral("😡"), QStringLiteral("🤯"), QStringLiteral("🤦"), QStringLiteral("🤷"),
-      // How it went.
-      QStringLiteral("🎉"), QStringLiteral("🎊"), QStringLiteral("🔥"), QStringLiteral("⭐"),
-      QStringLiteral("✨"), QStringLiteral("💡"), QStringLiteral("✅"), QStringLiteral("❌"),
-      // The work itself.
-      QStringLiteral("🚀"), QStringLiteral("🐛"), QStringLiteral("🔧"), QStringLiteral("📌"),
-      QStringLiteral("⏰"), QStringLiteral("☕"), QStringLiteral("👀"), QStringLiteral("❤️"),
-  };
-  // clang-format on
-
-  return kQuickEmoji;
-}
+/// How wide the button that opens the emoji picker is, in pixels. Its height
+/// is the row's: see build_room_page.
+constexpr int kEmojiButtonWidth = 36;
 
 /// One line of the conversation as it is shown: when it was said, by whom, and
 /// what.
@@ -295,10 +252,9 @@ constexpr int kLevelFrameMs = 16;
 
 }  // namespace
 
-MainWindow::MainWindow(client::app::CallSession& session, UpdateChecker& updates, QWidget* parent)
+MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
     : QMainWindow(parent),
       session_(session),
-      updates_(updates),
       pages_(new QStackedWidget(this)),
       // What the session starts with came from the configuration, so the
       // first sign-in to it has nothing to write down.
@@ -426,17 +382,19 @@ void MainWindow::build_login_page() {
   // The server first, above the name, because it is the question the other
   // two depend on: a username is only a username somewhere.
   //
-  // It is on the form and not only in config.ini and the settings dialog,
-  // and the history is why. The address used to be reachable from this
-  // screen through a Settings button, which left in 0.1.55 and came back in
-  // 0.1.57 because a wrong address in config.ini had left editing the file
-  // by hand as the only way in. Both arrangements asked somebody who had been
-  // handed "192.168.1.10" to know that a WebSocket URL was what the program
-  // wanted, and to find the row for it. This field takes the address as it
-  // was handed over - app::expand_server_address says what it makes of it -
-  // and the button beside it asks the server whether it is there, which was
-  // otherwise a question answered by a failed sign-in. Settings stays on the
-  // home screen and in the room, where the rest of what it holds is used.
+  // It is on the form and not in config.ini alone, and the history is why.
+  // The address used to be a row in Settings, reachable from this screen
+  // through a button that left in 0.1.55 and came back in 0.1.57 because a
+  // wrong address in config.ini had left editing the file by hand as the only
+  // way in. Both arrangements asked somebody who had been handed
+  // "192.168.1.10" to know that a WebSocket URL was what the program wanted,
+  // and to find the row for it. This field takes the address as it was handed
+  // over - app::expand_server_address says what it makes of it - and the
+  // button beside it asks the server whether it is there, which was otherwise
+  // a question answered by a failed sign-in. The row in Settings went once
+  // this field existed: an address there could only be adopted at the next
+  // sign-in, which is where this field already is. Settings stays on the home
+  // screen and in the room, where the rest of what it holds is used.
   server_ = new QLineEdit(box);
   server_->setPlaceholderText(QStringLiteral("192.168.1.10 or party.example.com"));
   server_->setToolTip(
@@ -602,8 +560,8 @@ void MainWindow::build_home_page() {
   join_button_->setMinimumHeight(44);
 
   // Settings is reachable from here and not only from inside a room, so the
-  // microphone, the monitor and the server address can be sorted out before
-  // there is anybody on the other end to hear the result. It goes with the
+  // microphone and the monitor can be sorted out before there is anybody on
+  // the other end to hear the result. It goes with the
   // account buttons below rather than with the room ones above: all three are
   // about this machine or this person, none is what somebody came to this
   // screen to do.
@@ -611,11 +569,11 @@ void MainWindow::build_home_page() {
   settings->setMinimumHeight(36);
 
   // The way back to the login screen, and the reason it exists is the server
-  // address in the settings dialog. A new address is adopted at the next
-  // sign-in, and without a way to sign out, "the next sign-in" would mean
-  // closing and reopening the program - which is the thing the setting was
-  // added to avoid. It is also the only way to hand the machine to somebody
-  // else without doing that.
+  // field on it. A new address is adopted at the next sign-in, and without a
+  // way to sign out, "the next sign-in" would mean closing and reopening the
+  // program - which is the thing a field for the address was added to avoid.
+  // It is also the only way to hand the machine to somebody else without
+  // doing that.
   // Next to sign out, and for the same reason it sits at the bottom: both are
   // about the account rather than about a room, and neither is what somebody
   // came to this screen to do. Offered to everybody, administrators included -
@@ -779,12 +737,19 @@ void MainWindow::build_room_page() {
 
   chat_emoji_ = new QPushButton(QStringLiteral("🙂"), chat);
   chat_emoji_->setToolTip(QStringLiteral("Insert an emoji"));
-  // Square and small: it sits in a sidebar that is 260 pixels wide at its
-  // narrowest, and every pixel it takes is one the message field does not get.
-  chat_emoji_->setFixedWidth(34);
-  // The stylesheet gives every button 18 pixels of side padding, which on a
-  // button pinned to 34 wide leaves nothing for the emoji itself.
-  chat_emoji_->setStyleSheet(QStringLiteral("padding: 0px;"));
+  // Narrow, because it sits in a sidebar that is 240 pixels wide at its
+  // narrowest and every pixel it takes is one the message field does not get;
+  // and as tall as the row, which a button is not by default. A QPushButton's
+  // vertical policy is Fixed, so the row's height went to the field and the
+  // Send button while this one kept its own, and the three sat on the same
+  // line at two different heights. Preferred lets the layout stretch it.
+  chat_emoji_->setFixedWidth(kEmojiButtonWidth);
+  chat_emoji_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+  chat_emoji_->setCursor(Qt::PointingHandCursor);
+  // The stylesheet draws it quiet - no border until the pointer is on it, no
+  // padding, the glyph at a size an emoji needs to read as a face - under
+  // `QPushButton[emoji="true"]`. See ui/theme.cpp.
+  chat_emoji_->setProperty("emoji", true);
 
   chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
   chat_send_->setProperty("accent", true);
@@ -1410,10 +1375,12 @@ void MainWindow::return_to_login(const QString& text) {
   password_->clear();
   show_login_error(text);
 
-  // The server field says what the next sign-in will use, and the settings
-  // dialog may have moved that while somebody was signed in - which is the
-  // case its own row describes as "leave the room and sign in again". The
-  // sentence under the field, if any, was about a test of the old one.
+  // The server field says what the next sign-in will use. Since the row in
+  // Settings went, this screen is the only one that moves the address, so the
+  // field already says what the socket is on; it is put back from the session
+  // anyway, so that the two cannot disagree by a route this file has not
+  // thought of. The sentence under the field, if any, was about a test of the
+  // old one.
   server_->setText(
       QString::fromStdString(client::app::display_server_address(session_.signaling_url())));
   server_under_test_.clear();
@@ -1573,52 +1540,12 @@ void MainWindow::on_send_chat() {
 }
 
 void MainWindow::on_open_emoji_picker() {
-  // A window of its own with Qt::Popup, and not a QMenu holding one widget.
-  //
-  // The QMenu route was written first and looks right: it draws the grid, it
-  // closes on a click outside, and it needs no lifetime handling. It also
-  // never delivers a click to a single one of those buttons on macOS. The menu
-  // keeps the mouse grab for itself and the presses die inside it, so the
-  // picker opened, showed forty emoji, and did nothing at all.
-  //
-  // Qt::Popup gives the same behaviour a picker needs, closing on a click
-  // outside and on escape, and what is inside it stays an ordinary widget that
-  // sees ordinary events. WA_DeleteOnClose is what disposes of it, because
-  // every one of those ways out ends in close().
-  auto* popup = new QWidget(chat_emoji_, Qt::Popup);
-  popup->setAttribute(Qt::WA_DeleteOnClose);
-
-  auto* grid = new QGridLayout(popup);
-  grid->setContentsMargins(4, 4, 4, 4);
-  grid->setSpacing(2);
-
-  int row = 0;
-  int column = 0;
-  for (const QString& emoji : quick_emoji()) {
-    auto* button = new QPushButton(emoji, popup);
-    button->setFlat(true);
-    button->setFixedSize(34, 34);
-    connect(button, &QPushButton::clicked, popup, [this, emoji, popup] {
-      insert_emoji(emoji);
-      // Closed after one pick. Somebody who wants a second one presses the
-      // button again, which is a click either way, and a picker that stays
-      // open over the field it is typing into is one that has to be dismissed.
-      popup->close();
-    });
-    grid->addWidget(button, row, column);
-    if (++column == kEmojiColumns) {
-      column = 0;
-      ++row;
-    }
-  }
-
-  // Above the button and lined up with its right edge. The row it sits on is
-  // at the bottom of the window, so a picker dropped downwards would open off
-  // the screen and be moved back over the field it is meant to fill.
-  popup->adjustSize();
-  popup->move(
-      chat_emoji_->mapToGlobal(QPoint(chat_emoji_->width() - popup->width(), -popup->height())));
-  popup->show();
+  // A new one each time, deleted when it closes. What it shows never changes,
+  // but a picker kept around would need to be moved every time the sidebar
+  // did, and building forty flat buttons is not the expensive part of a click.
+  auto* picker = new EmojiPicker(chat_emoji_);
+  connect(picker, &EmojiPicker::picked, this, &MainWindow::insert_emoji);
+  picker->open_above(chat_emoji_);
 }
 
 void MainWindow::insert_emoji(const QString& emoji) {
@@ -1727,7 +1654,7 @@ bool MainWindow::choose_monitor() {
 }
 
 void MainWindow::on_open_settings() {
-  SettingsDialog dialog(session_, updates_, this);
+  SettingsDialog dialog(session_, this);
   // Otherwise every visit to Settings, for whatever reason, would quietly put
   // the monitor back to the first in the list.
   dialog.select_monitor(monitor_id_);

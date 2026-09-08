@@ -322,7 +322,7 @@ Result<std::monostate> CallSession::list_chat(int limit) {
   return signaling_.send(protocol::ListChat{.room_id = room, .limit = limit});
 }
 
-Result<std::monostate> CallSession::start_screen_share(const std::string& monitor_id,
+Result<std::monostate> CallSession::start_screen_share(const std::string& source_id,
                                                        ScreenAudio audio) {
   std::string user_id;
   std::string room;
@@ -349,7 +349,7 @@ Result<std::monostate> CallSession::start_screen_share(const std::string& monito
 
   // Capture first, announcement second. The other way round would tell the
   // room about a share that a refused permission is about to cancel.
-  if (auto started = session->start_screen_share(monitor_id); !started) {
+  if (auto started = session->start_screen_share(source_id); !started) {
     return started;
   }
 
@@ -455,6 +455,11 @@ std::string CallSession::screen_sharer() const {
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 Result<std::vector<video::Monitor>> CallSession::monitors() const {
   return video::monitors();
+}
+
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+Result<std::vector<video::Window>> CallSession::windows() const {
+  return video::windows();
 }
 
 Result<std::monostate> CallSession::set_video_bitrate(int min_kbps, int max_kbps) {

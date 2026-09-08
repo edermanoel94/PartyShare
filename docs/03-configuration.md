@@ -74,10 +74,22 @@ microphone, the output device, the screen resolution and frame rate, both ends o
 the bitrate range, the share sound mode and its volume, noise suppression, the
 voice gate and the room chime. The monitor is the one thing
 on that screen that is not saved, because it is which screen to share next
-rather than a setting. With more than one monitor the **Share screen** button
-asks the same question in a menu each time a share starts, and the box in
-Settings follows whatever was last chosen either way. Left alone, the primary
-monitor is shared - one screen, never every screen stitched side by side.
+rather than a setting. The **Share screen** button asks what to share in a menu
+each time a share starts: the entire screen, each monitor by name when there
+are several, or **One window** - a submenu of the windows open at that moment,
+front-most first. A monitor chosen there is what the box in Settings shows
+afterwards; a window is not something the box can show, and it keeps the
+monitor it had. Left alone, the primary monitor is shared - one screen, never
+every screen stitched side by side.
+
+Sharing a window follows the window. Resizing it changes the size sent, and
+minimizing it pauses the share - nothing goes out until it is restored, and
+everybody else keeps the last frame they got - while closing it ends the share
+with a message. A window that is already minimized cannot be shared until it is
+restored: the system has no pixels for it. On Windows the picture comes from
+Windows Graphics Capture, so a window covered by others, or drawing through
+Direct3D, is captured whole; Windows 10 draws a yellow border around a window
+being captured this way, and Windows 11 does not.
 
 **Resolution and frame rate** are `video.width`, `video.height` and `video.fps`,
 and the dialog offers 720p and 1080p at 30 or 60 fps. Both take effect at once,

@@ -21,6 +21,10 @@ Result<std::vector<Monitor>> monitors() {
   return Result<std::vector<Monitor>>::failure("capture_unavailable", kUnavailable);
 }
 
+Result<std::vector<Window>> windows() {
+  return Result<std::vector<Window>>::failure("capture_unavailable", kUnavailable);
+}
+
 bool screen_capture_is_available() noexcept {
   return false;
 }

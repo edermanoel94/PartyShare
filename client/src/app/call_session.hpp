@@ -384,14 +384,16 @@ class CallSession {
   /// mis-wired button is not a round trip.
   [[nodiscard]] Result<std::monostate> acknowledge_notice(const std::string& notice_id);
 
-  /// Starts sharing `monitor_id`, or the primary monitor when empty.
+  /// Starts sharing `source_id` - a monitor as `monitors()` listed it or a
+  /// window as `windows()` did - or the primary monitor when empty.
   ///
   /// Two things have to happen and both can fail: the capture has to start,
   /// and the room has to be told. The capture goes first, so that a refused
   /// permission does not announce a share that is not happening.
   ///
   /// Fails with `screen_share_busy` when somebody else already holds the
-  /// floor, and with what the capture layer reports otherwise.
+  /// floor, and with what the capture layer reports otherwise - see
+  /// video::ScreenCapturer::start for what a window can refuse with.
   ///
   /// `audio` asks for the machine's sound to go with the picture. It is the one
   /// part that does **not** fail the share: a Windows too old to capture per
@@ -399,7 +401,7 @@ class CallSession {
   /// gives a share that is silent rather than no share at all. Ask
   /// `screen_audio_active()` for what actually happened, and
   /// `screen_audio_failure()` for why.
-  [[nodiscard]] Result<std::monostate> start_screen_share(const std::string& monitor_id = {},
+  [[nodiscard]] Result<std::monostate> start_screen_share(const std::string& source_id = {},
                                                           ScreenAudio audio = {});
   [[nodiscard]] Result<std::monostate> stop_screen_share();
   [[nodiscard]] bool sharing_screen() const;
@@ -466,6 +468,10 @@ class CallSession {
 
   /// The monitors this machine can share.
   [[nodiscard]] Result<std::vector<video::Monitor>> monitors() const;
+
+  /// The windows this machine can share, front-most first. Asked for at the
+  /// moment of sharing and not before: it is a list of what is open *now*.
+  [[nodiscard]] Result<std::vector<video::Window>> windows() const;
 
   /// The bitrate range the screen encoder may use, in kbps. Remembered, so a
   /// choice made before a call survives into it.

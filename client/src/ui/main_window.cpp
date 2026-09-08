@@ -22,6 +22,7 @@
 #include <QDateTime>
 #include <QEasingCurve>
 #include <QFont>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QGraphicsOpacityEffect>
 #include <QGroupBox>
@@ -202,6 +203,11 @@ constexpr int kMeterSteps = 1000;
 /// How long the incoming page takes to fade in.
 constexpr int kPageFadeMs = 140;
 
+/// How wide a window's title may run in the share menu before it is cut. A
+/// browser tab's title can be a whole sentence, and a menu as wide as the
+/// longest of forty of them is a menu that covers the call.
+constexpr int kWindowTitleWidth = 420;
+
 /// How often the microphone meter is redrawn while it is moving. Sixty a
 /// second, and stopped the moment it has nothing left to do.
 constexpr int kLevelFrameMs = 16;
@@ -236,6 +242,13 @@ constexpr int kLevelFrameMs = 16;
       {QStringLiteral("capture_failed"),
        QStringLiteral("Screen capture stopped. The monitor may have been disconnected.")},
       {QStringLiteral("monitor_not_found"), QStringLiteral("That monitor no longer exists.")},
+      {QStringLiteral("window_not_found"), QStringLiteral("That window is no longer open.")},
+      {QStringLiteral("window_minimized"),
+       QStringLiteral("That window is minimized. Restore it, then share it.")},
+      {QStringLiteral("window_closed"),
+       QStringLiteral("Screen share stopped: the shared window was closed.")},
+      {QStringLiteral("window_capture_failed"),
+       QStringLiteral("Screen share stopped. The system stopped drawing that window.")},
       {QStringLiteral("screen_share_busy"),
        QStringLiteral("Someone else is already sharing their screen.")},
       {QStringLiteral("media_unavailable"),
@@ -1600,10 +1613,11 @@ void MainWindow::on_toggle_share() {
     return;
   }
 
-  // Which screen, asked at the moment of sharing. Settings holds the same
-  // choice, but somebody with two monitors who never opened it had no way of
-  // knowing there was one to make, and shared both screens side by side.
-  if (!choose_monitor()) {
+  // The whole screen or one window, asked at the moment of sharing. Settings
+  // holds the monitor half of the choice, but somebody who never opened it
+  // had no way of knowing there was a choice to make, and a list of windows
+  // is only true at the moment it is shown.
+  if (!choose_source()) {
     refresh_controls();
     return;
   }
@@ -1613,7 +1627,7 @@ void MainWindow::on_toggle_share() {
   const client::app::ScreenAudio audio =
       screen_audio_.value_or(client::app::ScreenAudio{.mode = session_.screen_audio_mode()});
 
-  if (const auto started = session_.start_screen_share(monitor_id_.toStdString(), audio);
+  if (const auto started = session_.start_screen_share(share_source_.toStdString(), audio);
       !started) {
     apply_error(QString::fromStdString(started.error().code),
                 QString::fromStdString(started.error().message));
@@ -1635,20 +1649,22 @@ void MainWindow::on_toggle_share() {
   refresh_controls();
 }
 
-bool MainWindow::choose_monitor() {
-  const auto listed = session_.monitors();
-  if (!listed || listed.value().size() < 2) {
-    // One monitor, or none this side can name: nothing to ask. The capturer
-    // sorts out the rest, including saying so when there is nothing to grab.
+bool MainWindow::choose_source() {
+  const auto screens = session_.monitors();
+  const auto windows = session_.windows();
+  if (!screens && !windows) {
+    // Nothing this side can name: a build without libwebrtc, or a machine
+    // with no display. The capturer sorts out the rest, including saying so
+    // when there is nothing to grab.
     return true;
   }
 
-  // The one in use, or the primary for somebody who has never chosen. Marked
-  // rather than preselected: a menu has no selection, and the mark says which
-  // one "the same as last time" would be.
-  QString current = monitor_id_;
-  if (current.isEmpty()) {
-    for (const client::video::Monitor& monitor : listed.value()) {
+  // The one in use, or the primary monitor for somebody who has never chosen.
+  // Marked rather than preselected: a menu has no selection, and the mark
+  // says which one "the same as last time" would be.
+  QString current = share_source_;
+  if (current.isEmpty() && screens) {
+    for (const client::video::Monitor& monitor : screens.value()) {
       if (monitor.is_primary) {
         current = QString::fromStdString(monitor.id);
       }
@@ -1656,14 +1672,51 @@ bool MainWindow::choose_monitor() {
   }
 
   QMenu menu(this);
-  for (const client::video::Monitor& monitor : listed.value()) {
-    const QString id = QString::fromStdString(monitor.id);
-    const QString name = QString::fromStdString(monitor.name);
-    QAction* action =
-        menu.addAction(monitor.is_primary ? QStringLiteral("%1, primary").arg(name) : name);
+  const auto offer = [&current](QMenu& where, const QString& label, const QString& id) {
+    QAction* action = where.addAction(label);
     action->setCheckable(true);
     action->setChecked(id == current);
     action->setData(id);
+    return action;
+  };
+
+  // The whole screen first. With one monitor it is simply the screen; with
+  // more than one, each by name, and the primary says so.
+  if (screens) {
+    const bool several = screens.value().size() > 1;
+    for (const client::video::Monitor& monitor : screens.value()) {
+      const QString name = QString::fromStdString(monitor.name);
+      QString label = QStringLiteral("Entire screen");
+      if (several) {
+        label = monitor.is_primary ? QStringLiteral("%1, primary").arg(name) : name;
+      }
+      offer(menu, label, QString::fromStdString(monitor.id));
+    }
+  }
+
+  // Then one window, in a submenu of its own so that a machine with forty of
+  // them open does not push the screens off the bottom of the list. A title
+  // is what the user knows a window by, so it is shown whole where it fits
+  // and cut in the middle where it does not: the end of a title is usually
+  // the program's name, and losing it is losing the one part that tells two
+  // documents in two programs apart. The whole title waits in the tooltip.
+  QMenu* by_window = menu.addMenu(QStringLiteral("One window"));
+  by_window->setToolTipsVisible(true);
+  if (windows && !windows.value().empty()) {
+    const QFontMetrics metrics = by_window->fontMetrics();
+    for (const client::video::Window& window : windows.value()) {
+      const QString title = QString::fromStdString(window.title);
+      // Cut first, escaped second. An ampersand is a letter in a title and a
+      // mnemonic to a menu, and doubling it is what keeps it a letter; cutting
+      // after the doubling could leave half of the pair behind.
+      QString label = metrics.elidedText(title, Qt::ElideMiddle, kWindowTitleWidth);
+      label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+      QAction* action = offer(*by_window, label, QString::fromStdString(window.id));
+      action->setToolTip(title);
+    }
+  } else {
+    QAction* none = by_window->addAction(QStringLiteral("No window to share"));
+    none->setEnabled(false);
   }
 
   // Under the button, where a menu that a button opened belongs. Nothing
@@ -1673,7 +1726,19 @@ bool MainWindow::choose_monitor() {
   if (chosen == nullptr) {
     return false;
   }
-  monitor_id_ = chosen->data().toString();
+  share_source_ = chosen->data().toString();
+
+  // A monitor is also what the box in Settings shows, so the box follows. A
+  // window is not something the box can show, and it keeps the monitor it
+  // had: that is what "the monitor" still means for the next time a screen
+  // is the choice.
+  if (screens) {
+    for (const client::video::Monitor& monitor : screens.value()) {
+      if (QString::fromStdString(monitor.id) == share_source_) {
+        monitor_id_ = share_source_;
+      }
+    }
+  }
   return true;
 }
 
@@ -1682,8 +1747,16 @@ void MainWindow::on_open_settings() {
   // Otherwise every visit to Settings, for whatever reason, would quietly put
   // the monitor back to the first in the list.
   dialog.select_monitor(monitor_id_);
+  const QString monitor_before = dialog.selected_monitor();
   dialog.exec();
   monitor_id_ = dialog.selected_monitor();
+  // A monitor picked there is the next thing shared. A box left alone leaves
+  // the share menu's choice alone too, which matters when that choice was a
+  // window: somebody who opened Settings to turn the chime off did not mean
+  // to switch from sharing their editor to sharing their whole screen.
+  if (monitor_id_ != monitor_before) {
+    share_source_ = monitor_id_;
+  }
   screen_audio_ = dialog.selected_screen_audio();
 }
 

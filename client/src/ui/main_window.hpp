@@ -108,11 +108,12 @@ class MainWindow : public QMainWindow {
   void on_leave_room();
   void on_toggle_mute();
   void on_toggle_share();
-  /// Asks which monitor to share when there is more than one, in a menu under
-  /// the share button, and leaves the answer in `monitor_id_`. With a single
-  /// monitor there is nothing to ask and it answers true at once. False means
-  /// the menu was dismissed, and no share should start.
-  bool choose_monitor();
+  /// Asks what to share - the whole screen, one of the monitors when there
+  /// are several, or one window - in a menu under the share button, and
+  /// leaves the answer in `share_source_`. Asked every time: the windows open
+  /// now are not the windows that were open last time. False means the menu
+  /// was dismissed, and no share should start.
+  bool choose_source();
   /// Opens the change-password form, and sends what it collected.
   ///
   /// Home screen only, which is where it is offered. Succeeding ends the
@@ -469,9 +470,14 @@ class MainWindow : public QMainWindow {
   /// The volume applied to each participant, by user id, as a percentage.
   /// Anyone missing is at 100, which is the volume they were sent at.
   QHash<QString, int> volumes_;
-  /// The monitor to share, as the share button's menu or the settings dialog
-  /// last chose it. Empty for the primary one, which is what the capturer
-  /// makes of an empty id as well.
+  /// What the next share captures - a monitor or a window - as the share
+  /// button's menu last chose it, or the monitor the settings dialog was
+  /// last pointed at. Empty for the primary monitor, which is what the
+  /// capturer makes of an empty id as well.
+  QString share_source_;
+  /// The monitor to share when a screen is the choice, which is the half of
+  /// `share_source_` the settings dialog can show in its box. A window chosen
+  /// in the menu leaves this where it was.
   QString monitor_id_;
   /// What the next share should carry besides the picture, as the settings
   /// dialog last left it. Read from the configuration on the first share, so

@@ -391,18 +391,20 @@ class MediaSession {
   [[nodiscard]] virtual Result<std::monostate> set_input_device(const std::string& device_id) = 0;
   [[nodiscard]] virtual Result<std::monostate> set_output_device(const std::string& device_id) = 0;
 
-  /// Starts sending `monitor_id`, or the primary monitor when it is empty.
+  /// Starts sending `source_id` - a monitor or a window, as video::monitors()
+  /// or video::windows() listed it - or the primary monitor when it is empty.
   ///
   /// Needs no renegotiation: the m-line that carries the screen is part of the
   /// session from the moment it is created, and starting a share only starts
   /// filling it. That is what lets a share stop and start again without
   /// interrupting the call.
   ///
-  /// Fails with `monitor_not_found` and `capture_unavailable`. A refusal that
-  /// only arrives later, such as declining a Wayland portal, comes through
+  /// Fails with what video::ScreenCapturer::start fails with:
+  /// `monitor_not_found`, `window_not_found`, `window_minimized` and
+  /// `capture_unavailable`. A refusal that only arrives later, such as
+  /// declining a Wayland portal or closing the shared window, comes through
   /// `on_screen_share_ended`.
-  [[nodiscard]] virtual Result<std::monostate> start_screen_share(
-      const std::string& monitor_id) = 0;
+  [[nodiscard]] virtual Result<std::monostate> start_screen_share(const std::string& source_id) = 0;
 
   /// Stops capturing. The track stays in place and simply carries nothing,
   /// which is the same thing muting does to audio.

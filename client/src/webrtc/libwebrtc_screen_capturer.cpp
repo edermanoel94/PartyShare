@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -33,6 +34,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <objbase.h>
 #include <windows.h>
 #endif
 
@@ -60,14 +62,95 @@ constexpr auto kFirstFrameTimeout = std::chrono::seconds(15);
 /// compositor was busy. A run of them is not.
 constexpr int kMaxConsecutiveFailures = 30;
 
+/// What a window's id starts with, so that `start` can tell it from a
+/// monitor's without either side of the interface knowing how the other is
+/// numbered. On Windows the number after it is the window handle, which is
+/// what libwebrtc uses as a window's source id.
+constexpr std::string_view kWindowPrefix = "window:";
+
 [[nodiscard]] webrtc::DesktopCaptureOptions capture_options() {
   webrtc::DesktopCaptureOptions options = webrtc::DesktopCaptureOptions::CreateDefault();
 #if defined(WEBRTC_WIN)
   // Desktop Duplication rather than the GDI fallback, as section 7 of SPEC.md
   // asks.
   options.set_allow_directx_capturer(true);
+  // Windows Graphics Capture for windows, the same section's first choice.
+  // The GDI window capturer paints a window black when its content is
+  // hardware accelerated - a browser, a game, anything on Direct3D - and
+  // cannot see one that another window is covering. Graphics Capture reads
+  // the compositor's copy, which has both. Screens stay on Desktop
+  // Duplication: it is what docs/11-benchmarks.md measured, and nothing about
+  // capturing a window changes what a screen costs.
+  options.set_allow_wgc_window_capturer(true);
 #endif
   return options;
+}
+
+#if defined(WEBRTC_WIN)
+/// COM, for the thread this is on.
+///
+/// Windows Graphics Capture is a WinRT API and refuses a thread that has not
+/// joined an apartment - CO_E_NOTINITIALIZED from inside libwebrtc, which it
+/// reports as the window not being capturable. Desktop Duplication never
+/// needed this, which is why the capture thread got by without it until
+/// windows came along.
+///
+/// Multithreaded rather than single-threaded: nothing here pumps messages,
+/// and a single-threaded apartment that does not pump is one that eventually
+/// hangs a cross-apartment call. A thread already in an apartment of either
+/// kind - the interface's, which Qt joined at startup - is left as it is; it
+/// is initialised, which is all Graphics Capture asks.
+class ComScope {
+ public:
+  ComScope() : owned_(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {}
+
+  ~ComScope() {
+    if (owned_) {
+      CoUninitialize();
+    }
+  }
+
+  ComScope(const ComScope&) = delete;
+  ComScope& operator=(const ComScope&) = delete;
+  ComScope(ComScope&&) = delete;
+  ComScope& operator=(ComScope&&) = delete;
+
+ private:
+  bool owned_;
+};
+#endif
+
+/// What `start` was handed, once its id has been read.
+struct SourceRef {
+  enum class Kind : std::uint8_t {
+    /// An empty id: whichever monitor the system calls primary.
+    PrimaryMonitor,
+    Monitor,
+    Window,
+  };
+  Kind kind = Kind::PrimaryMonitor;
+  webrtc::DesktopCapturer::SourceId id = 0;
+};
+
+[[nodiscard]] Result<SourceRef> parse_source(const std::string& source_id) {
+  if (source_id.empty()) {
+    return SourceRef{};
+  }
+  const bool window = source_id.starts_with(kWindowPrefix);
+  const std::string number = window ? source_id.substr(kWindowPrefix.size()) : source_id;
+  try {
+    return SourceRef{.kind = window ? SourceRef::Kind::Window : SourceRef::Kind::Monitor,
+                     .id = static_cast<webrtc::DesktopCapturer::SourceId>(std::stoll(number))};
+  } catch (const std::exception&) {
+    return window ? Result<SourceRef>::failure("window_not_found",
+                                               "not a window identifier: " + source_id)
+                  : Result<SourceRef>::failure("monitor_not_found",
+                                               "not a monitor identifier: " + source_id);
+  }
+}
+
+[[nodiscard]] std::string window_id(webrtc::DesktopCapturer::SourceId id) {
+  return std::string(kWindowPrefix) + std::to_string(id);
 }
 
 [[nodiscard]] std::string monitor_name(const webrtc::DesktopCapturer::Source& source,
@@ -163,17 +246,12 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
 
   ~LibwebrtcScreenCapturer() override { stop(); }
 
-  Result<std::monostate> start(const std::string& monitor_id) override {
+  Result<std::monostate> start(const std::string& source_id) override {
     stop();
 
-    webrtc::DesktopCapturer::SourceId source_id = 0;
-    if (!monitor_id.empty()) {
-      try {
-        source_id = static_cast<webrtc::DesktopCapturer::SourceId>(std::stoll(monitor_id));
-      } catch (const std::exception&) {
-        return Result<std::monostate>::failure("monitor_not_found",
-                                               "not a monitor identifier: " + monitor_id);
-      }
+    const Result<SourceRef> parsed = parse_source(source_id);
+    if (!parsed) {
+      return Result<std::monostate>::failure(parsed.error());
     }
 
     // The capturer is created and driven on the capture thread. Several of the
@@ -183,9 +261,8 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
     running_.store(true);
     std::promise<Result<std::monostate>> started;
     std::future<Result<std::monostate>> ready = started.get_future();
-    thread_ = std::thread([this, source_id, use_default = monitor_id.empty(),
-                           started = std::move(started)]() mutable {
-      capture_loop(source_id, use_default, started);
+    thread_ = std::thread([this, source = parsed.value(), started = std::move(started)]() mutable {
+      capture_loop(source, started);
     });
 
     Result<std::monostate> result = ready.get();
@@ -199,15 +276,22 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
   }
 
   void stop() override {
-    if (!running_.exchange(false)) {
+    running_.store(false);
+    // The thread is what decides whether there is anything to do, not the
+    // flag. A capture that ended on its own - the window closed, the monitor
+    // unplugged, the portal refused - has already cleared the flag in fail(),
+    // and a stop that took the flag's word for it would leave the thread
+    // joinable for the destructor to trip over, which std::thread answers
+    // with std::terminate.
+    if (!thread_.joinable()) {
       return;
     }
     // Called from a sink means called from the capture thread, and a thread
     // cannot join itself.
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
-      thread_.join();
-    } else if (thread_.joinable()) {
+    if (thread_.get_id() == std::this_thread::get_id()) {
       thread_.detach();
+    } else {
+      thread_.join();
     }
   }
 
@@ -228,17 +312,47 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
   }
 
  private:
-  void capture_loop(webrtc::DesktopCapturer::SourceId source_id, bool use_default,
-                    std::promise<Result<std::monostate>>& started) {
+  void capture_loop(SourceRef source, std::promise<Result<std::monostate>>& started) {
+#if defined(WEBRTC_WIN)
+    const ComScope com;
+#endif
+    const bool window = source.kind == SourceRef::Kind::Window;
     std::unique_ptr<webrtc::DesktopCapturer> capturer =
-        webrtc::DesktopCapturer::CreateScreenCapturer(capture_options());
+        window ? webrtc::DesktopCapturer::CreateWindowCapturer(capture_options())
+               : webrtc::DesktopCapturer::CreateScreenCapturer(capture_options());
     if (capturer == nullptr) {
       started.set_value(Result<std::monostate>::failure(
-          "capture_unavailable", "this system has no screen capturer, is a display attached?"));
+          "capture_unavailable", window ? "this system has no window capturer"
+                                        : "this system has no screen capturer, is a display "
+                                          "attached?"));
       return;
     }
 
-    if (use_default) {
+#if defined(WEBRTC_WIN)
+    // On Windows a window's source id is its handle, for Graphics Capture and
+    // GDI alike, and the handle answers the two questions the user needs
+    // answered apart. SelectSource below refuses a closed window and a
+    // minimized one with the same false, and "that window no longer exists"
+    // is the wrong thing to tell somebody who only minimized it.
+    //
+    // The cast is the one libwebrtc itself makes in both directions - see
+    // GetWindowList in modules/desktop_capture/win/window_capture_utils.cc -
+    // and there is no other way back from the number it hands out.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    const HWND handle = window ? reinterpret_cast<HWND>(source.id) : nullptr;
+    if (window && IsWindow(handle) == 0) {
+      started.set_value(Result<std::monostate>::failure(
+          "window_not_found", "window " + std::to_string(source.id) + " has closed"));
+      return;
+    }
+    if (window && IsIconic(handle) != 0) {
+      started.set_value(Result<std::monostate>::failure(
+          "window_minimized", "window " + std::to_string(source.id) + " is minimized"));
+      return;
+    }
+#endif
+
+    if (source.kind == SourceRef::Kind::PrimaryMonitor) {
       // An empty id promises the primary monitor, and libwebrtc's own default
       // is not that. A capturer never told SelectSource keeps
       // kFullDesktopScreenId and duplicates the whole desktop: on two monitors
@@ -248,17 +362,21 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
       // this capturer, because the ids belong to the capturer that made them.
       if (const auto listed = list_monitors(*capturer); listed && !listed.value().empty()) {
         // Written by describe() from a number, so it reads back as one.
-        source_id =
+        source.id =
             static_cast<webrtc::DesktopCapturer::SourceId>(std::stoll(listed.value().front().id));
-        use_default = false;
+        source.kind = SourceRef::Kind::Monitor;
       } else {
         DV_LOG_WARN("Screen capture: could not tell which monitor is primary, sharing them all");
       }
     }
 
-    if (!use_default && !capturer->SelectSource(source_id)) {
-      started.set_value(Result<std::monostate>::failure(
-          "monitor_not_found", "the system refused monitor " + std::to_string(source_id)));
+    if (source.kind != SourceRef::Kind::PrimaryMonitor && !capturer->SelectSource(source.id)) {
+      started.set_value(
+          window ? Result<std::monostate>::failure(
+                       "window_not_found", "the system refused window " + std::to_string(source.id))
+                 : Result<std::monostate>::failure(
+                       "monitor_not_found",
+                       "the system refused monitor " + std::to_string(source.id)));
       return;
     }
 
@@ -275,6 +393,42 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
     std::uint64_t window_frames = 0;
 
     while (running_.load()) {
+#if defined(WEBRTC_WIN)
+      if (window && IsWindow(handle) == 0) {
+        // Gone, and the handle is the one that says so in time. Graphics
+        // Capture would say it through the item's Closed event, but that
+        // event is delivered by a dispatcher queue bound to this thread, and
+        // this thread pumps no messages - so it would arrive never, and the
+        // capturer would hand back the last frame it has, forever, as a
+        // success. The GDI capturer answers at the next frame. Asking the
+        // window itself answers now, for both.
+        fail("window_closed", "the shared window was closed");
+        return;
+      }
+      if (window && IsIconic(handle) != 0) {
+        // Paused. A minimized window has no pixels, and what the backends do
+        // about that differs: Graphics Capture hands back the last frame it
+        // has, again and again, and GDI a 1x1 black one. Neither is worth
+        // encoding, so neither is asked for. Not a failure either, so the
+        // counter below stays where it is and the share outlives a minute in
+        // the taskbar; everybody else keeps the last frame that was sent. The
+        // first-frame deadline moves too: a share minimized the moment it
+        // started is waiting on the user, not on the system.
+        first_frame_deadline = Clock::now() + kFirstFrameTimeout;
+        {
+          // Says zero, because zero is what is being sent. A rate left at
+          // its last value would have the metrics report a pause as thirty
+          // frames a second of nothing.
+          const std::lock_guard<std::mutex> lock(stats_mutex_);
+          stats_.fps = 0;
+        }
+        window_frames = 0;
+        window_started = Clock::now();
+        std::this_thread::sleep_for(interval);
+        next_frame_at = Clock::now();
+        continue;
+      }
+#endif
       captured_ = false;
       captured_frame_.reset();
       capturer->CaptureFrame();
@@ -305,6 +459,16 @@ class LibwebrtcScreenCapturer final : public ScreenCapturer,
         }
         if (captured_result_ == webrtc::DesktopCapturer::Result::ERROR_PERMANENT ||
             consecutive_failures >= kMaxConsecutiveFailures) {
+          if (window) {
+#if defined(WEBRTC_WIN)
+            if (IsWindow(handle) == 0) {
+              fail("window_closed", "the shared window was closed");
+              return;
+            }
+#endif
+            fail("window_capture_failed", "the system stopped producing frames from the window");
+            return;
+          }
           fail("capture_failed", "the system stopped producing frames");
           return;
         }
@@ -377,6 +541,41 @@ Result<std::vector<Monitor>> monitors() {
   }
 
   return list_monitors(*capturer);
+}
+
+Result<std::vector<Window>> windows() {
+#if defined(WEBRTC_WIN)
+  // Listing needs no apartment, but choosing the backend does: whether
+  // Graphics Capture is available is a WinRT question, and a thread that
+  // cannot ask it gets the GDI list, which includes tool windows that
+  // Graphics Capture cannot capture. The same list from every thread, then.
+  const ComScope com;
+#endif
+  std::unique_ptr<webrtc::DesktopCapturer> capturer =
+      webrtc::DesktopCapturer::CreateWindowCapturer(capture_options());
+  if (capturer == nullptr) {
+    return Result<std::vector<Window>>::failure("capture_unavailable",
+                                                "this system has no window capturer");
+  }
+
+  webrtc::DesktopCapturer::SourceList sources;
+  if (!capturer->GetSourceList(&sources)) {
+    return Result<std::vector<Window>>::failure("capture_unavailable",
+                                                "the system would not list its windows");
+  }
+
+  std::vector<Window> found;
+  found.reserve(sources.size());
+  for (const webrtc::DesktopCapturer::Source& source : sources) {
+    // The backends already leave untitled windows out. Kept here as well
+    // because the header promises it, and a promise that rests on somebody
+    // else's filter is one release away from being broken.
+    if (source.title.empty()) {
+      continue;
+    }
+    found.push_back(Window{.id = window_id(source.id), .title = source.title});
+  }
+  return found;
 }
 
 bool screen_capture_is_available() noexcept {

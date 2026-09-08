@@ -997,7 +997,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     return Engine::instance().select_device(/*input=*/false, device_id);
   }
 
-  Result<std::monostate> start_screen_share(const std::string& monitor_id) override {
+  Result<std::monostate> start_screen_share(const std::string& source_id) override {
     stop_screen_share();
 
     auto created = video::create_screen_capturer(
@@ -1027,7 +1027,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
     }
 
     std::unique_ptr<video::ScreenCapturer> capturer = std::move(created).take();
-    if (auto started = capturer->start(monitor_id); !started) {
+    if (auto started = capturer->start(source_id); !started) {
       return Result<std::monostate>::failure(started.error());
     }
 
@@ -1039,7 +1039,7 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       // the monitor it was on. Asking the capturer would not answer it: an
       // empty id means "the primary one", and resolving it to a real id here
       // would pin the share to whichever monitor was primary at the time.
-      shared_monitor_ = monitor_id;
+      shared_source_ = source_id;
     }
 
     sharing_.store(true);
@@ -1141,14 +1141,14 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
       return std::monostate{};
     }
 
-    std::string monitor;
+    std::string source;
     {
       const std::lock_guard<std::mutex> lock(video_mutex_);
-      monitor = shared_monitor_;
+      source = shared_source_;
     }
 
     // Stops the old capture first, which start_screen_share does for us.
-    auto restarted = start_screen_share(monitor);
+    auto restarted = start_screen_share(source);
     if (!restarted) {
       // The share is off now and the room has not been told. Out through the
       // same door a capture that dies on its own uses, so that whoever is
@@ -1801,8 +1801,9 @@ class LibwebrtcMediaSession final : public MediaSession, public webrtc::PeerConn
 
   mutable std::mutex video_mutex_;
   std::unique_ptr<video::ScreenCapturer> capturer_;
-  /// The monitor the running share was asked for, empty for the primary one.
-  std::string shared_monitor_;
+  /// The monitor or window the running share was asked for, empty for the
+  /// primary monitor.
+  std::string shared_source_;
   VideoStats video_stats_;
   /// The previous reading, so that a total from the report can become a rate.
   std::uint64_t video_bytes_sent_ = 0;

@@ -177,9 +177,10 @@ does not. Lowering it lowers it for everyone.
 
 ## 5. Surface, configuration and protocol
 
-**Settings**, not a share dialog — there is no share dialog. The button toggles
-directly, opening a menu of monitors first only when there is more than one, and
-Settings holds the same monitor choice. Two rows next to it: **Share
+**Settings**, not a share dialog — there is no share dialog. The button opens a
+menu of what to share — the entire screen, each monitor when there are several,
+and **One window** with the windows open at that moment — and Settings holds the
+monitor half of that choice. Two rows next to it: **Share
 sound** (None / Everything but PartyShare / One application) and **Application**,
 plus a hint line that explains a disabled control instead of leaving it dead. The
 application list is re-read on every change of mode, because it is a list of what
@@ -284,8 +285,11 @@ is why the test is written that way.
   out.
   The reason is said once instead, in the startup log, and only to a
   configuration that asked for sound.
-- **Window capture.** Sharing only the browser window instead of the monitor is a
-  video-side change and does not depend on this.
+- **Window capture.** Sharing one window instead of the monitor is in the share
+  menu now, and it is a video-side change that does not touch this: the sound
+  is still the machine's or one application's, chosen separately. Pairing the
+  two — the window's own program as the application whose sound goes out — is
+  the obvious next step and is not done.
 - **Per-source volume at the receiver.** Only option B offers it. The volume here
   is applied by the sender, before encoding, which is why it applies to the whole
   room.

@@ -42,6 +42,16 @@ else()
   set(dv_sound_sources src/ui/sound_stub.cpp)
 endif()
 
+# Asking the operating system to light the program up until somebody looks -
+# the nudge's half of it - is a platform API too. The stub says no and the
+# caller falls back to QApplication::alert, Qt's portable version of the same
+# idea. See client/src/ui/attention.hpp.
+if(WIN32)
+  set(dv_attention_sources src/ui/attention_windows.cpp)
+else()
+  set(dv_attention_sources src/ui/attention_stub.cpp)
+endif()
+
 # What this process costs the machine, for the metrics window. Reading it is
 # a platform API on every platform; the arithmetic over two readings is not.
 # See client/src/app/process_usage.hpp.
@@ -249,6 +259,7 @@ endif()
 qt_add_executable(dv_client
   ${dv_client_resources}
   ${dv_sound_sources}
+  ${dv_attention_sources}
   src/main.cpp
   src/ui/account_delegate.cpp
   src/ui/account_delegate.hpp
@@ -256,6 +267,7 @@ qt_add_executable(dv_client
   src/ui/account_pane.hpp
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
+  src/ui/attention.hpp
   src/ui/chat_view.cpp
   src/ui/chat_view.hpp
   src/ui/chimes.cpp
@@ -323,6 +335,7 @@ qt_add_resources(dv_client "dv_client_assets"
     ${CMAKE_SOURCE_DIR}/assets/config.ini
     ${CMAKE_SOURCE_DIR}/assets/sounds/joined.wav
     ${CMAKE_SOURCE_DIR}/assets/sounds/left.wav
+    ${CMAKE_SOURCE_DIR}/assets/sounds/nudge.wav
     ${dv_client_icons}
     ${dv_client_ui_images}
 )

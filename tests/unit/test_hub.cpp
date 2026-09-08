@@ -775,6 +775,124 @@ TEST_F(HubTest, AMessageReachesTheWholeRoomIncludingItsSender) {
   EXPECT_EQ(to_ana->message, to_bruno->message);
 }
 
+// --- nudges ------------------------------------------------------------------
+
+TEST_F(HubTest, ANudgeReachesTheTargetAndEchoesToTheSenderAndNobodyElse) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto [carla, carla_user] = login("carla");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+  (void)send(carla, proto::JoinRoom{room, carla_user.id, "Carla"});
+
+  const auto out = send(ana, proto::Nudge{room, ana_user.id, bruno_user.id});
+
+  // The person nudged, with the server's word for who did it.
+  const auto to_bruno = find<proto::Nudge>(out, bruno);
+  ASSERT_TRUE(to_bruno.has_value());
+  EXPECT_EQ(to_bruno->room_id, room);
+  EXPECT_EQ(to_bruno->from_user_id, ana_user.id);
+  EXPECT_EQ(to_bruno->to_user_id, bruno_user.id);
+  // The sender, with the same copy, so both ends display the server's and not
+  // a draft - the rule a chat message follows.
+  const auto to_ana = find<proto::Nudge>(out, ana);
+  ASSERT_TRUE(to_ana.has_value());
+  EXPECT_EQ(*to_ana, *to_bruno);
+  // And not the room. Being nudged is between the two of them.
+  EXPECT_FALSE(find<proto::Nudge>(out, carla).has_value());
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, ana).has_value());
+}
+
+TEST_F(HubTest, ANudgeCannotBeSignedWithSomebodyElsesName) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+
+  // Ana, claiming to be Bruno, nudging Ana.
+  const auto out = send(ana, proto::Nudge{room, bruno_user.id, ana_user.id});
+  const auto error = find<proto::ErrorMessage>(out, ana);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "unauthorized");
+  EXPECT_FALSE(find<proto::Nudge>(out, ana).has_value());
+  EXPECT_FALSE(find<proto::Nudge>(out, bruno).has_value());
+}
+
+TEST_F(HubTest, ANudgeStaysInsideTheRoom) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+
+  // Bruno is signed in and not in the room: aiming at him is refused, and
+  // nothing reaches him.
+  const auto at_outsider = send(ana, proto::Nudge{room, ana_user.id, bruno_user.id});
+  const auto error = find<proto::ErrorMessage>(at_outsider, ana);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_target");
+  EXPECT_FALSE(find<proto::Nudge>(at_outsider, bruno).has_value());
+
+  // And from outside, at somebody inside.
+  const auto from_outsider = send(bruno, proto::Nudge{room, bruno_user.id, ana_user.id});
+  const auto refused = find<proto::ErrorMessage>(from_outsider, bruno);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "not_in_room");
+  EXPECT_FALSE(find<proto::Nudge>(from_outsider, ana).has_value());
+
+  // A room that does not exist is the usual answer.
+  const auto nowhere =
+      find<proto::ErrorMessage>(send(ana, proto::Nudge{"ABCDEF", ana_user.id, bruno_user.id}), ana);
+  ASSERT_TRUE(nowhere.has_value());
+  EXPECT_EQ(nowhere->code, "room_not_found");
+}
+
+TEST_F(HubTest, NudgingYourselfIsRefused) {
+  const auto [ana, ana_user] = login("ana");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+
+  const auto out = send(ana, proto::Nudge{room, ana_user.id, ana_user.id});
+  const auto error = find<proto::ErrorMessage>(out, ana);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_target");
+  EXPECT_FALSE(find<proto::Nudge>(out, ana).has_value());
+}
+
+TEST_F(HubTest, ASecondNudgeInsideFiveSecondsIsTooSoon) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto [carla, carla_user] = login("carla");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, "Ana"});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, "Bruno"});
+  (void)send(carla, proto::JoinRoom{room, carla_user.id, "Carla"});
+
+  ASSERT_TRUE(find<proto::Nudge>(send(ana, proto::Nudge{room, ana_user.id, bruno_user.id}), bruno)
+                  .has_value());
+
+  // Per sender, whoever it is aimed at: a different target inside the window
+  // is refused too, or one person could rattle every window in the room in
+  // one pass.
+  now_ += 4s;
+  const auto again = send(ana, proto::Nudge{room, ana_user.id, carla_user.id});
+  const auto error = find<proto::ErrorMessage>(again, ana);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "too_soon");
+  EXPECT_EQ(error->message, "wait 1 seconds before nudging again");
+  EXPECT_FALSE(find<proto::Nudge>(again, carla).has_value());
+
+  // Somebody else's clock is their own: Bruno has never nudged.
+  EXPECT_TRUE(find<proto::Nudge>(send(bruno, proto::Nudge{room, bruno_user.id, ana_user.id}), ana)
+                  .has_value());
+
+  // And once the window has passed, Ana may again.
+  now_ += 1s;
+  EXPECT_TRUE(find<proto::Nudge>(send(ana, proto::Nudge{room, ana_user.id, carla_user.id}), carla)
+                  .has_value());
+}
+
 TEST_F(HubTest, TheServerFillsInTheIdentifierTheNameAndTheTime) {
   const auto [ana, ana_user] = login("ana");
   const std::string room = create_room(ana, ana_user.id);

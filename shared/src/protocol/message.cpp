@@ -16,7 +16,7 @@ struct TypeMapping {
 };
 
 // The single source of truth for the wire names. docs/06-protocol.md must match.
-constexpr std::array<TypeMapping, 45> kTypeMappings{{
+constexpr std::array<TypeMapping, 47> kTypeMappings{{
     {.type = MessageType::Authenticate, .name = "authenticate"},
     {.type = MessageType::Authenticated, .name = "authenticated"},
     {.type = MessageType::CreateRoom, .name = "create_room"},
@@ -32,6 +32,7 @@ constexpr std::array<TypeMapping, 45> kTypeMappings{{
     {.type = MessageType::ScreenShareStopped, .name = "screen_share_stopped"},
     {.type = MessageType::Mute, .name = "mute"},
     {.type = MessageType::Unmute, .name = "unmute"},
+    {.type = MessageType::Nudge, .name = "nudge"},
     {.type = MessageType::ChangePassword, .name = "change_password"},
     {.type = MessageType::PasswordChanged, .name = "password_changed"},
     {.type = MessageType::SessionEnded, .name = "session_ended"},
@@ -57,6 +58,7 @@ constexpr std::array<TypeMapping, 45> kTypeMappings{{
     {.type = MessageType::ListRooms, .name = "list_rooms"},
     {.type = MessageType::RoomList, .name = "room_list"},
     {.type = MessageType::DeleteRoom, .name = "delete_room"},
+    {.type = MessageType::UpdateRoom, .name = "update_room"},
     {.type = MessageType::ListAudit, .name = "list_audit"},
     {.type = MessageType::AuditList, .name = "audit_list"},
     {.type = MessageType::ListSessions, .name = "list_sessions"},
@@ -546,6 +548,9 @@ MessageType type_of(const Message& message) noexcept {
         if constexpr (std::is_same_v<T, Unmute>) {
           return MessageType::Unmute;
         }
+        if constexpr (std::is_same_v<T, Nudge>) {
+          return MessageType::Nudge;
+        }
         if constexpr (std::is_same_v<T, ChangePassword>) {
           return MessageType::ChangePassword;
         }
@@ -620,6 +625,9 @@ MessageType type_of(const Message& message) noexcept {
         }
         if constexpr (std::is_same_v<T, DeleteRoom>) {
           return MessageType::DeleteRoom;
+        }
+        if constexpr (std::is_same_v<T, UpdateRoom>) {
+          return MessageType::UpdateRoom;
         }
         if constexpr (std::is_same_v<T, ListAudit>) {
           return MessageType::ListAudit;
@@ -701,6 +709,10 @@ std::string serialize(const Message& message) {
           root["room_id"] = value.room_id;
           root["user_id"] = value.user_id;
           root["by_user_id"] = value.by_user_id;
+        } else if constexpr (std::is_same_v<T, Nudge>) {
+          root["room_id"] = value.room_id;
+          root["from_user_id"] = value.from_user_id;
+          root["to_user_id"] = value.to_user_id;
         } else if constexpr (std::is_same_v<T, ChangePassword>) {
           root["current_password"] = value.current_password;
           root["new_password"] = value.new_password;
@@ -802,6 +814,14 @@ std::string serialize(const Message& message) {
           root["rooms"] = std::move(rooms);
         } else if constexpr (std::is_same_v<T, DeleteRoom>) {
           root["room_id"] = value.room_id;
+        } else if constexpr (std::is_same_v<T, UpdateRoom>) {
+          root["room_id"] = value.room_id;
+          // Only when asked for, for the reason CreateRoom leaves a zero off
+          // the wire: zero is "leave it alone" here, and a field carrying it
+          // would read as a size to a server that takes the field at its word.
+          if (value.capacity != 0) {
+            root["capacity"] = value.capacity;
+          }
         } else if constexpr (std::is_same_v<T, ListAudit>) {
           root["limit"] = value.limit;
           root["actor_id"] = value.actor_id;
@@ -982,6 +1002,13 @@ Result<Message> parse(std::string_view json_text) {
       value.by_user_id = reader.optional_string("by_user_id");
       return finish(reader, value);
     }
+    case MessageType::Nudge: {
+      Nudge value;
+      value.room_id = reader.string("room_id");
+      value.from_user_id = reader.string("from_user_id");
+      value.to_user_id = reader.string("to_user_id");
+      return finish(reader, value);
+    }
     case MessageType::ChatMessage: {
       ChatMessage value;
       value.message = reader.object<models::ChatMessage>("message", chat_message_from);
@@ -1111,6 +1138,12 @@ Result<Message> parse(std::string_view json_text) {
     case MessageType::DeleteRoom: {
       DeleteRoom value;
       value.room_id = reader.string("room_id");
+      return finish(reader, value);
+    }
+    case MessageType::UpdateRoom: {
+      UpdateRoom value;
+      value.room_id = reader.string("room_id");
+      value.capacity = static_cast<int>(reader.optional_integer("capacity"));
       return finish(reader, value);
     }
     case MessageType::ListAudit: {

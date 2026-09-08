@@ -48,6 +48,7 @@ TEST(Permissions, AdministrationIsRefusedToAnOrdinaryUser) {
            proto::MessageType::UpdateUser,
            proto::MessageType::DeleteUser,
            proto::MessageType::DeleteRoom,
+           proto::MessageType::UpdateRoom,
            proto::MessageType::ListAudit,
            proto::MessageType::ListSessions,
            proto::MessageType::EndSession,
@@ -69,6 +70,14 @@ TEST(Permissions, AnybodySignedInMaySeeWhichRoomsExist) {
 
   EXPECT_EQ(access_for(proto::MessageType::DeleteRoom), Access::AdminOnly);
   EXPECT_FALSE(is_allowed(Role::User, proto::MessageType::DeleteRoom));
+}
+
+TEST(Permissions, NudgingIsOpenToEverybodySignedIn) {
+  // One participant asking another for their attention is not a power over
+  // an account; the handler narrows it to the room and spaces it out.
+  EXPECT_EQ(access_for(proto::MessageType::Nudge), Access::Authenticated);
+  EXPECT_TRUE(is_allowed(Role::User, proto::MessageType::Nudge));
+  EXPECT_TRUE(is_allowed(Role::Admin, proto::MessageType::Nudge));
 }
 
 TEST(Permissions, AnnouncementsAreRefusedToEverybody) {

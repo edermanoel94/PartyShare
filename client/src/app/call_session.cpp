@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <dv/logging/logger.hpp>
+#include <dv/models/room.hpp>
 
 #include "audio/screen_audio_mixer.hpp"
 #include "video/screen_quality.hpp"
@@ -308,6 +309,27 @@ Result<std::monostate> CallSession::send_chat(const std::string& text) {
   // and what it broadcasts back is what gets displayed.
   return signaling_.send(protocol::ChatMessage{
       .message = models::ChatMessage{.room_id = room, .user_id = user_id, .text = text}});
+}
+
+Result<std::monostate> CallSession::nudge(const std::string& user_id) {
+  std::string me;
+  std::string room;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    me = local_user_.id;
+    room = room_id_;
+  }
+  if (room.empty()) {
+    return Result<std::monostate>::failure("not_in_room", "this session is not in a room");
+  }
+  // Refused here for the reason an empty chat line is: not as a trust
+  // boundary, which the server is, but so that the one request that can never
+  // be granted does not make a round trip to be told so.
+  if (user_id == me) {
+    return Result<std::monostate>::failure("invalid_target", "you cannot nudge yourself");
+  }
+  return signaling_.send(
+      protocol::Nudge{.room_id = room, .from_user_id = me, .to_user_id = user_id});
 }
 
 Result<std::monostate> CallSession::list_chat(int limit) {
@@ -1014,6 +1036,20 @@ Result<std::monostate> CallSession::delete_room(const std::string& room_id) {
   return signaling_.send(protocol::DeleteRoom{.room_id = room_id});
 }
 
+Result<std::monostate> CallSession::update_room(const std::string& room_id, int capacity) {
+  // Checked here against the same shared rule the server applies, for the
+  // reason send_chat checks its text: a spin box that cannot go outside the
+  // range never reaches this, and a caller that does is told at once rather
+  // than after a round trip. The server's own ceiling may be lower still, and
+  // that half of the answer is its.
+  if (!models::is_valid_room_capacity(capacity)) {
+    return Result<std::monostate>::failure(
+        "invalid_value", "a room holds between " + std::to_string(models::kMinRoomCapacity) +
+                             " and " + std::to_string(models::kMaxRoomCapacity) + " people");
+  }
+  return signaling_.send(protocol::UpdateRoom{.room_id = room_id, .capacity = capacity});
+}
+
 Result<std::monostate> CallSession::list_audit(int limit, const std::string& actor_id) {
   return signaling_.send(protocol::ListAudit{.limit = limit, .actor_id = actor_id});
 }
@@ -1497,6 +1533,21 @@ void CallSession::handle_signal(protocol::Message message) {
     }
     if (handlers.on_chat_message) {
       handlers.on_chat_message(chat->message);
+    }
+    return;
+  }
+
+  if (const auto* nudge = std::get_if<protocol::Nudge>(&message)) {
+    // Passed through as the server said it. The server sends it to the two
+    // people it concerns and nobody else, so whichever of the two this session
+    // is, the interface works out from the identifiers.
+    Callbacks handlers;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      handlers = callbacks_;
+    }
+    if (handlers.on_nudge) {
+      handlers.on_nudge(nudge->from_user_id, nudge->to_user_id);
     }
     return;
   }

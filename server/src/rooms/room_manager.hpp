@@ -107,6 +107,28 @@ class RoomManager {
   /// the one path that removes a persistent room.
   [[nodiscard]] Result<std::vector<std::string>> remove_room(const std::string& room_id);
 
+  /// Changes how many people `room_id` holds from now on, and writes it down
+  /// so that the change outlives the process the way the room does.
+  ///
+  /// `capacity` is checked exactly as `create_room` checks it - between
+  /// `models::kMinRoomCapacity` and `max_capacity()`, or `invalid_value` naming
+  /// the range - and unlike there, zero is not a request for the default: a
+  /// room that exists already has a size, and "the default" is not an answer
+  /// anybody asks for about it. Fails with `room_not_found` for an identifier
+  /// nothing answers to.
+  ///
+  /// Lowering the size below the number of people inside is accepted, and
+  /// nobody is removed. The room is full until enough of them leave, which is
+  /// what `join` already says about a room at its size; picking whom to drop
+  /// would be a kick with no reason and no name on it, and the administrator
+  /// who wants that has the message for it.
+  ///
+  /// The store is written before the live room changes, and a store that
+  /// refuses fails the whole thing with the room as it was. The alternative is
+  /// a size that holds until the next restart and then quietly reverts, which
+  /// is the kind of change nobody can reason about.
+  [[nodiscard]] std::optional<Error> set_capacity(const std::string& room_id, int capacity);
+
   /// Adds a participant. Fails with room_not_found, room_full - the room's
   /// own capacity, not a server-wide number - or already_in_room.
   [[nodiscard]] std::optional<Error> join(const std::string& room_id, models::User user);

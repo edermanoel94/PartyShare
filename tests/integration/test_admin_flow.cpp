@@ -220,6 +220,28 @@ TEST_F(AdminFlowTest, ClosingARoomEmptiesItForEverybody) {
   EXPECT_EQ(error->code, "room_not_found");
 }
 
+TEST_F(AdminFlowTest, ResizingARoomReachesEverybodysList) {
+  auto [admin, ana] = login("ana");
+  auto [plain, bruno] = login("bruno");
+
+  admin->send(proto::CreateRoom{ana.id, "standup"});
+  const auto created = admin->wait_for<proto::RoomCreated>(kTimeout);
+  ASSERT_TRUE(created.has_value());
+  ASSERT_EQ(created->capacity, 5);
+
+  admin->send(proto::UpdateRoom{.room_id = created->room_id, .capacity = 3});
+
+  // Bruno, who asked for nothing and is in no room, sees the new size: the
+  // list that reflects the change, not merely the next one - the creation
+  // pushed one of its own and it may still be in the queue.
+  const auto rooms =
+      plain->wait_for_matching<proto::RoomList>(kTimeout, [](const proto::RoomList& list) {
+        return list.rooms.size() == 1 && list.rooms.front().capacity == 3;
+      });
+  ASSERT_TRUE(rooms.has_value()) << "no room list arrived carrying the new size";
+  EXPECT_EQ(rooms->rooms.front().name, "standup");
+}
+
 TEST_F(AdminFlowTest, TheAuditLogCrossesTheWire) {
   auto [admin, ana] = login("ana");
   auto [plain, bruno] = login("bruno");

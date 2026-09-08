@@ -187,6 +187,13 @@ class Hub {
     std::unordered_set<std::string> delivered_notice_ids;
     Clock::time_point last_seen;
     Clock::time_point last_ping;
+    /// When this connection last nudged somebody, and empty until it has.
+    ///
+    /// An optional rather than a time point at zero, because the tests drive
+    /// the Hub with a clock that starts at zero, and "never" has to read as
+    /// allowed there too. Per connection and not per account: it is the
+    /// spacing between one person's requests, and a person is a connection.
+    std::optional<Clock::time_point> last_nudge;
   };
 
   [[nodiscard]] Connection* find_connection(ConnectionId connection);
@@ -286,6 +293,12 @@ class Hub {
                            const std::string& room_id, const std::string& user_id, bool sharing,
                            bool with_audio);
 
+  /// Relays a request for one participant's attention to that participant,
+  /// and echoes it to whoever asked, so both display the server's copy the way
+  /// both ends of a chat message do. `now` is for the spacing: one nudge per
+  /// sender every kNudgeCooldown, whoever it is aimed at.
+  void handle_nudge(std::vector<Outgoing>& out, Connection& connection,
+                    const protocol::Nudge& message, Clock::time_point now);
   void handle_chat(std::vector<Outgoing>& out, Connection& connection,
                    const protocol::ChatMessage& message);
   void handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
@@ -449,6 +462,12 @@ class Hub {
   void handle_list_rooms(std::vector<Outgoing>& out, Connection& connection);
   void handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
                           const protocol::DeleteRoom& message);
+  /// Resizes a room, through RoomManager::set_capacity, and answers everybody
+  /// with the room list that now shows it: the size is on the home page of
+  /// every client as the second half of "3/10", not only in the panel that
+  /// changed it. Recorded as `update_room`, with the size it moved to and from.
+  void handle_update_room(std::vector<Outgoing>& out, Connection& connection,
+                          const protocol::UpdateRoom& message);
   void handle_list_audit(std::vector<Outgoing>& out, Connection& connection,
                          const protocol::ListAudit& message);
   void handle_list_sessions(std::vector<Outgoing>& out, Connection& connection,

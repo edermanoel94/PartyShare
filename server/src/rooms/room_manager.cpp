@@ -238,6 +238,42 @@ Result<std::vector<std::string>> RoomManager::remove_room(const std::string& roo
   return removed;
 }
 
+std::optional<Error> RoomManager::set_capacity(const std::string& room_id, int capacity) {
+  // The size before the room, as create_room orders the two checks: a request
+  // nobody could be granted is told that, whichever room it named.
+  if (!models::is_valid_room_capacity(capacity) || capacity > max_capacity()) {
+    return Error{.code = "invalid_value",
+                 .message = "a room holds between " + std::to_string(models::kMinRoomCapacity) +
+                            " and " + std::to_string(max_capacity()) + " people"};
+  }
+
+  const auto it = rooms_.find(room_id);
+  if (it == rooms_.end()) {
+    return Error{.code = "room_not_found", .message = "no room with id " + room_id};
+  }
+  models::Room& room = it->second;
+
+  if (options_.store != nullptr) {
+    // The whole record and not only the size, because upsert replaces. The
+    // creation time is left at zero on purpose: both stores keep the one the
+    // room already has when the record is replaced, and stamping it here would
+    // be this method claiming to know when the room was made.
+    if (auto failure = options_.store->upsert(store::RoomRecord{.id = room.id,
+                                                                .name = room.name,
+                                                                .owner_id = room.owner_id,
+                                                                .persistent = true,
+                                                                .capacity = capacity})) {
+      return failure;
+    }
+  }
+
+  // Whoever is inside stays inside, above the new size or not. Room::is_full
+  // compares with `>=`, so a room over its size refuses the next arrival and
+  // asks nothing of the people already in it.
+  room.capacity = capacity;
+  return std::nullopt;
+}
+
 std::optional<Error> RoomManager::join(const std::string& room_id, models::User user) {
   const auto it = rooms_.find(room_id);
   if (it == rooms_.end()) {

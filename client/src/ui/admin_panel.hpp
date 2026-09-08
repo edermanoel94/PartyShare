@@ -108,6 +108,11 @@ class AdminPanel : public QWidget {
   void on_delete_user();
   void on_create_room();
   void on_close_room();
+  /// Asks for a new size for the selected room and sends it. The dialog opens
+  /// on the size the room has and says how many people are in it, because the
+  /// one thing worth knowing before shrinking a room is whether the number is
+  /// about to go under them - and that nobody is removed if it does.
+  void on_resize_room();
   /// Signs out whoever the session table has selected, after asking for a
   /// reason. Only a session that is online can be ended; the other two
   /// states are refused on the spot with a sentence about that row, because
@@ -255,7 +260,23 @@ class AdminPanel : public QWidget {
 
   QTableWidget* rooms_ = nullptr;
   QPushButton* create_room_ = nullptr;
+  QPushButton* resize_room_ = nullptr;
   QPushButton* close_room_ = nullptr;
+
+  /// What the server last said about one room's size, as numbers.
+  ///
+  /// The table shows "3/10", and the resize dialog needs the ten to open on
+  /// and the three to warn with. Reading them back out of the cell would be
+  /// the mistake `Account` exists to avoid: a rendering treated as protocol.
+  /// The window that builds the rows appends both as bare fields past the
+  /// columns, and this is where they are kept. See MainWindow::wire_session.
+  struct RoomSize {
+    QString name;
+    int capacity = 0;
+    int people = 0;
+  };
+  /// By room id, replaced whole with each `apply_rooms`.
+  QHash<QString, RoomSize> room_sizes_;
 
   QTableWidget* sessions_ = nullptr;
   /// "2 online · 14 sessions", under the table.

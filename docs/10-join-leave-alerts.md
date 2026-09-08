@@ -137,3 +137,40 @@ Four rules:
 
 The notification is decided before the sound, because its answer is what says
 whether the chime should play.
+
+## 5. The nudge
+
+Somebody in the room can ask for your attention by name — `Nudge Ana` on the
+participant list's right-click menu, which now opens for everybody and not only
+for an administrator — and on your side four things happen at once, in
+`MainWindow::apply_nudge`:
+
+- **One line in the chat**, `Ana nudged you`, so that it is there when you come
+  back to look. The sender sees `You nudged Ana` and nothing else.
+- **The balloon or the buzz**, by the rule of section 4: the balloon goes up only
+  when the window is not the one being looked at, and the buzz plays only when
+  no balloon did, because a balloon brings its own sound. The buzz is
+  `assets/sounds/nudge.wav`, from the same script as the chimes: a G3 with its
+  loudness wobbling twenty-eight times a second, 400 ms, so it reads as a buzz
+  rather than a note and is told apart from an arrival by ear alone. Both the
+  buzz and the chimes are behind `room_sounds`; the two below are not, because
+  the switch is about noise.
+- **The operating system's own flash.** This is the one native call the
+  notification path deliberately does not make. On Windows it is `FlashWindowEx`
+  with `FLASHW_ALL | FLASHW_TIMERNOFG`: title bar and taskbar button, until the
+  window is brought to the front. It needs no shortcut, no `AppUserModelID` and
+  no library — which is why it is native where the toast of section 1 is not.
+  Every other platform gets `QApplication::alert`, Qt's portable version of the
+  same idea, until somebody writes the other halves of
+  `client/src/ui/attention.hpp` (`attention_windows.cpp` is the model;
+  `attention_stub.cpp` says what they would call).
+- **The window shakes**, for just under half a second: thirty frames at sixteen
+  milliseconds, side to side with a swing that starts at twelve pixels and falls
+  to nothing, and a little up and down at half the reach. A maximized or full
+  screen window does not move — moving one changes its state — so its contents
+  shake instead. One shake at a time; a second nudge during the first joins it.
+
+What the server allows — both in the room, not yourself, not while silenced in
+chat, and one every five seconds per sender — is section 4.12 of
+[chapter 6](06-protocol.md). A refusal comes back as an ordinary error and is
+shown where every other error is.

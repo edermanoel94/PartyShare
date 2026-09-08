@@ -221,14 +221,23 @@ QWidget* AdminPanel::build_rooms_tab() {
   auto* controls = new QHBoxLayout();
   create_room_ = new QPushButton(QStringLiteral("New room"), page);
   create_room_->setProperty("accent", true);
+  // Between making a room and ending one, and plain: it changes one number
+  // about a room that goes on existing, which is neither the good state nor
+  // the dangerous one.
+  resize_room_ = new QPushButton(QStringLiteral("Change size"), page);
+  resize_room_->setToolTip(
+      QStringLiteral("How many people the selected room holds. Nobody is removed when it "
+                     "shrinks: the room is full until enough of them leave."));
   close_room_ = new QPushButton(QStringLiteral("Close room"), page);
   close_room_->setProperty("danger", true);
   controls->addWidget(create_room_);
+  controls->addWidget(resize_room_);
   controls->addStretch();
   controls->addWidget(close_room_);
   column->addLayout(controls);
 
   connect(create_room_, &QPushButton::clicked, this, &AdminPanel::on_create_room);
+  connect(resize_room_, &QPushButton::clicked, this, &AdminPanel::on_resize_room);
   connect(close_room_, &QPushButton::clicked, this, &AdminPanel::on_close_room);
   return page;
 }
@@ -580,6 +589,20 @@ QStringList AdminPanel::audit_tail(const QString& user_id) const {
 }
 
 void AdminPanel::apply_rooms(const QStringList& rows) {
+  // The row is identifier, identifier, name, "3/10", and then the size and
+  // the count as bare numbers, which is what the fields past the table's
+  // three columns are for. See RoomSize.
+  room_sizes_.clear();
+  room_sizes_.reserve(static_cast<int>(rows.size()));
+  for (const QString& row : rows) {
+    const QStringList fields = row.split(QLatin1Char('\t'));
+    if (fields.size() < 6) {
+      continue;
+    }
+    room_sizes_.insert(fields.at(0), RoomSize{.name = fields.at(2),
+                                              .capacity = fields.at(4).toInt(),
+                                              .people = fields.at(5).toInt()});
+  }
   fill(rooms_, rows);
 }
 
@@ -1113,6 +1136,42 @@ void AdminPanel::on_close_room() {
     return;
   }
   (void)send(session_.delete_room(room_id.toStdString()));
+}
+
+void AdminPanel::on_resize_room() {
+  const QString room_id = selected_id(rooms_);
+  if (room_id.isEmpty()) {
+    return;
+  }
+
+  const RoomSize size = room_sizes_.value(room_id);
+  // A room from a server built before sizes reports none. The dialog opens on
+  // the default, which is what such a room holds; the server it came from
+  // will refuse the message anyway, and say so.
+  const int current = size.capacity > 0 ? size.capacity : models::kDefaultRoomCapacity;
+  const QString label = size.name.isEmpty() ? room_id : size.name;
+  QString inside = QStringLiteral("%1 people are in it now.").arg(size.people);
+  if (size.people == 0) {
+    inside = QStringLiteral("Nobody is in it now.");
+  } else if (size.people == 1) {
+    inside = QStringLiteral("One person is in it now.");
+  }
+
+  // One question, like the two that create a room. The range is the protocol's
+  // and the server may allow less; it answers with the range it does allow.
+  bool accepted = false;
+  const int capacity = QInputDialog::getInt(
+      this, QStringLiteral("Room size"),
+      QStringLiteral("How many people %1 holds. %2\nShrinking it removes nobody: a room over "
+                     "its size is full until enough people leave.")
+          .arg(label, inside),
+      current, models::kMinRoomCapacity, models::kMaxRoomCapacity, 1, &accepted);
+  if (!accepted || capacity == current) {
+    return;
+  }
+  // Answered with the whole room list, which is what refreshes the table; see
+  // apply_rooms.
+  (void)send(session_.update_room(room_id.toStdString(), capacity));
 }
 
 }  // namespace dv::ui

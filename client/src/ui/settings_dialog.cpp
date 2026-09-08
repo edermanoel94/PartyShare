@@ -150,7 +150,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // that was read at startup: main() has already put one into the other, and
   // asking the thing that actually decides means the box cannot disagree with
   // what the next arrival will do.
-  room_sounds_ = new QCheckBox(QStringLiteral("Play a sound when somebody joins or leaves"), audio);
+  room_sounds_ = new QCheckBox(
+      QStringLiteral("Play a sound when somebody joins, leaves or nudges you"), audio);
   room_sounds_->setChecked(chimes_enabled());
 
   audio_form->addRow(QStringLiteral("Microphone"), input_);

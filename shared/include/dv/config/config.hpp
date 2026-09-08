@@ -236,7 +236,9 @@ struct DatabaseConfig {
 /// section rather than keys scattered into [audio]: nothing in here reaches
 /// the wire, the encoder or the microphone.
 struct UiConfig {
-  /// The chime when somebody joins or leaves a room.
+  /// The chime when somebody joins or leaves a room, and the buzz when
+  /// somebody nudges you. The shake and the flash of a nudge are not behind
+  /// this switch: they make no noise, and the switch is about noise.
   ///
   /// On by default, because a cue nobody asked for is easier to turn off than
   /// a cue nobody knows exists is to find. Somebody who takes calls in an open

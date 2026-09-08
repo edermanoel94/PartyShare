@@ -398,6 +398,11 @@ class Client {
               chat_ = std::move(messages);
               ++histories_;
             },
+        .on_nudge =
+            [this](std::string from_user_id, std::string to_user_id) {
+              const std::lock_guard<std::mutex> lock(mutex_);
+              nudges_.emplace_back(std::move(from_user_id), std::move(to_user_id));
+            },
         .on_session_ended =
             [this](std::string reason) {
               const std::lock_guard<std::mutex> lock(mutex_);
@@ -544,6 +549,11 @@ class Client {
     const std::lock_guard<std::mutex> lock(mutex_);
     return kicks_;
   }
+  /// Who nudged whom, as the server relayed it to this session, in order.
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>> nudges() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return nudges_;
+  }
   [[nodiscard]] CallSession::State last_state() const { return last_state_.load(); }
   [[nodiscard]] std::uint64_t state_reports() const { return state_reports_.load(); }
   [[nodiscard]] std::uint64_t user_lists() const { return user_lists_.load(); }
@@ -575,6 +585,8 @@ class Client {
   std::uint64_t histories_ = 0;
   std::vector<std::string> session_ends_;
   std::vector<std::string> kicks_;
+  /// Who nudged whom, as the server relayed it, in order.
+  std::vector<std::pair<std::string, std::string>> nudges_;
   std::string created_room_;
   std::atomic<CallSession::State> last_state_{CallSession::State::Idle};
   std::atomic<std::uint64_t> state_reports_{0};
@@ -898,6 +910,37 @@ TEST_F(CallSessionTest, AForcedMuteActuallyStopsTheMicrophone) {
   ASSERT_TRUE(carla.session().force_mute(ana.session().local_user().id, false).ok());
   EXPECT_TRUE(wait_until([&] { return !ana.audio().muted.load(); }));
   EXPECT_TRUE(wait_until([&] { return !ana.session().muted(); }));
+}
+
+TEST_F(CallSessionTest, ANudgeReachesWhoeverItIsAimedAtAndEchoesToWhoeverSentIt) {
+  Client& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  const std::string room = ana.create_room();
+  ASSERT_FALSE(room.empty());
+  ASSERT_TRUE(ana.join(room));
+
+  Client& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+  ASSERT_TRUE(wait_until([&] { return ana.participants().size() == 2; }));
+
+  const std::string ana_id = ana.session().local_user().id;
+  const std::string bruno_id = bruno.session().local_user().id;
+  ASSERT_TRUE(bruno.session().nudge(ana_id).ok());
+
+  // Both ends hear the server's copy, and the interface tells them apart by
+  // which identifier is its own. Nothing is shown before it comes back.
+  EXPECT_TRUE(wait_until([&] { return ana.nudges().size() == 1; }));
+  EXPECT_TRUE(wait_until([&] { return bruno.nudges().size() == 1; }));
+  ASSERT_FALSE(ana.nudges().empty());
+  EXPECT_EQ(ana.nudges().front().first, bruno_id);
+  EXPECT_EQ(ana.nudges().front().second, ana_id);
+  EXPECT_EQ(bruno.nudges(), ana.nudges());
+
+  // Yourself is refused on this side, before the round trip.
+  const auto self = bruno.session().nudge(bruno_id);
+  ASSERT_FALSE(self.ok());
+  EXPECT_EQ(self.error().code, "invalid_target");
 }
 
 TEST_F(CallSessionTest, BeingKickedEndsTheCallForWhoeverWasRemoved) {

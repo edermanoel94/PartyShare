@@ -144,6 +144,7 @@ TEST_F(HubAdminTest, AnOrdinaryUserIsRefusedEveryAdministrativeMessage) {
            proto::UpdateUser{admin_.id, Role::User, std::nullopt, std::nullopt},
            proto::DeleteUser{admin_.id},
            proto::DeleteRoom{room_},
+           proto::UpdateRoom{.room_id = room_, .capacity = 3},
            proto::ListAudit{},
            proto::ListSessions{},
            proto::EndSession{admin_.id, "because"},
@@ -674,6 +675,120 @@ TEST_F(HubAdminTest, ClosingARoomReachesEverybodyElsesList) {
   const auto bruno_list = find<proto::RoomList>(out, bruno);
   ASSERT_TRUE(bruno_list.has_value()) << "bruno was not told the room is gone";
   EXPECT_TRUE(bruno_list->rooms.empty());
+}
+
+// --- resizing a room ---------------------------------------------------------
+
+TEST_F(HubAdminTest, ResizingARoomReachesEverybodysListAndTheAuditLog) {
+  set_up_room();
+  ASSERT_EQ(hub_.rooms().find(room_)->capacity, 5);
+
+  const auto out = send(admin_connection_, proto::UpdateRoom{.room_id = room_, .capacity = 3});
+
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, admin_connection_).has_value());
+  EXPECT_EQ(hub_.rooms().find(room_)->capacity, 3);
+
+  // Everybody's list, not only the administrator's: the size is on the home
+  // page of every client as the second half of "2/3".
+  const auto to_bruno = find<proto::RoomList>(out, user_connection_);
+  ASSERT_TRUE(to_bruno.has_value()) << "bruno was not told the room changed size";
+  ASSERT_EQ(to_bruno->rooms.size(), 1U);
+  EXPECT_EQ(to_bruno->rooms.front().capacity, 3);
+  EXPECT_EQ(to_bruno->rooms.front().participant_count, 2);
+
+  // Both numbers in the log: creating a room writes no entry, so this is the
+  // one line that can say what the size used to be.
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  ASSERT_EQ(log->entries.size(), 1U);
+  EXPECT_EQ(log->entries.front().action, "update_room");
+  EXPECT_EQ(log->entries.front().target_id, room_);
+  EXPECT_EQ(log->entries.front().room_id, room_);
+  EXPECT_EQ(log->entries.front().detail, "capacity=3 (was 5)");
+}
+
+TEST_F(HubAdminTest, ResizingARoomToWhatItAlreadyHoldsWritesNothing) {
+  set_up_room();
+
+  const auto same = send(admin_connection_, proto::UpdateRoom{.room_id = room_, .capacity = 5});
+  EXPECT_FALSE(find<proto::ErrorMessage>(same, admin_connection_).has_value());
+  // Answered with the list as it stands, so the panel that asked refreshes.
+  EXPECT_TRUE(find<proto::RoomList>(same, admin_connection_).has_value());
+
+  // And a request that asks for nothing is the same non-event.
+  const auto nothing = send(admin_connection_, proto::UpdateRoom{.room_id = room_});
+  EXPECT_FALSE(find<proto::ErrorMessage>(nothing, admin_connection_).has_value());
+  EXPECT_TRUE(find<proto::RoomList>(nothing, admin_connection_).has_value());
+
+  const auto log =
+      find<proto::AuditList>(send(admin_connection_, proto::ListAudit{}), admin_connection_);
+  ASSERT_TRUE(log.has_value());
+  EXPECT_TRUE(log->entries.empty());
+}
+
+TEST_F(HubAdminTest, ResizingARoomThatNeverExistedIsAnError) {
+  const auto [connection, admin] = login("ana", Role::Admin);
+
+  const auto out = send(connection, proto::UpdateRoom{.room_id = "ABCDEF", .capacity = 3});
+  const auto error = find<proto::ErrorMessage>(out, connection);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "room_not_found");
+}
+
+TEST_F(HubAdminTest, ResizingBeyondTheServersCeilingIsRefused) {
+  // The fixture's server allows five. Refused and not clamped, and the room
+  // is left as it was: the same rule creating a room follows.
+  set_up_room();
+
+  const auto out = send(admin_connection_, proto::UpdateRoom{.room_id = room_, .capacity = 6});
+  const auto error = find<proto::ErrorMessage>(out, admin_connection_);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "invalid_value");
+  EXPECT_EQ(error->message, "a room holds between 2 and 5 people");
+  EXPECT_EQ(hub_.rooms().find(room_)->capacity, 5);
+  EXPECT_FALSE(find<proto::RoomList>(out, user_connection_).has_value());
+}
+
+TEST_F(HubAdminTest, ShrinkingARoomUnderItsOccupantsKeepsThem) {
+  set_up_room();
+  const auto [third, carla] = login("carla", Role::User);
+  (void)send(third, proto::JoinRoom{room_, carla.id, "Carla"});
+  ASSERT_EQ(hub_.rooms().find(room_)->size(), 3U);
+
+  const auto out = send(admin_connection_, proto::UpdateRoom{.room_id = room_, .capacity = 2});
+  EXPECT_FALSE(find<proto::ErrorMessage>(out, admin_connection_).has_value());
+
+  // Nobody was told to leave, and nobody did. The room is over its size and
+  // refuses the next arrival until enough of them go.
+  EXPECT_FALSE(find<proto::UserKicked>(out, user_connection_).has_value());
+  EXPECT_FALSE(find<proto::UserKicked>(out, third).has_value());
+  EXPECT_EQ(hub_.rooms().find(room_)->size(), 3U);
+
+  const auto [fourth, diego] = login("diego", Role::User);
+  const auto refused =
+      find<proto::ErrorMessage>(send(fourth, proto::JoinRoom{room_, diego.id, "Diego"}), fourth);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_EQ(refused->code, "room_full");
+}
+
+// --- nudging under a restriction ---------------------------------------------
+
+TEST_F(HubAdminTest, AnAccountSilencedInChatCannotNudge) {
+  // A nudge is chat by other means - the one message that can be sent without
+  // a keyboard - so a restriction on one that left the other open would not be
+  // a restriction.
+  set_up_room();
+  proto::RestrictUser silence;
+  silence.user_id = user_.id;
+  silence.silenced = true;
+  (void)send(admin_connection_, silence);
+
+  const auto out = send(user_connection_, proto::Nudge{room_, user_.id, admin_.id});
+  const auto error = find<proto::ErrorMessage>(out, user_connection_);
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(error->code, "forbidden");
+  EXPECT_FALSE(find<proto::Nudge>(out, admin_connection_).has_value());
 }
 
 TEST_F(HubAdminTest, TheRoomListCountsWhoIsInside) {

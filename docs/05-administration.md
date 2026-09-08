@@ -185,6 +185,15 @@ row that is online - the other two are refused on the spot with a sentence about
 the row. An administrator cannot end their own session from here; that is the
 sign-out button on the home screen.
 
+The `Rooms` tab lists every room with how many people are in it against how
+many it holds. `New room` asks for a name and a size. `Change size` asks for a
+new size for the selected room, opening on the one it has and saying how many
+people are inside, because the one thing worth knowing before shrinking a room
+is whether the number is about to go under them. It removes nobody if it does:
+the room is full until enough people leave, and an administrator who wants
+somebody out has the participant menu. Everybody's home page shows the new
+number at once. `Close room` removes everyone and forgets the room.
+
 ### From `dbadmin`, with no server running
 
 [tools/dbadmin](../tools/dbadmin/README.md) is a terminal front end for the same
@@ -253,7 +262,8 @@ for.
 
 `action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`,
 `end_session`, `create_user`, `update_user`, `delete_user`, `create_room`,
-`delete_room`, `change_password`, `send_notice` or `acknowledge_notice`. A
+`delete_room`, `update_room`, `change_password`, `send_notice` or
+`acknowledge_notice`. A
 `restrict_user` entry names the flags that **moved** and
 what they became, plus the reason if one was given: `silenced=true reason=off
 topic`. What moved and not the resulting set, because a log that only ever states

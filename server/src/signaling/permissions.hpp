@@ -43,6 +43,12 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::ScreenShareStopped:
     case protocol::MessageType::Mute:
     case protocol::MessageType::Unmute:
+    // Asking one person in the room for their attention. Open to everybody in
+    // it for the same reason chat is: it reaches one participant of the room
+    // the sender is in and nobody else, and the handler is what narrows it to
+    // that room, refuses somebody silenced in chat, and spaces the requests
+    // out. Nothing about it is a power over another account.
+    case protocol::MessageType::Nudge:
     // Replacing one's own password. Deliberately here and not in the
     // administration block below: an ordinary user who cannot change their own
     // password has to ask an administrator, which means saying the new one out
@@ -93,6 +99,10 @@ enum class Access : std::uint8_t {
     case protocol::MessageType::UpdateUser:
     case protocol::MessageType::DeleteUser:
     case protocol::MessageType::DeleteRoom:
+    // Resizing a room somebody else made. The size was the creator's choice,
+    // and overriding it is the same kind of reach as closing the room: it is
+    // not something a participant does to a room they are merely in.
+    case protocol::MessageType::UpdateRoom:
     case protocol::MessageType::ListAudit:
     // Who has been connected and from where, and signing one of them out.
     // Both reach beyond any room: the list says which address an account was

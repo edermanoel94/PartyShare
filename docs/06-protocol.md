@@ -315,6 +315,7 @@ Promoting or demoting somebody therefore takes effect on their next action rathe
 | `delete_user` | `user_id` | |
 | `list_rooms` | | |
 | `delete_room` | `room_id` | |
+| `update_room` | `room_id` | `capacity` |
 | `list_audit` | | `limit`, `actor_id` |
 | `list_sessions` | | `limit` |
 | `end_session` | `user_id` | `reason` |
@@ -389,7 +390,13 @@ An absent field means unchanged, which is why they are optional rather than empt
 `delete_room` closes a room.
 Everyone in it is removed exactly as `kick_user` removes one person, and a persistent room stops existing rather than becoming empty.
 
-`create_user`, `update_user`, `delete_user` and `restrict_user` are each answered with the whole new `user_list`, and `delete_room` with the whole new `room_list`.
+`update_room` changes a room that goes on existing, and like `update_user` it moves only what is present: `capacity` today, and a name would join it here rather than in a message of its own.
+`capacity` is checked exactly as `create_room` checks it - between 2 and 50, and no more than the server's `max_participants_per_room` - and anything else is answered `invalid_value` naming the range the server does allow; absent or zero leaves the size alone, and so does the size the room already has, which writes nothing.
+Lowering it below the number of people already in the room is accepted and removes nobody: the room is full until enough of them leave, which is what `join_room` already says about a room at its size.
+An administrator who wants somebody out has `kick_user`, and a resize that quietly picked whom to drop would be a kick with no reason and no name on it.
+
+`create_user`, `update_user`, `delete_user` and `restrict_user` are each answered with the whole new `user_list`, and `delete_room` and `update_room` with the whole new `room_list`.
+The room list goes to every connection and not only to the one that asked, because the size is on everybody's home page as the second half of "3/10".
 There is no separate acknowledgement: the new state is the acknowledgement, and it leaves no window in which a panel shows something the server has already moved past.
 
 Two rules exist so that a system cannot be left with nobody able to administer it, and both are refused rather than silently ignored:
@@ -447,9 +454,10 @@ No password, salt or hash appears here, and none is defined for any message in t
 }
 ```
 
-`action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`, `end_session`, `create_user`, `update_user`, `delete_user`, `create_room` or `delete_room`.
+`action` is one of `kick`, `force_mute`, `force_unmute`, `restrict_user`, `end_session`, `create_user`, `update_user`, `delete_user`, `create_room`, `delete_room` or `update_room`.
 
 A `restrict_user` entry names the flags that moved and what they became, and the reason if one was given: `silenced=true reason=off topic`.
+An `update_room` entry names the size it moved to and the one it left, `capacity=10 (was 5)`, because creating a room writes no entry and this is the only line that can say what the size used to be.
 What moved and not the resulting set, because a log that only ever states the result leaves the reader to diff it against an entry they have to go and find.
 An action that changes nothing writes no entry at all.
 Entries come back newest first.
@@ -624,7 +632,7 @@ Only the server sends it; a client sending one is answered with `unknown_message
 
 | Role | May send |
 | --- | --- |
-| `user` | `authenticate`, `change_password`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `chat_message`, `list_chat`, `acknowledge_notice`, `ping`, `pong` |
+| `user` | `authenticate`, `change_password`, `create_room`, `join_room`, `leave_room`, `offer`, `answer`, `ice_candidate`, `screen_share_started`, `screen_share_stopped`, `mute`, `unmute`, `nudge`, `chat_message`, `list_chat`, `acknowledge_notice`, `ping`, `pong` |
 | `admin` | everything above, plus every message in section 4.7 and `send_notice` |
 
 This table says what a role may send, not who they may send it about.
@@ -633,6 +641,31 @@ Sending `chat_message` is open to everybody; sending one into a room you are not
 
 Everything a server sends is refused on the way in, whatever the role: `authenticated`, `password_changed`, `session_ended`, `room_created`, `user_joined`, `user_left`, `user_kicked`, `user_restricted`, `chat_history`, `notice`, `user_list`, `room_list`, `audit_list`, `session_list` and `error`.
 A client sending one of those is answered with `unknown_message_type`.
+
+### 4.12 Nudges
+
+| Type | Direction | Mandatory fields |
+| --- | --- | --- |
+| `nudge` | both | `room_id`, `from_user_id`, `to_user_id` |
+
+A request for one participant's attention: on their screen the window shakes, a short buzz plays and the operating system lights the program up until they look, the way a nudge did in the instant messengers of twenty years ago.
+For the person who has the shared screen on another monitor and the room out of sight, and for the one who stepped away without saying so.
+
+From the client it is a request, and `from_user_id` has to be the sender's own, as everywhere else in this protocol; anything else is answered `unauthorized`.
+Both people have to be in `room_id`: a sender who is not is answered `not_in_room`, and a target who is not, or who is the sender, `invalid_target`.
+An account silenced in chat may not nudge either, and is answered `forbidden`: a nudge is chat by other means, the one message that can be sent without a keyboard, and a restriction on one that left the other open would not be a restriction.
+
+One nudge every five seconds per connection, whoever it is aimed at.
+A second one inside that window is answered `too_soon`, with the seconds left in the message.
+Per sender and not per target, because per target would let one person rattle every window in the room in one pass, which is the pattern the spacing exists to rule out.
+
+From the server it is the copy that reaches exactly two connections, the one nudged and the one who nudged, with `from_user_id` as the server knows it.
+The room at large is not told: being nudged is between the two of them in the way a chat message is not, and the rest of the room would only learn who is not paying attention.
+The sender gets the same copy so that both ends show the server's word for it rather than a draft, which is the rule `chat_message` follows.
+
+Nothing is written for it, not to the chat store and not to the audit log.
+It is participants talking to each other, and it is gone once it has been shown.
+What the client does with one is [chapter 10](10-join-leave-alerts.md), section 5.
 
 ## 5. Error codes
 
@@ -661,6 +694,7 @@ The message alongside them is for humans only and may change.
 | `invalid_password` | The `current_password` sent with `change_password` is not the account's password |
 | `notice_not_found` | No notice with that `notice_id` is addressed to this account, which covers one that does not exist and one belonging to somebody else |
 | `invalid_value` | A field is present and of the right type, but its value is not usable |
+| `too_soon` | The same connection sent the same kind of request a moment ago, and the message says how long to wait. Only `nudge` answers it today |
 | `database_error` | The persistence layer could not carry out the operation |
 
 The first five are detected in the parsing layer and have been implemented since M1.

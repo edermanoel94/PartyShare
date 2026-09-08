@@ -1,6 +1,7 @@
 #include "signaling/hub.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <utility>
 
@@ -18,6 +19,13 @@ Error unauthorized(std::string message) {
 
 /// Told to everyone still in a room that an administrator is closing.
 constexpr std::string_view kRoomClosed = "the room was closed by an administrator";
+
+/// The least time between two nudges from one connection, whoever they are
+/// aimed at. Five seconds is long enough that a nudge stays what it is - one
+/// deliberate request, not a key held down - and short enough that somebody
+/// who really is being ignored can ask again before giving up. Section 4.12 of
+/// docs/06-protocol.md states the number, so a change here is a change there.
+constexpr std::chrono::seconds kNudgeCooldown{5};
 
 }  // namespace
 
@@ -341,6 +349,9 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
         } else if constexpr (std::is_same_v<T, protocol::Unmute>) {
           handle_mute(out, *state, value.room_id, value.user_id, false);
 
+        } else if constexpr (std::is_same_v<T, protocol::Nudge>) {
+          handle_nudge(out, *state, value, now);
+
         } else if constexpr (std::is_same_v<T, protocol::ScreenShareStarted>) {
           handle_screen_share(out, *state, value.room_id, value.user_id, true, value.has_audio);
 
@@ -391,6 +402,9 @@ std::vector<Outgoing> Hub::on_message(ConnectionId connection, std::string_view 
 
         } else if constexpr (std::is_same_v<T, protocol::DeleteRoom>) {
           handle_delete_room(out, *state, value);
+
+        } else if constexpr (std::is_same_v<T, protocol::UpdateRoom>) {
+          handle_update_room(out, *state, value);
 
         } else if constexpr (std::is_same_v<T, protocol::ListAudit>) {
           handle_list_audit(out, *state, value);
@@ -1026,6 +1040,90 @@ void Hub::handle_chat(std::vector<Outgoing>& out, Connection& connection,
                models::user_label(stored.user_id, stored.display_name, connection.username),
                room_label(room_id), stored.text.size());
   broadcast(out, room_id, protocol::ChatMessage{.message = stored});
+}
+
+void Hub::handle_nudge(std::vector<Outgoing>& out, Connection& connection,
+                       const protocol::Nudge& message, Clock::time_point now) {
+  const models::User* user = authenticated(out, connection);
+  if (user == nullptr) {
+    return;
+  }
+  if (message.from_user_id != user->id) {
+    reply_error(out, connection.id, unauthorized("from_user_id does not match this session"));
+    return;
+  }
+
+  const std::string& room_id = message.room_id;
+  const models::Room* room = rooms_.find(room_id);
+  if (room == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + room_id});
+    return;
+  }
+  if (!room->contains(user->id)) {
+    reply_error(out, connection.id,
+                Error{.code = "not_in_room", .message = "sender is not in " + room_id});
+    return;
+  }
+
+  // Yourself is not somebody whose attention you lack, and a window that
+  // shakes at its own request is a bug report waiting to be written.
+  if (message.to_user_id == user->id) {
+    reply_error(out, connection.id,
+                Error{.code = "invalid_target", .message = "you cannot nudge yourself"});
+    return;
+  }
+  const models::Participant* target = room->find(message.to_user_id);
+  if (target == nullptr) {
+    reply_error(
+        out, connection.id,
+        Error{.code = "invalid_target", .message = "that participant is not in " + room_id});
+    return;
+  }
+
+  // The same gate chat has, read the same way. A nudge is chat by other
+  // means - the one message that can be sent to somebody without a keyboard -
+  // and an account silenced in one would use the other to say the same thing.
+  if (restrictions_of(user->id).silenced) {
+    reply_error(out, connection.id,
+                Error{.code = "forbidden",
+                      .message = "an administrator has silenced this account in chat"});
+    return;
+  }
+
+  // Spaced per sender, whoever it is aimed at. Per target would let one
+  // person rattle every window in the room in one pass, which is the pattern
+  // this exists to rule out.
+  if (connection.last_nudge.has_value() && now - *connection.last_nudge < kNudgeCooldown) {
+    const auto wait =
+        std::chrono::ceil<std::chrono::seconds>(kNudgeCooldown - (now - *connection.last_nudge));
+    reply_error(
+        out, connection.id,
+        Error{.code = "too_soon",
+              .message = "wait " + std::to_string(wait.count()) + " seconds before nudging again"});
+    return;
+  }
+  connection.last_nudge = now;
+
+  // Not the room: the two people concerned, and nobody else. Being nudged is
+  // between the one who asked and the one who was asked, in the way a message
+  // to the room is not; the rest of the room has nothing to display and would
+  // only learn who is not paying attention. The sender gets the same copy, so
+  // both ends show the server's word for it rather than a draft.
+  //
+  // Not in the audit log either, and not at info level: this is participants
+  // talking to each other, which the log is not for. Debug, for the operator
+  // chasing a report that a nudge never arrived.
+  DV_LOG_DEBUG("{} nudged {} in room {}",
+               models::user_label(user->id, user->display_name, connection.username),
+               models::user_label(target->user.id, target->user.display_name, {}),
+               room_label(room_id));
+  const protocol::Nudge relayed{
+      .room_id = room_id, .from_user_id = user->id, .to_user_id = message.to_user_id};
+  if (const auto other = connection_of_user(message.to_user_id)) {
+    out.push_back(Outgoing{.connection = *other, .message = relayed});
+  }
+  out.push_back(Outgoing{.connection = connection.id, .message = relayed});
 }
 
 void Hub::handle_list_chat(std::vector<Outgoing>& out, Connection& connection,
@@ -2013,6 +2111,45 @@ void Hub::handle_delete_room(std::vector<Outgoing>& out, Connection& connection,
               closed_label);
   record(*actor, "delete_room", message.room_id, message.room_id,
          "participants=" + std::to_string(occupants.size()));
+  broadcast_room_list(out);
+}
+
+void Hub::handle_update_room(std::vector<Outgoing>& out, Connection& connection,
+                             const protocol::UpdateRoom& message) {
+  const models::User* actor = authenticated(out, connection);
+  if (actor == nullptr) {
+    return;
+  }
+
+  const models::Room* room = rooms_.find(message.room_id);
+  if (room == nullptr) {
+    reply_error(out, connection.id,
+                Error{.code = "room_not_found", .message = "no room with id " + message.room_id});
+    return;
+  }
+
+  // Nothing asked for, or the size it already has: answered with the list as
+  // it stands and written nowhere. The audit log records what moved, and an
+  // entry saying a room went from ten to ten is a line somebody has to read
+  // to find out it says nothing.
+  const int before = room->capacity;
+  if (message.capacity == 0 || message.capacity == before) {
+    out.push_back(Outgoing{.connection = connection.id, .message = room_list()});
+    return;
+  }
+
+  if (const auto failure = rooms_.set_capacity(message.room_id, message.capacity)) {
+    reply_error(out, connection.id, *failure);
+    return;
+  }
+
+  DV_LOG_INFO("{} resized room {} from {} to {} people",
+              models::user_label(actor->id, actor->display_name, connection.username),
+              room_label(message.room_id), before, message.capacity);
+  // Both numbers. create_room writes no audit entry, so this is the only line
+  // in the log that can say what the size used to be.
+  record(*actor, "update_room", message.room_id, message.room_id,
+         "capacity=" + std::to_string(message.capacity) + " (was " + std::to_string(before) + ")");
   broadcast_room_list(out);
 }
 

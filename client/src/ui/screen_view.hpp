@@ -12,6 +12,10 @@
 
 #include "video/video_frame.hpp"
 
+class QLabel;
+class QMouseEvent;
+class QTimer;
+
 namespace dv::ui {
 
 /// Draws the screen somebody else is sharing.
@@ -57,9 +61,34 @@ class ScreenView : public QWidget {
   /// What to say when nothing is being shared.
   void set_placeholder(QString text);
 
+  /// Whether the picture is the whole screen.
+  ///
+  /// On, the rounded card goes and so does the window-coloured surround: the
+  /// letterbox is black to the edges, which is what a screen shown full screen
+  /// is expected to look like and the only thing that makes the shared
+  /// picture's own edges readable against it. Off is the card in the room
+  /// page. Nothing about the frames changes; this is paint, not layout.
+  void set_edge_to_edge(bool on);
+
+  /// Puts one sentence over the picture for a few seconds and takes it away
+  /// again - "Press Esc to leave full screen", the one thing a person entering
+  /// full screen has to be told and cannot be shown any other way, since
+  /// everything that could show it has just been hidden.
+  ///
+  /// A child label rather than part of paintEvent, so it costs the frame path
+  /// nothing: take_pending_frame goes on dirtying the picture's own rectangle
+  /// and Qt composites the label over it. Calling it again restarts the clock.
+  void show_notice(const QString& text);
+
+ signals:
+  /// Double-clicked. What that asks for - full screen, today - is the
+  /// window's to decide; this widget only says it happened.
+  void activated();
+
  protected:
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
+  void mouseDoubleClickEvent(QMouseEvent* event) override;
 
  private slots:
   void take_pending_frame();
@@ -78,6 +107,18 @@ class ScreenView : public QWidget {
 
   /// Works out the corner slivers for the size the widget is now.
   void rebuild_card();
+
+  /// Puts the notice where it goes for the size the widget is now: centred,
+  /// a little down from the top, where it covers the least of the picture.
+  void place_notice();
+
+  /// See set_edge_to_edge. Read on the interface thread only, in paintEvent.
+  bool edge_to_edge_ = false;
+  /// The sentence show_notice puts up, hidden until then and again after
+  /// `notice_timer_` runs out. Transparent to the mouse, so a double click
+  /// through it still reaches this widget.
+  QLabel* notice_ = nullptr;
+  QTimer* notice_timer_ = nullptr;
 
   std::mutex mutex_;
   QImage pending_;

@@ -32,7 +32,19 @@ namespace {
     QFile file(QStringLiteral(":/sounds/left.wav"));
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
   }();
-  return chime == Chime::Joined ? kJoined : kLeft;
+  static const QByteArray kNudge = [] {
+    QFile file(QStringLiteral(":/sounds/nudge.wav"));
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+  }();
+  switch (chime) {
+    case Chime::Joined:
+      return kJoined;
+    case Chime::Left:
+      return kLeft;
+    case Chime::Nudge:
+      return kNudge;
+  }
+  return kJoined;
 }
 
 /// Whether the chime is switched on.
@@ -75,8 +87,8 @@ void play_chime(Chime chime) {
     return;
   }
 
-  // One sound for both events, so it says that the room changed without
-  // saying how. Still better than silence on a platform whose half of
+  // One sound for every event, so it says that something happened without
+  // saying what. Still better than silence on a platform whose half of
   // ui::play_wav nobody has written yet.
   QApplication::beep();
 }

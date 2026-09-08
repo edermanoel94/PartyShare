@@ -8,18 +8,22 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QList>
 #include <QMainWindow>
+#include <QMargins>
 #include <QPoint>
 #include <QPointer>
 #include <QSet>
 #include <QString>
 #include <QUrl>
+#include <Qt>
 
 #include "app/call_session.hpp"
 #include "app/network_quality.hpp"
 #include "app/smoothing.hpp"
 #include "ui/notifier.hpp"
 
+class QAction;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -27,9 +31,11 @@ class QProgressBar;
 class QPushButton;
 class QSlider;
 class QSpinBox;
+class QSplitter;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace dv::ui {
 
@@ -130,6 +136,18 @@ class MainWindow : public QMainWindow {
   void on_volume_changed(int value);
   void on_send_chat();
   void on_open_emoji_picker();
+  /// Full screen for the shared picture, or back out of it. From the header
+  /// button, a double click on the picture, and F11; Esc only leaves. See
+  /// enter_fullscreen for what it takes to enter.
+  void on_toggle_fullscreen();
+  /// Puts the window back the way it was before full screen: the state it had
+  /// - maximized stays maximized - the header, sidebar, controls and status
+  /// bar shown again, the splitter where it was. A slot because Esc is a
+  /// QAction and an action triggers a slot; nothing happens when the window
+  /// is not full screen, which is what lets refresh_controls call it freely.
+  void leave_fullscreen();
+  /// One frame of the shake. See shake().
+  void animate_shake();
 
   // Called on the UI thread, from the session's callbacks.
   void apply_state(int state, const QString& detail);
@@ -201,6 +219,11 @@ class MainWindow : public QMainWindow {
   /// Replaces what is on screen rather than adding to it. See
   /// CallSession::Callbacks::on_chat_history for why.
   void apply_chat_history(const QStringList& lines);
+  /// Somebody nudged somebody, and one of them is us. Ours, coming back from
+  /// the server, is one line in the chat; theirs, aimed at us, is the whole
+  /// production - the line, the buzz or the balloon, the operating system's
+  /// flash, and the window shaking. See protocol::Nudge.
+  void apply_nudge(const QString& from_user_id, const QString& to_user_id);
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
   // needs as its own specifier, and these members are not slots.
@@ -316,6 +339,25 @@ class MainWindow : public QMainWindow {
   /// name may only be known on the second of those.
   void refresh_room_title();
 
+  /// Gives the whole screen to the picture somebody else is sharing: the
+  /// window goes full screen and everything on the room page but the picture
+  /// is hidden, the status bar included. The window's own state, the
+  /// splitter's sizes and the page's margins are remembered for
+  /// leave_fullscreen. Does nothing unless a call is up, somebody else is
+  /// sharing and the room page is showing - there is nothing else worth a
+  /// screen, and F11 arrives from anywhere.
+  void enter_fullscreen();
+
+  /// Shakes the window for about half a second, the way a nudge did in the
+  /// messengers this comes from. The window itself when it is free to move;
+  /// its contents when it is maximized or full screen, where moving the
+  /// window would change its state. One shake at a time.
+  void shake();
+
+  /// What `user_id` is called in the participant list, or the identifier when
+  /// the list does not have them - somebody who has just left, mostly.
+  [[nodiscard]] QString participant_name(const QString& user_id) const;
+
   client::app::CallSession& session_;
 
   QStackedWidget* pages_ = nullptr;
@@ -390,6 +432,35 @@ class MainWindow : public QMainWindow {
   QPushButton* admin_button_ = nullptr;
   QPushButton* leave_button_ = nullptr;
   QLabel* sharing_label_ = nullptr;
+
+  // Full screen. The parts of the room page that go away for it, and what
+  // was true before so that it can be put back. See enter_fullscreen.
+  QVBoxLayout* room_column_ = nullptr;
+  QWidget* room_header_ = nullptr;
+  QSplitter* room_body_ = nullptr;
+  QWidget* room_sidebar_ = nullptr;
+  QWidget* room_controls_ = nullptr;
+  /// In the header, beside who is sharing; visible only while somebody else
+  /// is. See refresh_controls.
+  QPushButton* fullscreen_button_ = nullptr;
+  /// F11, on the window. Always enabled: outside a share it does nothing.
+  QAction* fullscreen_action_ = nullptr;
+  /// Esc, on the window, enabled only while full screen so that it never
+  /// takes the key from anything else that wants it.
+  QAction* leave_fullscreen_action_ = nullptr;
+  bool fullscreen_ = false;
+  Qt::WindowStates before_fullscreen_ = Qt::WindowNoState;
+  QList<int> splitter_before_fullscreen_;
+  QMargins margins_before_fullscreen_;
+
+  // The shake a nudge gives the window. See shake().
+  QTimer* shake_timer_ = nullptr;
+  /// The window, or its central widget when the window is pinned by being
+  /// maximized or full screen. Either outlives the timer: both are this
+  /// window or a child of it.
+  QWidget* shake_target_ = nullptr;
+  QPoint shake_origin_;
+  int shake_step_ = 0;
 
   /// The charts, while they are open. A QPointer and not a raw one because the
   /// window deletes itself when it is closed - by its own Close button, by the

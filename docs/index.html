@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PartyShare</title>
+<meta name="description" content="Screen sharing and voice rooms for small groups on the desktop. A C++20 client and server, WebRTC end to end, MIT licensed.">
+<meta property="og:title" content="PartyShare">
+<meta property="og:description" content="Screen sharing and voice rooms for small groups on the desktop.">
+<meta property="og:image" content="https://edermanoel94.github.io/PartyShare/site/room.png">
+<meta name="theme-color" content="#131420">
+<link rel="icon" href="site/partyshare.svg" type="image/svg+xml">
+<link rel="alternate icon" href="site/partyshare-64.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500..600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* The page keeps the palette of the client it shows: a blue-black ground, the
+     periwinkle of its buttons, and green only where the client itself says
+     "network good". It is dark on purpose, so the screenshots sit in it
+     without a frame of light around them. */
+  :root {
+    color-scheme: dark;
+    --bg: #131420;
+    --bg-deep: #0e0f18;
+    --panel: #1b1d2a;
+    --line: #2b2e40;
+    --line-strong: #3a3d55;
+    --text: #e9e9f1;
+    --muted: #9c9fb6;
+    --faint: #6d7089;
+    --accent: #7d75ea;
+    --accent-strong: #948ef2;
+    --accent-ink: #0f1020;
+    --good: #4fd07f;
+    --display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+    --w: 1120px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-strong); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; border-radius: 4px; }
+  img { max-width: 100%; height: auto; display: block; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 500; letter-spacing: -0.01em; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2.4rem, 5.2vw, 3.9rem); line-height: 1.05; font-variation-settings: "opsz" 120; }
+  h2 { font-size: clamp(1.7rem, 3vw, 2.3rem); line-height: 1.15; font-variation-settings: "opsz" 72; }
+  h3 { font-size: 1.28rem; line-height: 1.3; font-variation-settings: "opsz" 36; }
+  p { margin: 0; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .wrap { width: min(var(--w), calc(100% - 2 * 24px)); margin-inline: auto; }
+  section { padding-block: 72px; }
+  section + section { border-top: 1px solid var(--line); }
+  .section-head { display: grid; gap: 14px; max-width: 46rem; margin-bottom: 40px; }
+  .section-head p { color: var(--muted); }
+  .measure { max-width: 42rem; }
+  .muted { color: var(--muted); }
+  code, kbd { font-family: var(--mono); font-size: 0.92em; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.05em 0.35em; }
+
+  /* Top bar */
+  .top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 60px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; letter-spacing: -0.01em; }
+  .brand:hover { text-decoration: none; }
+  .brand svg { width: 26px; height: 26px; border-radius: 6px; }
+  .top nav { display: flex; gap: 22px; font-size: 0.95rem; }
+  .top nav a { color: var(--muted); }
+  .top nav a:hover { color: var(--text); text-decoration: none; }
+  @media (max-width: 720px) { .top nav a:not(:last-child) { display: none; } }
+
+  /* Hero */
+  .hero { padding-block: 72px 56px; }
+  .hero-text { display: grid; gap: 22px; max-width: 46rem; }
+  .lede { font-size: 1.2rem; color: var(--muted); max-width: 40rem; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+  .btn {
+    display: inline-flex; flex-direction: column; gap: 1px; padding: 12px 20px; border-radius: 10px;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); font-weight: 500; line-height: 1.25;
+    transition: border-color 120ms ease, background-color 120ms ease;
+  }
+  .btn small { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); font-weight: 400; }
+  .btn:hover { text-decoration: none; border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary small { color: color-mix(in srgb, var(--accent-ink) 70%, transparent); }
+  .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+  .release { font-family: var(--mono); font-size: 0.82rem; color: var(--faint); }
+  .release a { color: var(--muted); }
+
+  /* Screenshots: the client's own client area, in a frame that reads as a window
+     without borrowing one operating system's chrome. */
+  .shot { margin: 0; border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; background: var(--bg-deep); box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.9); }
+  .shot .bar {
+    display: flex; justify-content: space-between; gap: 16px; padding: 8px 14px;
+    font-family: var(--mono); font-size: 0.74rem; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line);
+    white-space: nowrap; overflow: hidden;
+  }
+  .shot .bar span { overflow: hidden; text-overflow: ellipsis; }
+  .shot .bar .who { color: var(--text); }
+  .shot .bar .live { color: var(--accent-strong); }
+  .hero-shot { margin-top: 48px; }
+
+  /* Screens */
+  .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 32px; align-items: start; }
+  .row-wide { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: center; margin-top: 56px; }
+  .row-wide.flip { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+  .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  .blurb { display: grid; gap: 12px; }
+  .blurb p { color: var(--muted); }
+  .blurb .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 0.95rem; margin-top: 6px; }
+  .blurb .kv dt { color: var(--faint); font-family: var(--mono); font-size: 0.8rem; padding-top: 3px; }
+  .blurb .kv dd { margin: 0; color: var(--text); }
+  .cell { display: grid; gap: 18px; }
+  @media (max-width: 860px) {
+    .row2, .row-wide, .row-wide.flip { grid-template-columns: 1fr; }
+    .row-wide.flip .blurb { order: -1; }
+  }
+  @media (max-width: 520px) { .pair { grid-template-columns: 1fr; } }
+
+  /* Built */
+  .pieces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+  .piece { display: grid; gap: 10px; padding-top: 18px; border-top: 2px solid var(--accent); }
+  .piece .name { font-family: var(--mono); font-size: 0.82rem; color: var(--accent-strong); }
+  .piece p { color: var(--muted); font-size: 0.98rem; }
+  .node { border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); padding: 16px 18px; display: grid; gap: 6px; align-content: start; }
+  .node .label { font-family: var(--mono); font-size: 0.78rem; color: var(--accent-strong); letter-spacing: 0.04em; }
+  .node .name { font-weight: 600; }
+  .node p { color: var(--muted); font-size: 0.92rem; }
+  .node.server { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+  .link { position: relative; display: grid; align-content: center; gap: 4px; padding: 0 14px; text-align: center; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  .link::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--line-strong); z-index: 0; }
+  .link span { position: relative; z-index: 1; background: var(--bg); padding: 2px 6px; justify-self: center; }
+  .wire-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 0.9fr) minmax(0, 1.4fr) minmax(120px, 0.9fr) minmax(0, 1fr); align-items: center; margin-top: 48px; }
+  @media (max-width: 860px) {
+    .pieces { grid-template-columns: 1fr; }
+    .wire-grid { grid-template-columns: 1fr; gap: 10px; }
+    .link { padding: 8px 0; }
+    .link::before { display: none; }
+  }
+  .table-wrap { overflow-x: auto; margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 12px 16px; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: 0.76rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); font-weight: 500; background: var(--panel); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 500; white-space: nowrap; }
+  td .m { font-family: var(--mono); font-size: 0.86em; }
+  tbody { font-variant-numeric: tabular-nums; }
+  .none { color: var(--faint); }
+  .ok { color: var(--good); }
+
+  /* Docs */
+  .docs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; }
+  .docs a { display: grid; grid-template-columns: 2.2rem 1fr; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); color: var(--text); }
+  .docs a:hover { text-decoration: none; color: var(--accent-strong); }
+  .docs .n { font-family: var(--mono); font-size: 0.8rem; color: var(--faint); padding-top: 3px; }
+  .docs .t { display: grid; gap: 2px; }
+  .docs .t small { color: var(--muted); font-size: 0.88rem; }
+  @media (max-width: 720px) { .docs { grid-template-columns: 1fr; } }
+
+  footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--faint); font-size: 0.9rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="PartyShare, top of the page">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b5bd6"/><stop offset="1" stop-color="#3f3fa8"/></linearGradient></defs><rect width="256" height="256" rx="56" fill="url(#lg)"/><rect x="42" y="50" width="142" height="96" rx="15" fill="#fff"/><rect x="80" y="102" width="142" height="96" rx="15" fill="#fff" stroke="url(#lg)" stroke-width="15"/></svg>
+      PartyShare
+    </a>
+    <nav aria-label="Sections">
+      <a href="#screens">Screens</a>
+      <a href="#built">How it is built</a>
+      <a href="#download">Download</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/edermanoel94/PartyShare">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-text">
+      <p class="eyebrow">Open source · MIT · Windows, macOS and Linux</p>
+      <h1>Screen sharing and voice rooms for small groups.</h1>
+      <p class="lede">A desktop app for a room of a few people. One of them shares a screen at 720p and 30 frames a second, everyone talks over it, and the chat waits for whoever arrives late. A C++20 client on Qt 6, a signaling server with its own SFU, and WebRTC end to end.</p>
+      <div class="cta">
+        <a class="btn primary" data-asset="-windows-x64.msi" href="https://github.com/edermanoel94/PartyShare/releases/latest">Download for Windows <small>.msi installer, x64</small></a>
+        <a class="btn" data-asset="-macos-arm64.dmg" href="https://github.com/edermanoel94/PartyShare/releases/latest">Download for macOS <small>.dmg, Apple silicon</small></a>
+        <a class="btn" href="https://github.com/edermanoel94/PartyShare/blob/master/INSTALL.md">Run your own server <small>Linux, one command</small></a>
+      </div>
+      <p class="release" id="release">Latest release <a href="https://github.com/edermanoel94/PartyShare/releases/tag/v0.1.62">v0.1.62</a>, published <time datetime="2026-09-08">8 Sep 2026</time>. Every release carries a SHA256SUMS list.</p>
+    </div>
+
+    <figure class="shot hero-shot">
+      <figcaption class="bar"><span class="who">Ana · Game night · 94EDD9 · 3/5 people</span><span class="live">Bruno is sharing</span></figcaption>
+      <img src="site/room.png" width="1424" height="861" alt="The PartyShare room screen. Bruno is sharing a browser window that fills the left of the window; on the right, the participant list shows Ana, Bruno and Carla, and the chat holds five messages. The status bar at the bottom reads rtt 1 ms, jitter 6.0 ms, lost 0, concealed 0.0 percent.">
+    </figure>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">What a room looks like</p>
+      <h2>A room is six characters you can read out loud.</h2>
+      <p>Every screen below is the client as it ran on Windows 11, version 0.1.62, with a server on the same machine and three accounts signed in. Nothing is mocked up.</p>
+    </div>
+
+    <div class="row2">
+      <div class="cell">
+        <figure class="shot">
+          <figcaption class="bar"><span class="who">Sign in</span><span>party.example.com</span></figcaption>
+          <img src="site/login.png" width="960" height="760" loading="lazy" alt="The sign-in screen: a server field with a Test button, username and password fields, and a Connect button.">
+        </figure>
+        <div class="blurb">
+          <h3>Sign in to a server you run</h3>
+          <p>The client asks for the server address and tests it before connecting. Accounts live on the server, so the same name and password work from any machine, and an administrator can end any session from anywhere.</p>
+        </div>
+      </div>
+      <div class="cell">
+        <figure class="shot">
+          <figcaption class="bar"><span class="who">Hello, Carla</span><span>1 room open</span></figcaption>
+          <img src="site/home.png" width="960" height="760" loading="lazy" alt="The room list: a table with one room, Game night, code 94EDD9, one of five people, and controls to create a room with a name and a size, or join one by code.">
+        </figure>
+        <div class="blurb">
+          <h3>Rooms have a name, a size and a code</h3>
+          <p>A room holds five people unless whoever creates it asks for more. Its code is six hexadecimal characters, short enough to say over the phone. An ordinary room disappears when it empties; a persistent one, which only an administrator may create, keeps its code across restarts.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="row-wide">
+      <figure class="shot">
+        <figcaption class="bar"><span class="who">Admin · Users</span><span>bruno, administrator</span></figcaption>
+        <img src="site/admin.png" width="960" height="760" loading="lazy" alt="The administration page inside the client: a table of six accounts with role and creation date, and a panel for the selected account, Ana, with four restriction checkboxes, a reason field, and links to message, reset password, promote or delete.">
+      </figure>
+      <div class="blurb">
+        <h3>Accounts, roles and restrictions, from inside the client</h3>
+        <p>An account is <code>user</code> or <code>admin</code>, and carries four restrictions: whether it may sign in, use a microphone, write in the chat, or share a screen. A restriction outlasts the room, the session and the process, which is what separates it from a kick or a forced mute.</p>
+        <p>Every administrative action is checked on the server against the account store at that moment, not against what the session logged in with, and every one is written to an audit log. The same operations exist as a terminal tool that needs no server running.</p>
+      </div>
+    </div>
+
+    <div class="row-wide flip">
+      <div class="blurb">
+        <h3>The status bar is the verdict. Network status is the evidence.</h3>
+        <p>The footer of every call reports the worst round trip, jitter and loss of the last readings, and a one-word verdict. The Network status window charts each of them over the call, adds what the repairs could not cover, and shows what PartyShare itself costs the computer in processor and memory.</p>
+        <p>Settings take effect immediately, during a call: which microphone and output, how much noise suppression, a voice gate, which monitor or window to share, its resolution, frame rate and bitrate, and whether the sound of the machine goes out next to the microphone.</p>
+        <dl class="kv">
+          <dt>audio</dt><dd>Opus, with redundancy and retransmission on both legs; echo cancellation, noise suppression, gain control</dd>
+          <dt>screen</dt><dd>H.264 at 720p and 30 fps; NVENC or Media Foundation when a card answers, OpenH264 otherwise</dd>
+          <dt>share</dt><dd>The entire screen, one monitor, or a single window</dd>
+        </dl>
+      </div>
+      <div class="pair">
+        <figure class="shot">
+          <figcaption class="bar"><span class="who">Call metrics</span><span class="ok">● network good</span></figcaption>
+          <img src="site/metrics.png" width="560" height="830" loading="lazy" alt="The Call metrics window: charts of audio bitrate, round trip time, jitter, packet loss and concealment over the call, and below them the client's own CPU and memory use.">
+        </figure>
+        <figure class="shot">
+          <figcaption class="bar"><span class="who">Settings</span><span>audio · screen</span></figcaption>
+          <img src="site/settings.png" width="575" height="745" loading="lazy" alt="The Settings window: microphone, output, noise suppression level, voice gate and room sounds under Audio; monitor, resolution, frame rate, bitrate limits, shared sound source and shared volume under Screen.">
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="built">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">How it is built</p>
+      <h2>Three pieces, with a boundary between them that is enforced.</h2>
+      <p>One C++20 codebase, built with CMake and vcpkg on three platforms. The protocol is written down before it is implemented, so a server in another language could replace this one without touching the clients.</p>
+    </div>
+
+    <div class="pieces">
+      <div class="piece">
+        <span class="name">client/</span>
+        <h3>The desktop client</h3>
+        <p>Qt 6 Widgets for the interface. Captures the screen and the microphone, speaks WebSocket to the signaling server and WebRTC to the SFU. No media or network module includes a Qt header, and that rule is checked in review.</p>
+      </div>
+      <div class="piece">
+        <span class="name">server/</span>
+        <h3>Signaling and an SFU</h3>
+        <p>Two halves in one process. Signaling routes JSON over WebSocket and owns the room lifecycle. The SFU forwards RTP between participants without decoding anything, so it spends bandwidth and almost no processor.</p>
+      </div>
+      <div class="piece">
+        <span class="name">shared/</span>
+        <h3>Protocol, models, configuration</h3>
+        <p>The wire protocol is a normative document, and the C++ follows it rather than the other way around. Accounts, persistent rooms, chat and the audit log are kept in MongoDB, which is optional at build time.</p>
+      </div>
+    </div>
+
+    <div class="wire-grid" aria-label="How a call is put together">
+      <div class="node">
+        <span class="label">participant</span>
+        <span class="name">Client</span>
+        <p>Answers the server's offer. Captures, encodes, plays out.</p>
+      </div>
+      <div class="link"><span>WebSocket · JSON</span><span>DTLS-SRTP · Opus, H.264</span></div>
+      <div class="node server">
+        <span class="label">server, always the offerer</span>
+        <span class="name">Signaling + SFU</span>
+        <p>Owns mids, SSRCs and payload types, so forwarding is a header rewrite. Picks the share bitrate, because only it sees both links.</p>
+      </div>
+      <div class="link"><span>WebSocket · JSON</span><span>DTLS-SRTP · Opus, H.264</span></div>
+      <div class="node">
+        <span class="label">participant</span>
+        <span class="name">Client</span>
+        <p>Every participant's video lines exist from the moment they join, so starting a share renegotiates nothing.</p>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Area</th><th>Choice</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Language, build</td><td>C++20, CMake presets, Ninja, vcpkg in manifest mode</td><td>The same versions on three platforms and in CI</td></tr>
+          <tr><td>Interface</td><td>Qt 6 Widgets</td><td>Dense in controls, no heavy animation</td></tr>
+          <tr><td>Client media</td><td>libwebrtc, built from source</td><td>Brings AEC3, noise suppression, AGC, jitter buffer, congestion control, SRTP, ICE and desktop capture ready made</td></tr>
+          <tr><td>Screen capture</td><td><span class="m">webrtc::DesktopCapturer</span></td><td>Already covers Windows Graphics Capture, DXGI, ScreenCaptureKit, X11 and PipeWire</td></tr>
+          <tr><td>Video codec</td><td>H.264: OpenH264, or NVENC and Media Foundation behind the encoder factory</td><td>Cross platform with no GPU dependency, hardware when there is one</td></tr>
+          <tr><td>SFU and signaling</td><td>libdatachannel, WebSocket + JSON</td><td>Small, compiles anywhere, forwards RTP at packet level; one network stack instead of two</td></tr>
+          <tr><td>Persistence</td><td>MongoDB, optional</td><td>Accounts, roles, persistent rooms, chat, audit log</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Download</p>
+      <h2>What a release carries, platform by platform.</h2>
+      <p>A push to <code>master</code> cuts a release: the workflow works out the next version, tags it and publishes. Nothing is built on a development machine. Stated plainly, because a build nobody ran is worth no more than a blank space.</p>
+    </div>
+    <div class="cta">
+      <a class="btn primary" data-asset="-windows-x64.msi" href="https://github.com/edermanoel94/PartyShare/releases/latest">Windows installer <small>.msi, x64</small></a>
+      <a class="btn" data-asset="-windows-x64.zip" href="https://github.com/edermanoel94/PartyShare/releases/latest">Windows archive <small>.zip, no installer</small></a>
+      <a class="btn" data-asset="-macos-arm64.dmg" href="https://github.com/edermanoel94/PartyShare/releases/latest">macOS <small>.dmg, Apple silicon</small></a>
+      <a class="btn" data-asset="-linux-x64.tar.gz" href="https://github.com/edermanoel94/PartyShare/releases/latest">Linux server <small>.tar.gz, x64</small></a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Platform</th><th>Client</th><th>Server</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td>Windows x64</td><td><span class="m">.msi</span> and <span class="m">.zip</span>, media layer included</td><td>Build from source</td><td class="ok">Built, installed and run</td></tr>
+          <tr><td>macOS, Apple silicon</td><td><span class="m">.dmg</span>, media layer included</td><td>Build from source</td><td class="ok">Built, installed and run</td></tr>
+          <tr><td>Linux x64</td><td>Build from source</td><td>Tarball; <span class="m">scripts/install_server.sh</span> installs MongoDB, the service and an administrator in one command</td><td class="ok">Built, run and measured. Every number in the documentation comes from here</td></tr>
+          <tr><td>macOS, Intel</td><td class="none">Nothing yet</td><td class="none">Nothing yet</td><td class="none">Never built; the blocker is named in the release chapter</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Documentation</p>
+      <h2>Sixteen chapters, in reading order.</h2>
+      <p>Everything written about the project is one book with one entry point. Each subject lives in exactly one chapter; the ones most people open first are below.</p>
+    </div>
+    <div class="docs">
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/README.md"><span class="n">—</span><span class="t">README<small>What PartyShare is, in two minutes</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/INSTALL.md"><span class="n">—</span><span class="t">Install<small>From nothing to two clients in a room</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/01-overview.md"><span class="n">01</span><span class="t">Overview<small>The three pieces, how a call is put together, platform status</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/02-build.md"><span class="n">02</span><span class="t">Build<small>Presets, options, the media layer, static analysis</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/03-configuration.md"><span class="n">03</span><span class="t">Configuration<small>Every setting, and which copy wins</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/04-server-and-database.md"><span class="n">04</span><span class="t">Server and database<small>Running it, MongoDB, ports and firewalls</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/05-administration.md"><span class="n">05</span><span class="t">Administration<small>Roles, restrictions, the audit log</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/06-protocol.md"><span class="n">06</span><span class="t">Signaling protocol<small>The normative wire definition</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/11-benchmarks.md"><span class="n">11</span><span class="t">Benchmarks<small>Latency, CPU, memory, an impaired network</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/13-security.md"><span class="n">13</span><span class="t">Security review<small>What the system does and does not promise</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/14-release.md"><span class="n">14</span><span class="t">Release<small>Cutting one, and what each platform produces</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/15-postmortems.md"><span class="n">15</span><span class="t">Post-mortems<small>The bugs that cost real time, and what each turned out to be</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/docs/README.md"><span class="n">all</span><span class="t">The whole book<small>Every chapter, with suggested paths through it</small></span></a>
+      <a href="https://github.com/edermanoel94/PartyShare/blob/master/SPEC.md"><span class="n">spec</span><span class="t">Specification<small>The product specification and its acceptance criteria</small></span></a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>PartyShare is MIT licensed. The installer shows the licence before installing anything.</span>
+    <span><a href="https://github.com/edermanoel94/PartyShare">github.com/edermanoel94/PartyShare</a></span>
+  </div>
+</footer>
+
+<script>
+  // The download buttons point at the latest release page, which always works.
+  // When the GitHub API answers, they point straight at the files instead, and
+  // the release line says which version that is.
+  (async () => {
+    try {
+      const response = await fetch('https://api.github.com/repos/edermanoel94/PartyShare/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+      if (!response.ok) return;
+      const release = await response.json();
+      const assets = release.assets || [];
+      document.querySelectorAll('[data-asset]').forEach((link) => {
+        const asset = assets.find((a) => a.name.endsWith(link.dataset.asset));
+        if (asset) link.href = asset.browser_download_url;
+      });
+      const line = document.getElementById('release');
+      const tag = line.querySelector('a');
+      tag.href = release.html_url;
+      tag.textContent = release.tag_name;
+      if (release.published_at) {
+        const when = line.querySelector('time');
+        when.dateTime = release.published_at;
+        when.textContent = new Date(release.published_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      }
+    } catch (error) {
+      // Offline, rate limited, or blocked: the static links stay.
+    }
+  })();
+</script>
+</body>
+</html>

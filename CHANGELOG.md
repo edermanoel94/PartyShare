@@ -10,6 +10,10 @@ it is.
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
+## 0.1.64 (2026-09-09)
+
+- Full screen for the shared screen, room size from the admin panel, and a nudge
+
 ## 0.1.63 (2026-09-08)
 
 - A project page for GitHub Pages, with the program running

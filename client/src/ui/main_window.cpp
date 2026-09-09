@@ -16,6 +16,8 @@
 
 #include <QAbstractAnimation>
 #include <QAbstractItemView>
+#include <QAction>
+#include <QApplication>
 #include <QClipboard>
 #include <QColor>
 #include <QComboBox>
@@ -30,6 +32,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -58,6 +61,7 @@
 #include "app/smoothing.hpp"
 #include "media/media_session.hpp"
 #include "ui/admin_panel.hpp"
+#include "ui/attention.hpp"
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
 #include "ui/elided_label.hpp"
@@ -202,6 +206,15 @@ constexpr int kMeterSteps = 1000;
 
 /// How long the incoming page takes to fade in.
 constexpr int kPageFadeMs = 140;
+
+/// The shake a nudge gives the window: one frame every sixteen milliseconds,
+/// thirty of them, so just under half a second - long enough to be seen from
+/// the corner of an eye, short enough to be over before it is in the way of
+/// the thing on screen. The reach is the first swing in pixels, and it falls
+/// to nothing over the thirty frames. See MainWindow::shake.
+constexpr int kShakeFrameMs = 16;
+constexpr int kShakeSteps = 30;
+constexpr int kShakeReach = 12;
 
 /// How wide a window's title may run in the share menu before it is cut. A
 /// browser tab's title can be a whole sentence, and a menu as wide as the
@@ -664,8 +677,14 @@ void MainWindow::build_home_page() {
 void MainWindow::build_room_page() {
   auto* page = new QWidget(pages_);
   auto* column = new QVBoxLayout(page);
+  room_column_ = column;
 
-  auto* header = new QHBoxLayout();
+  // The header and the controls are widgets and not bare layouts, because
+  // full screen has to hide them and a layout cannot be hidden. See
+  // enter_fullscreen.
+  room_header_ = new QWidget(page);
+  auto* header = new QHBoxLayout(room_header_);
+  header->setContentsMargins(0, 0, 0, 0);
   room_title_ = new QLabel(QString{}, page);
   QFont bold = room_title_->font();
   bold.setBold(true);
@@ -684,6 +703,15 @@ void MainWindow::build_room_page() {
   header->addWidget(copy_room_button_);
   header->addStretch();
   header->addWidget(sharing_label_);
+
+  // Beside the sentence that says who is sharing, because it is about the same
+  // picture. Shown only while somebody else is: see refresh_controls.
+  fullscreen_button_ = new QPushButton(QStringLiteral("Full screen"), page);
+  fullscreen_button_->setToolTip(
+      QStringLiteral("Watch the shared screen full screen. Esc, F11 or a double click on the "
+                     "picture brings the room back."));
+  fullscreen_button_->setVisible(false);
+  header->addWidget(fullscreen_button_);
 
   screen_view_ = new ScreenView(page);
 
@@ -790,6 +818,10 @@ void MainWindow::build_room_page() {
   auto* body = new QSplitter(Qt::Horizontal, page);
   body->addWidget(screen_view_);
   body->addWidget(sidebar_widget);
+  // Kept, because full screen hides the sidebar and puts it back, and puts the
+  // handle back where the person had dragged it.
+  room_body_ = body;
+  room_sidebar_ = sidebar_widget;
 
   // Neither side may be dragged out of existence. A collapsed pane leaves a
   // handle at the very edge of the window as the only way back, which is a
@@ -806,7 +838,9 @@ void MainWindow::build_room_page() {
   body->setStretchFactor(1, 0);
   body->setSizes({640, 300});
 
-  auto* controls = new QHBoxLayout();
+  room_controls_ = new QWidget(page);
+  auto* controls = new QHBoxLayout(room_controls_);
+  controls->setContentsMargins(0, 0, 0, 0);
   mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
   mute_button_->setCheckable(true);
   share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
@@ -844,9 +878,9 @@ void MainWindow::build_room_page() {
   controls->addStretch();
   controls->addWidget(leave_button_);
 
-  column->addLayout(header);
+  column->addWidget(room_header_);
   column->addWidget(body, 1);
-  column->addLayout(controls);
+  column->addWidget(room_controls_);
 
   connect(participants_, &QListWidget::customContextMenuRequested, this,
           &MainWindow::on_participant_menu);
@@ -869,6 +903,35 @@ void MainWindow::build_room_page() {
   // The two setChecked calls there are blocked for exactly that reason.
   connect(mute_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_mute);
   connect(share_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_share);
+  connect(fullscreen_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_fullscreen);
+  // A double click on the picture, which is what every video player has
+  // taught a hand to do. Both ways: in full screen there is nothing else on
+  // the screen to click.
+  connect(screen_view_, &ScreenView::activated, this, &MainWindow::on_toggle_fullscreen);
+
+  // Keys, on the window rather than on a widget, because in full screen the
+  // widgets that could hold them are hidden. F11 is what every browser uses;
+  // Esc is what every full screen anything uses. The Esc action is enabled
+  // only while full screen, so that it never takes the key from a dialog or
+  // from the filter line of the administration panel, which has its own use
+  // for it.
+  fullscreen_action_ = new QAction(QStringLiteral("Full screen"), this);
+  fullscreen_action_->setShortcut(QKeySequence(Qt::Key_F11));
+  fullscreen_action_->setShortcutContext(Qt::WindowShortcut);
+  connect(fullscreen_action_, &QAction::triggered, this, &MainWindow::on_toggle_fullscreen);
+  addAction(fullscreen_action_);
+  leave_fullscreen_action_ = new QAction(QStringLiteral("Leave full screen"), this);
+  leave_fullscreen_action_->setShortcut(QKeySequence(Qt::Key_Escape));
+  leave_fullscreen_action_->setShortcutContext(Qt::WindowShortcut);
+  leave_fullscreen_action_->setEnabled(false);
+  connect(leave_fullscreen_action_, &QAction::triggered, this, &MainWindow::leave_fullscreen);
+  addAction(leave_fullscreen_action_);
+
+  // Runs only while a nudge is shaking the window, for the reason the level
+  // timer runs only while the meter is moving.
+  shake_timer_ = new QTimer(this);
+  shake_timer_->setInterval(kShakeFrameMs);
+  connect(shake_timer_, &QTimer::timeout, this, &MainWindow::animate_shake);
   connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
   connect(network_status_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
   connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
@@ -1060,6 +1123,12 @@ void MainWindow::wire_session() {
             QMetaObject::invokeMethod(this, "apply_chat_history", Qt::QueuedConnection,
                                       Q_ARG(QStringList, lines));
           },
+      .on_nudge =
+          [this](const std::string& from_user_id, const std::string& to_user_id) {
+            QMetaObject::invokeMethod(this, "apply_nudge", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(from_user_id)),
+                                      Q_ARG(QString, QString::fromStdString(to_user_id)));
+          },
       .on_password_changed =
           [this] {
             QMetaObject::invokeMethod(this, "apply_password_changed", Qt::QueuedConnection);
@@ -1156,7 +1225,14 @@ void MainWindow::wire_session() {
                       ? QStringLiteral("%1/%2").arg(summary.participant_count).arg(summary.capacity)
                       : QString::number(summary.participant_count);
               fields << as_field(summary.id) << as_field(summary.id) << as_field(summary.name)
-                     << people;
+                     << people
+                     // Two more than either table has columns, and ui::fill
+                     // reads only as many fields as there are columns. They
+                     // are for the administrator's resize dialog, which needs
+                     // the two numbers and should not have to read them back
+                     // out of "3/10".
+                     << QString::number(summary.capacity)
+                     << QString::number(summary.participant_count);
               rows.push_back(fields.join(QLatin1Char('\t')));
             }
             // Both screens, from the one answer. The administrator's tab is
@@ -1888,8 +1964,9 @@ void MainWindow::apply_state(int state, const QString& detail) {
 
 void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
   // Read off the rows before they are handed to the table, which keeps only
-  // what it shows. The row is identifier, identifier, name, people; the first
-  // field is the hidden key every table here carries. See ui::fill.
+  // what it shows. The row is identifier, identifier, name, people, and then
+  // the size and the count as bare numbers for the administrator's panel; the
+  // first field is the hidden key every table here carries. See ui::fill.
   room_names_.clear();
   room_names_.reserve(static_cast<int>(rows.size()));
   room_people_.clear();
@@ -2290,14 +2367,7 @@ void MainWindow::apply_screen_share(const QString& user_id) {
     return;
   }
 
-  QString name = user_id;
-  for (int row = 0; row < participants_->count(); ++row) {
-    const QListWidgetItem* item = participants_->item(row);
-    if (item->data(Qt::UserRole).toString() == user_id) {
-      name = item->data(kNameRole).toString();
-      break;
-    }
-  }
+  const QString name = participant_name(user_id);
 
   const bool is_me = user_id == QString::fromStdString(session_.local_user().id);
   sharing_label_->setText(is_me ? QStringLiteral("you are sharing")
@@ -2313,6 +2383,163 @@ void MainWindow::apply_screen_share(const QString& user_id) {
     screen_view_->set_receiving(true);
   }
   refresh_controls();
+}
+
+QString MainWindow::participant_name(const QString& user_id) const {
+  for (int row = 0; row < participants_->count(); ++row) {
+    const QListWidgetItem* item = participants_->item(row);
+    if (item->data(Qt::UserRole).toString() == user_id) {
+      return item->data(kNameRole).toString();
+    }
+  }
+  // Somebody who has just left, or an identifier the list never had. The
+  // identifier is a worse name than a name and a better one than a blank.
+  return user_id;
+}
+
+void MainWindow::on_toggle_fullscreen() {
+  if (fullscreen_) {
+    leave_fullscreen();
+    return;
+  }
+  enter_fullscreen();
+}
+
+void MainWindow::enter_fullscreen() {
+  if (fullscreen_) {
+    return;
+  }
+  // Only a picture worth filling the screen with: somebody else's share, in a
+  // call, on the room page. F11 and the double click arrive here from anywhere
+  // the window is active, and outside that state they do nothing rather than
+  // turning the window into a black rectangle with a sentence in it.
+  const std::string sharer = session_.screen_sharer();
+  const bool someone_else_is_sharing = state_ == client::app::CallSession::State::InCall &&
+                                       !sharer.empty() && sharer != session_.local_user().id;
+  if (!someone_else_is_sharing || pages_->currentIndex() != kRoomPage) {
+    return;
+  }
+
+  fullscreen_ = true;
+  // Everything that leave_fullscreen puts back, taken down in one place.
+  // The window state is what decides between "back to normal" and "back to
+  // maximized", and the splitter's sizes are where the person had dragged
+  // the handle to: a sidebar that comes back at its default width has lost
+  // an adjustment nobody asked to lose.
+  before_fullscreen_ = windowState();
+  splitter_before_fullscreen_ = room_body_->sizes();
+  margins_before_fullscreen_ = room_column_->contentsMargins();
+
+  room_header_->hide();
+  room_controls_->hide();
+  room_sidebar_->hide();
+  statusBar()->hide();
+  room_column_->setContentsMargins(0, 0, 0, 0);
+  screen_view_->set_edge_to_edge(true);
+  showFullScreen();
+
+  leave_fullscreen_action_->setEnabled(true);
+  // The one thing that has to be said, said the only way left to say it: the
+  // header with the button is gone, and the status bar with it.
+  screen_view_->show_notice(QStringLiteral("Press Esc to leave full screen"));
+}
+
+void MainWindow::leave_fullscreen() {
+  if (!fullscreen_) {
+    return;
+  }
+  fullscreen_ = false;
+  leave_fullscreen_action_->setEnabled(false);
+
+  // The state it had, and not showNormal(): a window that was maximized when
+  // full screen was entered goes back to maximized, which is what "back" means
+  // to the person who maximized it.
+  setWindowState(before_fullscreen_ & ~Qt::WindowFullScreen);
+  statusBar()->show();
+  room_header_->show();
+  room_controls_->show();
+  room_sidebar_->show();
+  room_column_->setContentsMargins(margins_before_fullscreen_);
+  room_body_->setSizes(splitter_before_fullscreen_);
+  screen_view_->set_edge_to_edge(false);
+}
+
+void MainWindow::shake() {
+  // One at a time. A second nudge inside the first's half second joins it
+  // rather than restarting it, so nobody's timing can keep the window moving;
+  // the server spaces them further apart than this anyway.
+  if (shake_timer_->isActive()) {
+    return;
+  }
+  // The window when it can move, and its contents when it cannot. Moving a
+  // maximized window takes it out of maximized on Windows, and moving a full
+  // screen one is undefined: a nudge that rearranged the desktop would be a
+  // worse surprise than the nudge.
+  const bool pinned = isMaximized() || isFullScreen();
+  shake_target_ = pinned ? static_cast<QWidget*>(pages_) : static_cast<QWidget*>(this);
+  shake_origin_ = shake_target_->pos();
+  shake_step_ = 0;
+  shake_timer_->start();
+}
+
+void MainWindow::animate_shake() {
+  ++shake_step_;
+  if (shake_step_ >= kShakeSteps) {
+    shake_timer_->stop();
+    shake_target_->move(shake_origin_);
+    return;
+  }
+  // Side to side, with the swing falling to nothing by the end, so that it
+  // stops rather than being stopped. A little up and down as well, at half the
+  // reach and on its own rhythm, which is what keeps it from reading as the
+  // window sliding.
+  const double left = 1.0 - (static_cast<double>(shake_step_) / kShakeSteps);
+  const int reach = static_cast<int>(std::lround(kShakeReach * left));
+  const int dx = shake_step_ % 2 == 0 ? reach : -reach;
+  const int dy = shake_step_ % 4 < 2 ? reach / 2 : -reach / 2;
+  shake_target_->move(shake_origin_ + QPoint(dx, dy));
+}
+
+void MainWindow::apply_nudge(const QString& from_user_id, const QString& to_user_id) {
+  const QString me = QString::fromStdString(session_.local_user().id);
+  const QString when = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm"));
+
+  // Ours, back from the server: one line, the way a chat message we sent is
+  // one line. The window that asked does not shake.
+  if (from_user_id == me) {
+    append_chat_line(QStringLiteral("[%1] You nudged %2").arg(when, participant_name(to_user_id)));
+    return;
+  }
+  // The server sends this to the two people it concerns and nobody else, so
+  // anything else here is a server that changed, and there is nothing to show
+  // for it.
+  if (to_user_id != me) {
+    return;
+  }
+
+  const QString from = participant_name(from_user_id);
+  append_chat_line(QStringLiteral("[%1] %2 nudged you").arg(when, from));
+
+  // The balloon is decided first because its answer decides the sound, the
+  // same rule apply_participants follows for an arrival: a balloon brings the
+  // system's own sound and cannot be asked not to, and one nudge is one sound.
+  // No balloon while the window is being looked at - the person is about to
+  // watch it shake.
+  const bool announced =
+      !notifier_.window_has_attention() && notifier_.notify(from, QStringLiteral("nudged you"));
+  if (!announced) {
+    play_chime(Chime::Nudge);
+  }
+
+  // The operating system's own way of saying a window wants somebody: native
+  // where there is one - the title bar and the taskbar button flashing until
+  // this window is brought to the front - and Qt's portable version where
+  // there is not. See ui/attention.hpp.
+  if (!flash_window(static_cast<std::uintptr_t>(winId()))) {
+    QApplication::alert(this, 0);
+  }
+
+  shake();
 }
 
 void MainWindow::build_admin_page() {
@@ -2339,12 +2566,6 @@ void MainWindow::on_close_administration() {
 }
 
 void MainWindow::on_participant_menu(const QPoint& where) {
-  // Nothing to offer somebody who is not an administrator, and an empty menu
-  // that appears on right click is worse than no menu at all.
-  if (!session_.is_admin()) {
-    return;
-  }
-
   const QListWidgetItem* item = participants_->itemAt(where);
   if (item == nullptr) {
     return;
@@ -2354,7 +2575,8 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   const QString name = item->data(kNameRole).toString();
   if (user_id.isEmpty() || user_id == QString::fromStdString(session_.local_user().id)) {
     // Nothing here applies to yourself: the mute button and the leave button
-    // are what those are for, and the server refuses a self kick anyway.
+    // are what those are for, the server refuses a self kick anyway, and your
+    // own attention is the one thing you already have.
     return;
   }
 
@@ -2371,29 +2593,58 @@ void MainWindow::on_participant_menu(const QPoint& where) {
   }
 
   QMenu menu(this);
-  QAction* toggle_mute = menu.addAction(muted ? QStringLiteral("Unmute %1").arg(name)
-                                              : QStringLiteral("Mute %1").arg(name));
+  // For everybody: the one thing a participant may do to another participant.
+  // A shaken window, a buzz and the taskbar lit up, for the person who has the
+  // shared screen on another monitor and the room out of sight. See
+  // apply_nudge for what arrives, and protocol::Nudge for what the server
+  // allows.
+  QAction* nudge = menu.addAction(QStringLiteral("Nudge %1").arg(name));
 
-  // The two below are account restrictions and outlive this room, which is why
-  // they sit in their own section: "mute for now" and "may not speak until
-  // somebody says otherwise" are different decisions, and a menu that ran them
-  // together would make the second one easy to take by accident. The
-  // administration panel is where all four are managed together; this is the
-  // shortcut for the two that are usually reached for while a call is going on.
-  menu.addSeparator();
-  QAction* toggle_silence =
-      menu.addAction(restrictions.silenced ? QStringLiteral("Let %1 use the chat again").arg(name)
-                                           : QStringLiteral("Silence %1 in the chat").arg(name));
-  QAction* toggle_share_block =
-      menu.addAction(restrictions.screen_share_blocked
-                         ? QStringLiteral("Let %1 share their screen again").arg(name)
-                         : QStringLiteral("Stop %1 from sharing their screen").arg(name));
+  // The rest is administration, and the menu used not to open at all for
+  // anybody else. The pointers stay null for an ordinary user, and a null
+  // never matches the action that was chosen.
+  QAction* toggle_mute = nullptr;
+  QAction* toggle_silence = nullptr;
+  QAction* toggle_share_block = nullptr;
+  QAction* kick = nullptr;
+  if (session_.is_admin()) {
+    menu.addSeparator();
+    toggle_mute = menu.addAction(muted ? QStringLiteral("Unmute %1").arg(name)
+                                       : QStringLiteral("Mute %1").arg(name));
 
-  menu.addSeparator();
-  QAction* kick = menu.addAction(QStringLiteral("Remove %1 from the room").arg(name));
+    // The two below are account restrictions and outlive this room, which is
+    // why they sit in their own section: "mute for now" and "may not speak
+    // until somebody says otherwise" are different decisions, and a menu that
+    // ran them together would make the second one easy to take by accident.
+    // The administration panel is where all four are managed together; this
+    // is the shortcut for the two that are usually reached for while a call
+    // is going on.
+    menu.addSeparator();
+    toggle_silence =
+        menu.addAction(restrictions.silenced ? QStringLiteral("Let %1 use the chat again").arg(name)
+                                             : QStringLiteral("Silence %1 in the chat").arg(name));
+    toggle_share_block =
+        menu.addAction(restrictions.screen_share_blocked
+                           ? QStringLiteral("Let %1 share their screen again").arg(name)
+                           : QStringLiteral("Stop %1 from sharing their screen").arg(name));
+
+    menu.addSeparator();
+    kick = menu.addAction(QStringLiteral("Remove %1 from the room").arg(name));
+  }
 
   const QAction* chosen = menu.exec(participants_->mapToGlobal(where));
   if (chosen == nullptr) {
+    return;
+  }
+
+  if (chosen == nudge) {
+    // Nothing is shown here. The server's copy comes back through apply_nudge
+    // and writes the line, the way a chat message does; what a refusal has to
+    // say - too soon, silenced - comes back as an error and is said there.
+    if (const auto sent = session_.nudge(user_id.toStdString()); !sent) {
+      apply_error(QString::fromStdString(sent.error().code),
+                  QString::fromStdString(sent.error().message));
+    }
     return;
   }
 
@@ -2609,6 +2860,13 @@ void MainWindow::go_to_page(int index) {
   if (pages_->currentIndex() == index) {
     return;
   }
+  // Full screen belongs to the room page. Leaving it for any other - the
+  // administration panel, the home screen after being removed - puts the
+  // window back first, or the next page would come up with no status bar and
+  // no title bar and no way to tell why.
+  if (index != kRoomPage) {
+    leave_fullscreen();
+  }
   pages_->setCurrentIndex(index);
 
   // Arriving at the home page asks for the list, which covers both ways of
@@ -2715,6 +2973,19 @@ void MainWindow::refresh_controls() {
       restrictions.screen_share_blocked
           ? QStringLiteral("An administrator has blocked screen sharing for this account.")
           : QString());
+
+  // Only while there is somebody else's picture to fill the screen with.
+  // Hidden rather than disabled, beside a sentence that is itself empty when
+  // nobody is sharing: a greyed "Full screen" next to nothing is a button
+  // about nothing.
+  fullscreen_button_->setVisible(in_call && someone_else_is_sharing);
+  // And out of full screen the moment there is not, whichever way that came
+  // about: the share ending, the sharer leaving, this side being removed, the
+  // call dropping. Every one of those reaches here. A black screen with
+  // nothing on it and no visible way out is not a state to leave anybody in.
+  if (fullscreen_ && !(in_call && someone_else_is_sharing)) {
+    leave_fullscreen();
+  }
 
   // There is nobody to say anything to outside a room, and a field that
   // accepts a line it cannot send is a field that loses it. Being silenced is

@@ -52,6 +52,11 @@ enum class MessageType : std::uint8_t {
   ScreenShareStopped,
   Mute,
   Unmute,
+  // A request for one participant's attention, section 4.12 of
+  // docs/06-protocol.md. Both directions, like the four above it: a request on
+  // the way in, and the server's copy to the two people concerned on the way
+  // out.
+  Nudge,
   // An account looking after itself, section 4.8 of docs/06-protocol.md. Not
   // administration: the only account either of these can touch is the one that
   // sent the message.
@@ -92,6 +97,7 @@ enum class MessageType : std::uint8_t {
   ListRooms,
   RoomList,
   DeleteRoom,
+  UpdateRoom,
   ListAudit,
   AuditList,
   // Who has been connected and from where, and signing one of them out,
@@ -325,6 +331,33 @@ struct Unmute {
   std::string by_user_id;
 
   friend bool operator==(const Unmute&, const Unmute&) = default;
+};
+
+/// Asks for one participant's attention: their window shakes, a sound plays
+/// and the operating system lights the program up, the way a nudge did in the
+/// instant messengers of twenty years ago. For the person who has the shared
+/// screen up on another monitor and the room out of sight, and for the one
+/// who stepped away without saying so.
+///
+/// Both directions. From the client it is a request, and `from_user_id` has
+/// to be the sender's own - the server refuses it with `unauthorized`
+/// otherwise, as it does every message that names its sender. From the server
+/// it is the copy that reaches exactly two people, the one nudged and the one
+/// who nudged: the room at large is not told, because being nudged is between
+/// the two of them in the way a chat message is not.
+///
+/// Both have to be in `room_id`, and they have to be two different people. A
+/// sender the server has silenced in chat may not nudge either - it is chat by
+/// other means. And one nudge every five seconds per sender, whoever it is
+/// aimed at: a second one inside that window is answered `too_soon`, because a
+/// nudge that can be repeated as fast as a key repeats is a way to make
+/// somebody's window unusable.
+struct Nudge {
+  std::string room_id;
+  std::string from_user_id;
+  std::string to_user_id;
+
+  friend bool operator==(const Nudge&, const Nudge&) = default;
 };
 
 // --- chat --------------------------------------------------------------------
@@ -609,6 +642,27 @@ struct DeleteRoom {
   friend bool operator==(const DeleteRoom&, const DeleteRoom&) = default;
 };
 
+/// Changes a room that already exists. Like `update_user`, only what is
+/// present moves; the size is the one thing this can move today, and a name
+/// would join it here rather than in a message of its own.
+struct UpdateRoom {
+  std::string room_id;
+  /// How many people the room holds from now on, counting whoever is already
+  /// inside. Zero, or absent, leaves the size alone. Anything else has to be a
+  /// size `create_room` would have accepted - `models::is_valid_room_capacity`
+  /// and the server's own ceiling - or the request is answered `invalid_value`
+  /// naming the range, for the reason `create_room` refuses rather than clamps.
+  ///
+  /// Lowering it below the number of people already in the room is accepted,
+  /// and nobody is removed: the room is simply full until enough of them
+  /// leave. An administrator who wants somebody out has `kick_user`, and a
+  /// resize that quietly picked whom to drop would be a kick with no reason and
+  /// no name on it.
+  int capacity = 0;
+
+  friend bool operator==(const UpdateRoom&, const UpdateRoom&) = default;
+};
+
 struct ListAudit {
   /// Newest first, capped by the server. Zero or absent asks for the default.
   int limit = 0;
@@ -706,11 +760,12 @@ struct Pong {
 using Message =
     std::variant<Authenticate, Authenticated, CreateRoom, RoomCreated, JoinRoom, LeaveRoom,
                  UserJoined, UserLeft, Offer, Answer, IceCandidate, ScreenShareStarted,
-                 ScreenShareStopped, Mute, Unmute, ChangePassword, PasswordChanged, SessionEnded,
-                 ChatMessage, ListChat, ChatHistory, SendNotice, Notice, AcknowledgeNotice,
-                 ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute, RestrictUser,
-                 UserRestricted, ListUsers, UserList, CreateUser, UpdateUser, DeleteUser, ListRooms,
-                 RoomList, DeleteRoom, ListAudit, AuditList, ListSessions, SessionList, EndSession>;
+                 ScreenShareStopped, Mute, Unmute, Nudge, ChangePassword, PasswordChanged,
+                 SessionEnded, ChatMessage, ListChat, ChatHistory, SendNotice, Notice,
+                 AcknowledgeNotice, ErrorMessage, Ping, Pong, KickUser, UserKicked, ForceMute,
+                 RestrictUser, UserRestricted, ListUsers, UserList, CreateUser, UpdateUser,
+                 DeleteUser, ListRooms, RoomList, DeleteRoom, UpdateRoom, ListAudit, AuditList,
+                 ListSessions, SessionList, EndSession>;
 
 /// The wire name of a message type, for example "join_room".
 [[nodiscard]] std::string_view type_name(MessageType type) noexcept;

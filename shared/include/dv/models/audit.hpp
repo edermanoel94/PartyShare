@@ -23,7 +23,7 @@ struct AuditEntry {
   std::string actor_username;
   /// What was done: "kick", "force_mute", "force_unmute", "restrict_user",
   /// "create_user", "update_user", "delete_user", "delete_room",
-  /// "create_room".
+  /// "update_room", "create_room".
   std::string action;
   /// Who or what it was done to. A user id, or a room id for room actions.
   std::string target_id;

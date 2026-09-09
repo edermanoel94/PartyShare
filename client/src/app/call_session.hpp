@@ -195,6 +195,15 @@ class CallSession {
     /// otherwise be appended a second time.
     std::function<void(std::vector<models::ChatMessage> messages)> on_chat_history;
 
+    /// Somebody asked for somebody's attention, and one of the two is this
+    /// session. Both ends hear it: `to_user_id` is us when we were nudged, and
+    /// `from_user_id` is us when a nudge we sent went through - like a chat
+    /// message, nothing is shown until the server has agreed to it. What the
+    /// interface does with the first case - shake, sound, the operating
+    /// system's own way of lighting a program up - is its business; this
+    /// class only says who and whom.
+    std::function<void(std::string from_user_id, std::string to_user_id)> on_nudge;
+
     /// The password of this account was replaced, and every session of it -
     /// this one - was revoked by the server.
     ///
@@ -365,6 +374,13 @@ class CallSession {
   /// no room, and with `invalid_value` for text the server would refuse
   /// anyway, so an empty line does not become a round trip.
   [[nodiscard]] Result<std::monostate> send_chat(const std::string& text);
+
+  /// Asks `user_id`, who has to be in this room, for their attention. Answered
+  /// through `on_nudge` when the server relays it, and refused by the server
+  /// with `too_soon` inside five seconds of the last one this session sent,
+  /// `invalid_target` for yourself or somebody not in the room, and
+  /// `forbidden` for an account silenced in chat. See protocol::Nudge.
+  [[nodiscard]] Result<std::monostate> nudge(const std::string& user_id);
 
   /// Asks for the room's conversation again, up to `limit` messages, answered
   /// through `on_chat_history`. Zero asks for the server's default.
@@ -626,6 +642,11 @@ class CallSession {
 
   [[nodiscard]] Result<std::monostate> list_rooms();
   [[nodiscard]] Result<std::monostate> delete_room(const std::string& room_id);
+  /// Changes how many people `room_id` holds. Answered with `on_room_list`,
+  /// like closing one; the server refuses a size it would not have created
+  /// the room with, and keeps everybody already inside when the number goes
+  /// below them. See protocol::UpdateRoom.
+  [[nodiscard]] Result<std::monostate> update_room(const std::string& room_id, int capacity);
 
   [[nodiscard]] Result<std::monostate> list_audit(int limit = 0, const std::string& actor_id = {});
 

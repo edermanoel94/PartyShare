@@ -4,7 +4,11 @@
 #include <cstring>
 #include <utility>
 
+#include <QBrush>
+#include <QColor>
+#include <QLabel>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -14,17 +18,49 @@
 #include <QRegion>
 #include <QResizeEvent>
 #include <QSize>
+#include <QTimer>
 
 #include "ui/theme.hpp"
 
 namespace dv::ui {
+namespace {
+
+/// How long a notice stays over the picture. Three seconds is long enough to
+/// read one short sentence twice and short enough that it is gone before it
+/// is in the way of what the person entered full screen to look at.
+constexpr int kNoticeMs = 3000;
+
+/// How far down from the top the notice sits. Off the very edge, where a
+/// picture's own title bar usually is, and well above the middle, where the
+/// thing being watched usually is.
+constexpr int kNoticeTop = 24;
+
+}  // namespace
 
 ScreenView::ScreenView(QWidget* parent)
-    : QWidget(parent), placeholder_(QStringLiteral("nobody is sharing a screen")) {
+    : QWidget(parent),
+      notice_(new QLabel(this)),
+      notice_timer_(new QTimer(this)),
+      placeholder_(QStringLiteral("nobody is sharing a screen")) {
   setMinimumSize(320, 180);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   // Painted edge to edge, so Qt does not have to clear it first.
   setAttribute(Qt::WA_OpaquePaintEvent);
+
+  // Styled here and not in the theme sheet, because it is the one label in the
+  // program that sits on a picture rather than on a window: whatever the
+  // scheme, the ground under it is somebody's screen and the only colours that
+  // read on that are white on a dark translucent pill.
+  notice_->setAttribute(Qt::WA_TransparentForMouseEvents);
+  notice_->setAlignment(Qt::AlignCenter);
+  notice_->setStyleSheet(
+      QStringLiteral("QLabel { background: rgba(0, 0, 0, 170); color: white; "
+                     "border-radius: 8px; padding: 8px 16px; }"));
+  notice_->hide();
+
+  notice_timer_->setSingleShot(true);
+  notice_timer_->setInterval(kNoticeMs);
+  connect(notice_timer_, &QTimer::timeout, notice_, &QWidget::hide);
 }
 
 void ScreenView::submit(const client::video::VideoFrame& frame) {
@@ -109,6 +145,38 @@ void ScreenView::set_placeholder(QString text) {
   update();
 }
 
+void ScreenView::set_edge_to_edge(bool on) {
+  if (edge_to_edge_ == on) {
+    return;
+  }
+  edge_to_edge_ = on;
+  // The whole widget: the surround changes colour and the corners come or go,
+  // and neither of those is inside the picture's rectangle.
+  update();
+}
+
+void ScreenView::show_notice(const QString& text) {
+  notice_->setText(text);
+  notice_->adjustSize();
+  place_notice();
+  notice_->show();
+  // Over the picture, not under it. A child is drawn above its parent already;
+  // this is for the day something else is parented here too.
+  notice_->raise();
+  notice_timer_->start();
+}
+
+void ScreenView::place_notice() {
+  notice_->move((width() - notice_->width()) / 2, kNoticeTop);
+}
+
+void ScreenView::mouseDoubleClickEvent(QMouseEvent* event) {
+  if (event->button() == Qt::LeftButton) {
+    emit activated();
+  }
+  QWidget::mouseDoubleClickEvent(event);
+}
+
 void ScreenView::take_pending_frame() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -160,6 +228,10 @@ void ScreenView::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
   rebuild_card();
   place_frame();
+  // Entering full screen is a resize, and it is exactly when the notice is up.
+  if (notice_->isVisible()) {
+    place_notice();
+  }
 }
 
 void ScreenView::paintEvent(QPaintEvent* event) {
@@ -171,15 +243,24 @@ void ScreenView::paintEvent(QPaintEvent* event) {
   const QRect damaged = event->rect();
   painter.setClipRect(damaged);
 
+  // Black rather than the canvas colour when the picture is the whole screen.
+  // The two are a few steps apart, and on a screen that is otherwise showing
+  // nothing else the difference is a grey frame around somebody's desktop.
+  const QBrush ground = edge_to_edge_ ? QBrush(Qt::black) : palette().dark();
+
   if (current_.isNull()) {
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    // WA_OpaquePaintEvent promises every pixel is painted, so what falls
-    // outside the rounded rectangle has to be filled with the window colour by
-    // hand rather than left to Qt to clear.
-    painter.fillRect(damaged, palette().window());
-    QPainterPath card;
-    card.addRoundedRect(QRectF(rect()), theme::kCardRadius, theme::kCardRadius);
-    painter.fillPath(card, palette().dark());
+    if (edge_to_edge_) {
+      painter.fillRect(damaged, ground);
+    } else {
+      painter.setRenderHint(QPainter::Antialiasing, true);
+      // WA_OpaquePaintEvent promises every pixel is painted, so what falls
+      // outside the rounded rectangle has to be filled with the window colour
+      // by hand rather than left to Qt to clear.
+      painter.fillRect(damaged, palette().window());
+      QPainterPath card;
+      card.addRoundedRect(QRectF(rect()), theme::kCardRadius, theme::kCardRadius);
+      painter.fillPath(card, ground);
+    }
     painter.setPen(palette().color(QPalette::BrightText));
     painter.drawText(rect(), Qt::AlignCenter, placeholder_);
     return;
@@ -190,7 +271,7 @@ void ScreenView::paintEvent(QPaintEvent* event) {
   // rectangle, and this region comes out empty.
   const QRegion surround = QRegion(damaged).subtracted(QRegion(where_));
   for (const QRect& piece : surround) {
-    painter.fillRect(piece, palette().dark());
+    painter.fillRect(piece, ground);
   }
 
   painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -198,8 +279,9 @@ void ScreenView::paintEvent(QPaintEvent* event) {
 
   // The corners the card is missing, cut back out of the picture that was
   // allowed to be drawn over them. Antialiased, so the curve blends into the
-  // picture rather than stepping down it.
-  if (!outside_.isEmpty()) {
+  // picture rather than stepping down it. Not when the picture is the whole
+  // screen: a screen has no card to be the corners of.
+  if (!edge_to_edge_ && !outside_.isEmpty()) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillPath(outside_, palette().window());
   }

@@ -193,7 +193,7 @@ understood is the one unacceptable answer.
 
 | Key | Default | |
 | --- | --- | --- |
-| `room_sounds` | true | The chime when somebody joins or leaves. [Chapter 10](10-join-leave-alerts.md) |
+| `room_sounds` | true | The chime when somebody joins or leaves, and the buzz when somebody nudges you. [Chapter 10](10-join-leave-alerts.md) |
 
 The client also asks GitHub whether a newer release exists, and there is no key
 for it: one HTTPS request to one address, five seconds after the window opens

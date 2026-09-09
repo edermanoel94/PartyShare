@@ -4,16 +4,20 @@
 
 namespace dv::ui {
 
-/// The two things a room can tell you about its membership without words.
+/// The three things a room can tell you without words: two about its
+/// membership, and one from somebody in it.
 ///
 /// The base type is named for the same reason config::UnknownOptions names
-/// one: two values do not need four bytes, and clang-tidy holds the project to
-/// it.
+/// one: three values do not need four bytes, and clang-tidy holds the project
+/// to it.
 enum class Chime : std::uint8_t {
   /// A rising fifth. Somebody arrived.
   Joined,
   /// The same fifth falling. Somebody left.
   Left,
+  /// A short buzz, lower than the other two. Somebody nudged you, and the
+  /// window is shaking as this plays. See MainWindow::apply_nudge.
+  Nudge,
 };
 
 /// Turns the chime on or off for the whole process.

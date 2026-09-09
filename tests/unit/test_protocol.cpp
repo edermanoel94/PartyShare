@@ -199,6 +199,43 @@ TEST(RoundTrip, RoomListCarriesEachRoomsSizeAndOccupancy) {
   EXPECT_EQ(round_trip(original), original);
 }
 
+TEST(RoundTrip, UpdateRoom) {
+  const UpdateRoom original{.room_id = "8F42A1", .capacity = 12};
+  EXPECT_EQ(round_trip(original), original);
+  EXPECT_EQ(type_name(MessageType::UpdateRoom), "update_room");
+}
+
+TEST(Serialize, AnUpdateRoomThatLeavesTheSizeAloneSendsNone) {
+  // Zero is "leave it alone" on this side, and a field carrying it would read
+  // as a size to a server that takes the field at its word.
+  const std::string payload = serialize(Message{UpdateRoom{.room_id = "8F42A1"}});
+  EXPECT_EQ(payload.find("capacity"), std::string::npos) << payload;
+}
+
+TEST(Parse, AnUpdateRoomWithoutASizeLeavesItAlone) {
+  const auto parsed = parse(R"({"type":"update_room","room_id":"8F42A1"})");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(std::get<UpdateRoom>(parsed.value()).capacity, 0);
+}
+
+TEST(RoundTrip, Nudge) {
+  const Nudge original{.room_id = "8F42A1", .from_user_id = "user123", .to_user_id = "user456"};
+  EXPECT_EQ(round_trip(original), original);
+  EXPECT_EQ(type_name(MessageType::Nudge), "nudge");
+}
+
+TEST(Parse, ANudgeNamesBothPeople) {
+  // Neither end is optional: a nudge from nobody or to nobody has no meaning,
+  // and the server would have to guess one, which is the wrong way to be
+  // wrong.
+  const auto without_target = parse(R"({"type":"nudge","room_id":"8F42A1","from_user_id":"a"})");
+  ASSERT_FALSE(without_target.ok());
+  EXPECT_EQ(without_target.error().code, "missing_field");
+  const auto without_sender = parse(R"({"type":"nudge","room_id":"8F42A1","to_user_id":"b"})");
+  ASSERT_FALSE(without_sender.ok());
+  EXPECT_EQ(without_sender.error().code, "missing_field");
+}
+
 TEST(RoundTrip, JoinRoom) {
   const JoinRoom original{"8F42A1", "user123", "Ana"};
   EXPECT_EQ(round_trip(original), original);

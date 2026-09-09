@@ -426,6 +426,87 @@ TEST(RoomManager, TheSizeSurvivesARestart) {
   EXPECT_EQ(after.find(id)->capacity, 12);
 }
 
+TEST(RoomManager, ResizingARoomChangesWhatItHolds) {
+  RoomManager manager = make_manager(20);
+  const std::string id = manager.create_room("small", "owner", 3).value();
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_FALSE(manager.join(id, user("u" + std::to_string(i))).has_value());
+  }
+  ASSERT_EQ(manager.join(id, user("u3"))->code, "room_full");
+
+  EXPECT_FALSE(manager.set_capacity(id, 4).has_value());
+  EXPECT_EQ(manager.find(id)->capacity, 4);
+  // The fourth person fits now, and the fifth does not.
+  EXPECT_FALSE(manager.join(id, user("u3")).has_value());
+  EXPECT_EQ(manager.join(id, user("u4"))->code, "room_full");
+}
+
+TEST(RoomManager, ShrinkingARoomBelowItsOccupantsRemovesNobody) {
+  // Accepted, and nobody is picked to go: the room is over its size until
+  // enough people leave, and refuses the next arrival meanwhile.
+  RoomManager manager = make_manager(20);
+  const std::string id = manager.create_room("crowd", "owner", 5).value();
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_FALSE(manager.join(id, user("u" + std::to_string(i))).has_value());
+  }
+
+  EXPECT_FALSE(manager.set_capacity(id, 2).has_value());
+  EXPECT_EQ(manager.find(id)->capacity, 2);
+  EXPECT_EQ(manager.find(id)->size(), 4u);
+  EXPECT_TRUE(manager.find(id)->is_full());
+  EXPECT_EQ(manager.join(id, user("u4"))->code, "room_full");
+
+  // Two leave and it is still full; a third leaves and there is room again.
+  ASSERT_FALSE(manager.leave(id, "u0").has_value());
+  ASSERT_FALSE(manager.leave(id, "u1").has_value());
+  EXPECT_EQ(manager.join(id, user("u4"))->code, "room_full");
+  ASSERT_FALSE(manager.leave(id, "u2").has_value());
+  EXPECT_FALSE(manager.join(id, user("u4")).has_value());
+}
+
+TEST(RoomManager, ResizingRefusesWhatCreatingWouldRefuse) {
+  RoomManager manager = make_manager(5);
+  const std::string id = create(manager);
+
+  // Zero is not "the default" here: a room that exists has a size already.
+  EXPECT_EQ(manager.set_capacity(id, 0)->code, "invalid_value");
+  EXPECT_EQ(manager.set_capacity(id, 1)->code, "invalid_value");
+  EXPECT_EQ(manager.set_capacity(id, 6)->code, "invalid_value");
+  EXPECT_EQ(manager.set_capacity(id, 6)->message, "a room holds between 2 and 5 people");
+  EXPECT_EQ(manager.find(id)->capacity, dv::models::kDefaultRoomCapacity);
+
+  // The size is checked before the room, as create_room orders it.
+  EXPECT_EQ(manager.set_capacity("ABCDEF", 99)->code, "invalid_value");
+  EXPECT_EQ(manager.set_capacity("ABCDEF", 3)->code, "room_not_found");
+}
+
+TEST(RoomManager, TheNewSizeSurvivesARestartAndKeepsTheCreationTime) {
+  dv::server::store::MemoryRoomStore store;
+  std::string id;
+  std::int64_t created_at = 0;
+  {
+    RoomManager before(
+        RoomManager::Options{.max_participants_per_room = 20, .id_seed = 1234u, .store = &store});
+    id = before.create_room("dev-room", "owner", 5).value();
+    created_at = store.find(id)->created_at;
+    ASSERT_GT(created_at, 0);
+
+    ASSERT_FALSE(before.set_capacity(id, 12).has_value());
+    // Written before the live room changed, and the record is the whole room
+    // with only the size moved: the store keeps the time the room was made.
+    EXPECT_EQ(store.find(id)->capacity, 12);
+    EXPECT_EQ(store.find(id)->name, "dev-room");
+    EXPECT_EQ(store.find(id)->owner_id, "owner");
+    EXPECT_EQ(store.find(id)->created_at, created_at);
+  }
+
+  RoomManager after(
+      RoomManager::Options{.max_participants_per_room = 20, .id_seed = 4321u, .store = &store});
+  EXPECT_EQ(after.load_rooms(), 1u);
+  ASSERT_NE(after.find(id), nullptr);
+  EXPECT_EQ(after.find(id)->capacity, 12);
+}
+
 TEST(RoomManager, ARoomStoredBeforeSizesGetsTheDefault) {
   // A record from an older server carries no capacity. It gets the number
   // every room held then, and is not measured against this server's ceiling:

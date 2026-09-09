@@ -103,7 +103,7 @@ ID: 8F42A1
 
 Each channel initially has to allow:
 
-* A number of participants chosen when the room is created, 5 unless asked otherwise, up to a ceiling the server sets (20 by default, 50 at most), all with simultaneous audio.
+* A number of participants chosen when the room is created, 5 unless asked otherwise, up to a ceiling the server sets (20 by default, 50 at most), all with simultaneous audio. An administrator can change it afterwards; shrinking a room below the people already in it removes nobody.
 * 1 participant sharing a screen at a time.
 * Participants joining and leaving dynamically.
 

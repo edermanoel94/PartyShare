@@ -247,6 +247,32 @@ class Participant {
 
   [[nodiscard]] bool leave() { return signaling_.send(proto::LeaveRoom{room_id_, user_.id}).ok(); }
 
+  /// Tells the room this participant is sharing, as the client does before its
+  /// first frame, and waits for the server to confirm it back. The router is
+  /// told while the start is being handled, before the confirmation goes out,
+  /// so by the time this returns it has heard.
+  [[nodiscard]] bool start_screen_share() {
+    if (!signaling_.send(proto::ScreenShareStarted{.room_id = room_id_, .user_id = user_.id})
+             .ok()) {
+      return false;
+    }
+    return wait_until([this] { return sharer() == user_.id; });
+  }
+
+  [[nodiscard]] bool stop_screen_share() {
+    if (!signaling_.send(proto::ScreenShareStopped{.room_id = room_id_, .user_id = user_.id})
+             .ok()) {
+      return false;
+    }
+    return wait_until([this] { return sharer().empty(); });
+  }
+
+  /// Who the server last said is sharing in this participant's room.
+  [[nodiscard]] std::string sharer() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return sharer_;
+  }
+
   /// Waits for media to come up, and stops the moment it cannot come up.
   ///
   /// This used to be `wait_until(state() == Connected)`, which treats a dead
@@ -478,6 +504,16 @@ class Participant {
       }
       return;
     }
+    if (const auto* started = std::get_if<proto::ScreenShareStarted>(&message)) {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      sharer_ = started->user_id;
+      return;
+    }
+    if (std::holds_alternative<proto::ScreenShareStopped>(message)) {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      sharer_.clear();
+      return;
+    }
     if (const auto* offer = std::get_if<proto::Offer>(&message)) {
       {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -518,6 +554,7 @@ class Participant {
   std::string last_offer_sdp_;
   std::string last_answer_sdp_;
   std::vector<std::string> remote_candidates_;
+  std::string sharer_;
 };
 
 class SfuTest : public ::testing::Test {
@@ -988,6 +1025,7 @@ TEST_F(SfuTest, WhoeverTakesOverTheShareIsNotHeldToWhatTheySaidWhileWatching) {
   // Ana shares, and Bruno, watching, says his link takes 500 kbps. Not 300:
   // that is also the floor, and a cap that equals the floor cannot tell which
   // of the two it came from.
+  ASSERT_TRUE(ana.start_screen_share());
   ASSERT_TRUE(ana.send_video(30));
   constexpr unsigned int kBrunoCanTakeWatching = 500000;
   ASSERT_TRUE(bruno.request_bitrate(kBrunoCanTakeWatching));
@@ -995,10 +1033,19 @@ TEST_F(SfuTest, WhoeverTakesOverTheShareIsNotHeldToWhatTheySaidWhileWatching) {
   ASSERT_TRUE(wait_until([&] { return router->video_repair_stats().viewer_reports_received > 0; }))
       << "the viewer's report never reached the SFU";
 
-  // Ana stops and Bruno takes over, so now Ana is the one watching, on a link
-  // that takes much more. A real receiver repeats its report about once a
-  // second, and this one does too while the share runs: that is also what
-  // leaves room for a fix that ages reports out rather than forgetting them.
+  // Ana stops and Bruno takes over, the way the client does it: the server
+  // agrees to each first. Now Ana is the one watching, on a link that takes
+  // much more.
+  ASSERT_TRUE(ana.stop_screen_share());
+  ASSERT_TRUE(bruno.start_screen_share());
+
+  // The track Bruno was watching on is still open, and a real receiver can
+  // report once more after the picture stops. It must not count: he is the
+  // one sharing now.
+  ASSERT_TRUE(bruno.request_bitrate(kBrunoCanTakeWatching));
+
+  // A real receiver repeats its report about once a second, and Ana does too
+  // while the share runs.
   constexpr unsigned int kAnaCanTake = 2000000;
   std::uint16_t next = 0;
   const bool lifted = wait_until([&] {

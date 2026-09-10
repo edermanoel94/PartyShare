@@ -119,6 +119,7 @@ class MediaRouter : public MediaSignals {
   void on_participant_joined(const std::string& room_id, const std::string& room_name,
                              const models::User& user, const std::string& user_label) override;
   void on_participant_left(const std::string& room_id, const std::string& user_id) override;
+  void on_screen_share_started(const std::string& room_id, const std::string& user_id) override;
   void on_media_signal(const std::string& room_id, const std::string& from_user_id,
                        const protocol::Message& message) override;
 
@@ -308,6 +309,24 @@ class MediaRouter : public MediaSignals {
   void note_viewer_bandwidth(const std::string& viewer_id, const std::string& room_id,
                              unsigned int bitrate_bps);
 
+  /// The viewer is not watching any more - gone, replaced by a new session, or
+  /// sharing themselves - so what they said stops counting, and their room is
+  /// sent the cap that is left, zero if nobody else there has reported.
+  ///
+  /// Takes `bandwidth_mutex_` and never `mutex_`, so it may run with `mutex_`
+  /// held. Called once the viewer's connection is closed, or once they are
+  /// recorded as the room's sharer: before that, a report still in flight
+  /// would put the entry straight back.
+  void forget_viewer_bandwidth(const std::string& viewer_id);
+
+  /// The lowest report among the viewers of `room_id`, or zero when none of
+  /// them has said anything. Must be called with `bandwidth_mutex_` held.
+  [[nodiscard]] int smallest_viewer_report(const std::string& room_id) const;
+
+  /// Caps what every sharer in `room_id` is asked for at `kbps`, zero meaning
+  /// no cap. Goes through the published table, so it takes no lock of ours.
+  void apply_viewer_ceiling(const std::string& room_id, int kbps);
+
   /// Must be called with `mutex_` held.
   Session* find_session(const std::string& user_id);
   const Session* find_session(const std::string& user_id) const;
@@ -389,6 +408,11 @@ class MediaRouter : public MediaSignals {
   mutable std::mutex bandwidth_mutex_;
   std::unordered_map<std::string, int> viewer_bandwidth_kbps_;
   std::unordered_map<std::string, std::string> viewer_room_;
+  /// Each room's sharer, as of the last start the Hub accepted, by room id.
+  /// Their reports are not a viewer's. Replaced by the next start rather than
+  /// cleared by a stop: a cap only matters while somebody is sharing, and
+  /// whoever shares next takes the place.
+  std::unordered_map<std::string, std::string> sharer_by_room_;
   std::atomic<std::uint64_t> viewer_reports_received_{0};
   std::atomic<int> viewer_ceiling_kbps_{0};
 };

@@ -10,6 +10,10 @@ it is.
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
+## 0.1.66 (2026-09-10)
+
+- A viewer who leaves or takes over the screen share no longer holds its bitrate down
+
 ## 0.1.65 (2026-09-10)
 
 - A second login or a room switch no longer leaves a ghost holding the screen share

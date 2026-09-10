@@ -59,6 +59,11 @@ class MediaSignals {
                                      const models::User& user, const std::string& user_label) = 0;
   virtual void on_participant_left(const std::string& room_id, const std::string& user_id) = 0;
 
+  /// `user_id` is now the one participant sharing a screen in `room_id`, the
+  /// start already accepted. Whatever they said as a viewer before this no
+  /// longer describes somebody watching.
+  virtual void on_screen_share_started(const std::string& room_id, const std::string& user_id) = 0;
+
   /// An `answer` or `ice_candidate` addressed to protocol::kSfuUserId, already
   /// checked to come from a participant of `room_id`.
   virtual void on_media_signal(const std::string& room_id, const std::string& from_user_id,

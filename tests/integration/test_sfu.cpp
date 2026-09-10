@@ -247,6 +247,32 @@ class Participant {
 
   [[nodiscard]] bool leave() { return signaling_.send(proto::LeaveRoom{room_id_, user_.id}).ok(); }
 
+  /// Tells the room this participant is sharing, as the client does before its
+  /// first frame, and waits for the server to confirm it back. The router is
+  /// told while the start is being handled, before the confirmation goes out,
+  /// so by the time this returns it has heard.
+  [[nodiscard]] bool start_screen_share() {
+    if (!signaling_.send(proto::ScreenShareStarted{.room_id = room_id_, .user_id = user_.id})
+             .ok()) {
+      return false;
+    }
+    return wait_until([this] { return sharer() == user_.id; });
+  }
+
+  [[nodiscard]] bool stop_screen_share() {
+    if (!signaling_.send(proto::ScreenShareStopped{.room_id = room_id_, .user_id = user_.id})
+             .ok()) {
+      return false;
+    }
+    return wait_until([this] { return sharer().empty(); });
+  }
+
+  /// Who the server last said is sharing in this participant's room.
+  [[nodiscard]] std::string sharer() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return sharer_;
+  }
+
   /// Waits for media to come up, and stops the moment it cannot come up.
   ///
   /// This used to be `wait_until(state() == Connected)`, which treats a dead
@@ -478,6 +504,16 @@ class Participant {
       }
       return;
     }
+    if (const auto* started = std::get_if<proto::ScreenShareStarted>(&message)) {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      sharer_ = started->user_id;
+      return;
+    }
+    if (std::holds_alternative<proto::ScreenShareStopped>(message)) {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      sharer_.clear();
+      return;
+    }
     if (const auto* offer = std::get_if<proto::Offer>(&message)) {
       {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -518,6 +554,7 @@ class Participant {
   std::string last_offer_sdp_;
   std::string last_answer_sdp_;
   std::vector<std::string> remote_candidates_;
+  std::string sharer_;
 };
 
 class SfuTest : public ::testing::Test {
@@ -960,6 +997,132 @@ TEST_F(SfuTest, TheSlowestViewerLimitsWhatTheSharerIsAskedFor) {
     return target > 0 && target <= 600;
   })) << "the sharer is still being asked for "
       << router->video_repair_stats().target_kbps << " kbps";
+}
+
+TEST_F(SfuTest, WhoeverTakesOverTheShareIsNotHeldToWhatTheySaidWhileWatching) {
+  // Seen with the real client on 2026-09-10, twice: a viewer who took the
+  // screen over was asked for the 300 kbps floor for as long as the share
+  // lasted, while every sharer who had started as one got 3000. What the new
+  // sharer said about their link while watching stayed on the books as a
+  // viewer's report, and capped their own share.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return ana.incoming_video_track_count() == 1; }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  // Ana shares, and Bruno, watching, says his link takes 500 kbps. Not 300:
+  // that is also the floor, and a cap that equals the floor cannot tell which
+  // of the two it came from.
+  ASSERT_TRUE(ana.start_screen_share());
+  ASSERT_TRUE(ana.send_video(30));
+  constexpr unsigned int kBrunoCanTakeWatching = 500000;
+  ASSERT_TRUE(bruno.request_bitrate(kBrunoCanTakeWatching));
+  auto* router = server_->media_router();
+  ASSERT_TRUE(wait_until([&] { return router->video_repair_stats().viewer_reports_received > 0; }))
+      << "the viewer's report never reached the SFU";
+
+  // Ana stops and Bruno takes over, the way the client does it: the server
+  // agrees to each first. Now Ana is the one watching, on a link that takes
+  // much more.
+  ASSERT_TRUE(ana.stop_screen_share());
+  ASSERT_TRUE(bruno.start_screen_share());
+
+  // The track Bruno was watching on is still open, and a real receiver can
+  // report once more after the picture stops. It must not count: he is the
+  // one sharing now.
+  ASSERT_TRUE(bruno.request_bitrate(kBrunoCanTakeWatching));
+
+  // A real receiver repeats its report about once a second, and Ana does too
+  // while the share runs.
+  constexpr unsigned int kAnaCanTake = 2000000;
+  std::uint16_t next = 0;
+  const bool lifted = wait_until([&] {
+    (void)ana.request_bitrate(kAnaCanTake);
+    if (!bruno.send_video_from(next, static_cast<std::uint32_t>(next) * 3000, 40)) {
+      return false;
+    }
+    next = static_cast<std::uint16_t>(next + 40);
+    return router->video_repair_stats().target_kbps > 500;
+  });
+  const auto stats = router->video_repair_stats();
+  EXPECT_TRUE(lifted) << "Bruno's share is still asked for " << stats.target_kbps
+                      << " kbps, which is what he could take while he was the one watching";
+  EXPECT_EQ(stats.viewer_ceiling_kbps, 2000) << "the only one watching now is Ana";
+}
+
+TEST_F(SfuTest, AViewerWhoLeftNoLongerLimitsTheSharer) {
+  // The other half of the same leftover: what a viewer said about their link
+  // outlived their being in the room. And the sharer is only told again when
+  // another report comes in, so with nobody left to send one the cap stayed on
+  // for the rest of the share.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string room = ana.created_room_id();
+  ASSERT_TRUE(ana.join(room));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(room));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+
+  // A share that keeps going, and keeps counting up: restarting the sequence
+  // numbers would read as loss and lower the target on its own.
+  std::uint16_t next = 0;
+  const auto share_a_little = [&] {
+    const bool sent = ana.send_video_from(next, static_cast<std::uint32_t>(next) * 3000, 40);
+    next = static_cast<std::uint16_t>(next + 40);
+    return sent;
+  };
+
+  ASSERT_TRUE(share_a_little());
+  constexpr unsigned int kBrunoCanTake = 500000;
+  ASSERT_TRUE(bruno.request_bitrate(kBrunoCanTake));
+  auto* router = server_->media_router();
+  ASSERT_TRUE(wait_until([&] { return router->video_repair_stats().viewer_reports_received > 0; }))
+      << "the viewer's report never reached the SFU";
+  ASSERT_TRUE(wait_until([&] {
+    return share_a_little() && router->video_repair_stats().target_kbps == 500;
+  })) << "Bruno's cap never reached Ana, so there is nothing for his leaving to undo";
+
+  // Bruno leaves. Nobody is watching, and nobody is left to send a report.
+  ASSERT_TRUE(bruno.leave());
+  ASSERT_TRUE(wait_until([&] { return router->session_count() == 1; }));
+  EXPECT_TRUE(wait_until([&] {
+    return share_a_little() && router->video_repair_stats().target_kbps > 500;
+  })) << "Ana is still asked for "
+      << router->video_repair_stats().target_kbps
+      << " kbps, which is what Bruno could take before he left";
+
+  // And whoever watches next is judged on their own link alone.
+  Participant& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.join(room));
+  ASSERT_TRUE(carla.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return carla.incoming_video_track_count() == 1; }));
+  constexpr unsigned int kCarlaCanTake = 2000000;
+  EXPECT_TRUE(wait_until([&] {
+    (void)carla.request_bitrate(kCarlaCanTake);
+    return share_a_little() && router->video_repair_stats().viewer_ceiling_kbps == 2000;
+  })) << "the room is still held to "
+      << router->video_repair_stats().viewer_ceiling_kbps
+      << " kbps, with Carla, who takes 2000, the only one watching";
 }
 
 TEST_F(SfuTest, APaddedPacketIsDroppedRatherThanTakingTheServerDown) {

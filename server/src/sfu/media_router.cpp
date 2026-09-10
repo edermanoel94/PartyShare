@@ -159,6 +159,9 @@ void MediaRouter::on_participant_joined(const std::string& room_id, const std::s
   }
   if (replaced != nullptr) {
     replaced->close();
+    // After the close, for the reason on_participant_left gives. What the old
+    // session reported may even have been about another room.
+    forget_viewer_bandwidth(user.id);
   }
 
   const std::lock_guard<std::mutex> lock(mutex_);
@@ -388,6 +391,28 @@ void MediaRouter::on_participant_left(const std::string& room_id, const std::str
   // Closed outside the lock: it waits for the callbacks, which take the lock.
   closing->close();
   DV_LOG_INFO("SFU: session of {} in room {} closed", label, room_name);
+
+  // After the close and not before it: until the callbacks are done, a report
+  // still on its way from this viewer would put the entry straight back.
+  {
+    const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
+    if (const auto sharer = sharer_by_room_.find(room_id);
+        sharer != sharer_by_room_.end() && sharer->second == user_id) {
+      sharer_by_room_.erase(sharer);
+    }
+  }
+  forget_viewer_bandwidth(user_id);
+}
+
+void MediaRouter::on_screen_share_started(const std::string& room_id, const std::string& user_id) {
+  // Recorded first, so that a report from the track they were watching on,
+  // arriving between these two steps, is refused rather than folded back in
+  // after the forgetting.
+  {
+    const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
+    sharer_by_room_[room_id] = user_id;
+  }
+  forget_viewer_bandwidth(user_id);
 }
 
 void MediaRouter::on_media_signal(const std::string& room_id, const std::string& from_user_id,
@@ -464,18 +489,19 @@ void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std:
   if (kbps <= 0) {
     return;
   }
-  int smallest = kbps;
+  int smallest = 0;
   {
     const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
+    // The room's sharer still has the track they were watching on, and the
+    // receiver behind it can report once or twice more after the picture
+    // stops coming. That is a viewer's report from somebody who is not one.
+    if (const auto sharer = sharer_by_room_.find(room_id);
+        sharer != sharer_by_room_.end() && sharer->second == viewer_id) {
+      return;
+    }
     viewer_bandwidth_kbps_[viewer_id] = kbps;
     viewer_room_[viewer_id] = room_id;
-    for (const auto& [other_id, other_kbps] : viewer_bandwidth_kbps_) {
-      const auto room = viewer_room_.find(other_id);
-      if (room == viewer_room_.end() || room->second != room_id) {
-        continue;
-      }
-      smallest = std::min(smallest, other_kbps);
-    }
+    smallest = smallest_viewer_report(room_id);
   }
   viewer_ceiling_kbps_.store(smallest, std::memory_order_relaxed);
 
@@ -492,15 +518,52 @@ void MediaRouter::note_viewer_bandwidth(const std::string& viewer_id, const std:
   // property of x86. `video_repair_stats` does the acquire.
   viewer_reports_received_.fetch_add(1, std::memory_order_release);
 
-  // Through the published table, never through `sessions_`: this runs on a
-  // libdatachannel thread that already holds the peer connection's lock.
+  apply_viewer_ceiling(room_id, smallest);
+}
+
+void MediaRouter::forget_viewer_bandwidth(const std::string& viewer_id) {
+  std::string room_id;
+  int smallest = 0;
+  {
+    const std::lock_guard<std::mutex> lock(bandwidth_mutex_);
+    const auto room = viewer_room_.find(viewer_id);
+    if (room == viewer_room_.end()) {
+      // Never reported, so nobody was being held to anything they said.
+      return;
+    }
+    room_id = room->second;
+    viewer_room_.erase(room);
+    viewer_bandwidth_kbps_.erase(viewer_id);
+    smallest = smallest_viewer_report(room_id);
+  }
+  // Zero included: in a room nobody is watching any more it lifts the cap, and
+  // no later report would ever come to do it.
+  viewer_ceiling_kbps_.store(smallest, std::memory_order_relaxed);
+  apply_viewer_ceiling(room_id, smallest);
+}
+
+int MediaRouter::smallest_viewer_report(const std::string& room_id) const {
+  int smallest = 0;
+  for (const auto& [viewer_id, kbps] : viewer_bandwidth_kbps_) {
+    const auto room = viewer_room_.find(viewer_id);
+    if (room == viewer_room_.end() || room->second != room_id) {
+      continue;
+    }
+    smallest = smallest == 0 ? kbps : std::min(smallest, kbps);
+  }
+  return smallest;
+}
+
+void MediaRouter::apply_viewer_ceiling(const std::string& room_id, int kbps) {
+  // Through the published table, never through `sessions_`: a report arrives
+  // on a libdatachannel thread that already holds the peer connection's lock.
   const std::shared_ptr<const RoutingTable> table = routes();
   const auto feedback = table->video_feedback_by_room.find(room_id);
   if (feedback == table->video_feedback_by_room.end()) {
     return;
   }
   for (const auto& handler : feedback->second) {
-    handler->set_bandwidth_ceiling(smallest);
+    handler->set_bandwidth_ceiling(kbps);
   }
 }
 

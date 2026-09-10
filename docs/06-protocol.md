@@ -203,6 +203,7 @@ Without that second half, a lossy link turns a screen share into a sequence of k
 
 The SFU also tells the sharer how much to send, once per second, as REMB (`a=rtcp-fb:96 goog-remb`).
 The number comes from the loss the server observes upstream, capped by the lowest a viewer has reported, and libwebrtc treats it as a ceiling for its own congestion controller.
+A viewer stops counting the moment they leave the room or start sharing themselves, and the cap is worked out again and sent then, rather than at the next report, which in a room nobody is watching never comes.
 Without it the sender has no way of learning about a loss nobody tells it about.
 
 A server without media routing answers `media_unavailable` to any message addressed to `sfu`.

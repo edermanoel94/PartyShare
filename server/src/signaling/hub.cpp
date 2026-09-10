@@ -985,6 +985,11 @@ void Hub::handle_screen_share(std::vector<Outgoing>& out, Connection& connection
     broadcast(out, room_id,
               protocol::ScreenShareStarted{
                   .room_id = room_id, .user_id = user_id, .has_audio = with_audio});
+    // Only once the start is accepted: a refused one leaves them watching,
+    // and what they said about their link as a viewer still holds.
+    if (media_signals_ != nullptr) {
+      media_signals_->on_screen_share_started(room_id, user_id);
+    }
   } else {
     DV_LOG_INFO("User {} stopped sharing in room {}", user_label(user_id), room_label(room_id));
     broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});

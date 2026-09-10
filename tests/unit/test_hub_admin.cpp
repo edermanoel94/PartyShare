@@ -35,6 +35,9 @@ class RecordingMediaSignals final : public dv::server::MediaSignals {
     left.push_back(user_id);
   }
 
+  void on_screen_share_started(const std::string& /*room_id*/,
+                               const std::string& /*user_id*/) override {}
+
   void on_media_signal(const std::string& /*room_id*/, const std::string& /*from_user_id*/,
                        const proto::Message& /*message*/) override {}
 

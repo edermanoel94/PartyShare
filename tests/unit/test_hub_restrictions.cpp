@@ -38,10 +38,16 @@ class RecordingMediaSignals final : public dv::server::MediaSignals {
     left.push_back(user_id);
   }
 
+  void on_screen_share_started(const std::string& /*room_id*/,
+                               const std::string& user_id) override {
+    started.push_back(user_id);
+  }
+
   void on_media_signal(const std::string& /*room_id*/, const std::string& /*from_user_id*/,
                        const proto::Message& /*message*/) override {}
 
   std::vector<std::string> left;
+  std::vector<std::string> started;
 };
 
 /// A restriction that arrived without a message.
@@ -218,6 +224,24 @@ TEST_F(HubRestrictionWatchTest, ABlockWrittenElsewhereStopsTheShareThatIsAlready
   EXPECT_FALSE(hub_.rooms().find(room_)->find(user_.id)->sharing_screen);
   EXPECT_TRUE(find<proto::ScreenShareStopped>(out, user_connection_).has_value());
   EXPECT_TRUE(find<proto::ScreenShareStopped>(out, admin_connection_).has_value());
+}
+
+TEST_F(HubRestrictionWatchTest, TheMediaLayerOnlyHearsOfAShareTheHubAccepted) {
+  set_up_room();
+  write_behind_the_back(user_.id, Restrictions{.screen_share_blocked = true});
+  (void)tick();
+
+  // Refused, so they are still watching, and what they told the SFU about
+  // their link as a viewer has to go on counting.
+  const auto refused = send(user_connection_, proto::ScreenShareStarted{room_, user_.id});
+  ASSERT_TRUE(find<proto::ErrorMessage>(refused, user_connection_).has_value());
+  EXPECT_TRUE(media_.started.empty());
+
+  write_behind_the_back(user_.id, Restrictions{});
+  (void)tick();
+  (void)send(user_connection_, proto::ScreenShareStarted{room_, user_.id});
+  ASSERT_TRUE(hub_.rooms().find(room_)->find(user_.id)->sharing_screen);
+  EXPECT_EQ(media_.started, std::vector<std::string>{user_.id});
 }
 
 TEST_F(HubRestrictionWatchTest, ABanWrittenElsewhereEndsTheSessionThatIsAlreadyOpen) {

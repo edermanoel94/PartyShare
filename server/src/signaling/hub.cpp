@@ -232,6 +232,32 @@ void Hub::broadcast(std::vector<Outgoing>& out, const std::string& room_id,
   }
 }
 
+bool Hub::is_sharing_screen(const std::string& room_id, const std::string& user_id) const {
+  const models::Room* room = rooms_.find(room_id);
+  if (room == nullptr) {
+    return false;
+  }
+  const models::Participant* participant = room->find(user_id);
+  return participant != nullptr && participant->sharing_screen;
+}
+
+void Hub::announce_departure(std::vector<Outgoing>& out, const std::string& room_id,
+                             const std::string& user_id, bool was_sharing) {
+  // Before user_left, so that a client which reads the two in order never has
+  // to work out that a share ended because the sharer did.
+  if (was_sharing) {
+    broadcast(out, room_id, protocol::ScreenShareStopped{.room_id = room_id, .user_id = user_id});
+  }
+  broadcast(out, room_id, protocol::UserLeft{.room_id = room_id, .user_id = user_id});
+
+  // The room list is left to the caller: a join announces the departure from
+  // the old room and the arrival in the new one, and owes everybody one list
+  // rather than two.
+  if (media_signals_ != nullptr) {
+    media_signals_->on_participant_left(room_id, user_id);
+  }
+}
+
 void Hub::reply_error(std::vector<Outgoing>& out, ConnectionId connection, const Error& error) {
   out.push_back(
       Outgoing{.connection = connection,
@@ -445,6 +471,20 @@ void Hub::handle_authenticate(std::vector<Outgoing>& out, Connection& connection
   // socket cannot keep receiving another person's media negotiation.
   if (const auto previous = connection_of_user(value.user.id);
       previous.has_value() && *previous != connection.id) {
+    // The room the old socket was in, left the way any other departure leaves
+    // it. Nothing else would ever do it: the detach below takes the identity
+    // off that connection, and on_disconnect returns at once for a connection
+    // with no identity, so the socket finally closing says nothing either. What
+    // stayed behind was a participant nobody could see leave, holding the one
+    // screen share the room allows for the rest of the room's life.
+    if (const auto room_id = rooms_.room_of(value.user.id)) {
+      const bool was_sharing = is_sharing_screen(*room_id, value.user.id);
+      (void)rooms_.remove_from_any_room(value.user.id);
+      DV_LOG_INFO("User {} left room {}: the account signed in again elsewhere",
+                  user_label(value.user.id), room_label(*room_id));
+      announce_departure(out, *room_id, value.user.id, was_sharing);
+      broadcast_room_list(out);
+    }
     if (Connection* stale = find_connection(*previous)) {
       // Before the identity goes, because closing the row needs neither - it
       // needs the identifier this connection is holding - but the order is
@@ -717,12 +757,28 @@ void Hub::handle_join_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
+  // Read before the join, because the join is what takes it away:
+  // RoomManager::join leaves whatever room this account was in as part of
+  // walking into the new one, and does it silently. Read after, there would be
+  // no room to name and no share to release.
+  const auto previous_room = rooms_.room_of(user.id);
+  const bool was_sharing = previous_room.has_value() && is_sharing_screen(*previous_room, user.id);
+
   if (const auto failure = rooms_.join(message.room_id, user)) {
     reply_error(out, connection.id, *failure);
     return;
   }
   connection.room_id = message.room_id;
   authenticated_user->display_name = user.display_name;
+
+  // Announced only now, and only if the join went through: a refused join -
+  // the room is full, or gone - leaves the account exactly where it was, and
+  // must not tell that room otherwise.
+  if (previous_room.has_value() && *previous_room != message.room_id) {
+    DV_LOG_INFO("User {} left room {} for room {}", user_label(user.id), room_label(*previous_room),
+                room_label(message.room_id));
+    announce_departure(out, *previous_room, user.id, was_sharing);
+  }
 
   // Applied before anybody is told about the joiner, so that the first thing
   // the room learns about them is already correct. `by_admin` is what makes it
@@ -803,9 +859,7 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
     return;
   }
 
-  const models::Room* room = rooms_.find(message.room_id);
-  const bool was_sharing = room != nullptr && room->find(message.user_id) != nullptr &&
-                           room->find(message.user_id)->sharing_screen;
+  const bool was_sharing = is_sharing_screen(message.room_id, message.user_id);
 
   if (const auto failure = rooms_.leave(message.room_id, message.user_id)) {
     reply_error(out, connection.id, *failure);
@@ -813,18 +867,9 @@ void Hub::handle_leave_room(std::vector<Outgoing>& out, Connection& connection,
   }
   connection.room_id.reset();
 
-  if (was_sharing) {
-    broadcast(out, message.room_id,
-              protocol::ScreenShareStopped{.room_id = message.room_id, .user_id = message.user_id});
-  }
-  broadcast(out, message.room_id,
-            protocol::UserLeft{.room_id = message.room_id, .user_id = message.user_id});
-  broadcast_room_list(out);
   DV_LOG_INFO("User {} left room {}", user_label(message.user_id), room_label(message.room_id));
-
-  if (media_signals_ != nullptr) {
-    media_signals_->on_participant_left(message.room_id, message.user_id);
-  }
+  announce_departure(out, message.room_id, message.user_id, was_sharing);
+  broadcast_room_list(out);
 }
 
 void Hub::handle_relay(std::vector<Outgoing>& out, Connection& connection,
@@ -1294,21 +1339,12 @@ std::vector<Outgoing> Hub::on_disconnect(ConnectionId connection, Clock::time_po
     return out;
   }
 
-  const models::Room* room = rooms_.find(*room_id);
-  const bool was_sharing =
-      room != nullptr && room->find(user_id) != nullptr && room->find(user_id)->sharing_screen;
+  const bool was_sharing = is_sharing_screen(*room_id, user_id);
 
   (void)rooms_.remove_from_any_room(user_id);
 
-  if (was_sharing) {
-    broadcast(out, *room_id, protocol::ScreenShareStopped{.room_id = *room_id, .user_id = user_id});
-  }
-  broadcast(out, *room_id, protocol::UserLeft{.room_id = *room_id, .user_id = user_id});
+  announce_departure(out, *room_id, user_id, was_sharing);
   broadcast_room_list(out);
-
-  if (media_signals_ != nullptr) {
-    media_signals_->on_participant_left(*room_id, user_id);
-  }
 
   // From the copy of the connection taken before it was erased, because the
   // identity behind it is no longer reachable through `user_label`.

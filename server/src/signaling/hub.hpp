@@ -205,6 +205,27 @@ class Hub {
                  const protocol::Message& message,
                  const std::optional<std::string>& except_user_id = std::nullopt) const;
 
+  /// True while `user_id` holds the one screen share `room_id` allows.
+  [[nodiscard]] bool is_sharing_screen(const std::string& room_id,
+                                       const std::string& user_id) const;
+
+  /// What a departure owes the room it happened in, whatever took the person
+  /// out of it: the screen released if they were holding it, the room told
+  /// they are gone, and the media layer told to take their session down.
+  ///
+  /// Called with the participant already out of `rooms_`, so that the one
+  /// leaving is not among the people told about it.
+  ///
+  /// There are four ways out of a room - protocol::LeaveRoom, the socket
+  /// dropping, a second login for the same account, and walking straight into
+  /// another room - and only the first two ever said anything. What the silent
+  /// two left behind was somebody gone from the room's own model and still
+  /// present in everybody else's: still listed, still the address a broadcast
+  /// for that room resolves, and still holding the one screen share the room
+  /// allows, which nobody else could then take.
+  void announce_departure(std::vector<Outgoing>& out, const std::string& room_id,
+                          const std::string& user_id, bool was_sharing);
+
   static void reply_error(std::vector<Outgoing>& out, ConnectionId connection, const Error& error);
 
   // One handler per message type. Each returns the messages to send.

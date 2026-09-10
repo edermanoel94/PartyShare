@@ -139,17 +139,29 @@ void MediaRouter::on_signal(SignalHandler handler) {
 
 void MediaRouter::on_participant_joined(const std::string& room_id, const std::string& room_name,
                                         const models::User& user, const std::string& user_label) {
-  const std::lock_guard<std::mutex> lock(mutex_);
-
-  if (sessions_.contains(user.id)) {
-    // Rejoining, or a reconnection the signaling layer saw as a fresh join.
-    // The old connection is worthless now, and the peers' tracks for it are
-    // rebuilt below.
-    DV_LOG_INFO("SFU: replacing the existing session of {}", user_label);
-    Session old = std::move(sessions_.at(user.id));
-    sessions_.erase(user.id);
-    old.connection->close();
+  // Rejoining, or a reconnection the signaling layer saw as a fresh join. The
+  // old connection is worthless now, and the peers' tracks for it are rebuilt
+  // below.
+  //
+  // Taken out under the lock and closed outside it, for the reason
+  // on_participant_left and the destructor both give: closing waits for the
+  // callbacks, and a callback that has to wait for `mutex_` while the thread
+  // holding it waits for that callback is a server that stops routing media
+  // for every room at once.
+  std::shared_ptr<rtc::PeerConnection> replaced;
+  {
+    const std::lock_guard<std::mutex> replacing(mutex_);
+    if (const auto existing = sessions_.find(user.id); existing != sessions_.end()) {
+      DV_LOG_INFO("SFU: replacing the existing session of {}", user_label);
+      replaced = existing->second.connection;
+      sessions_.erase(existing);
+    }
   }
+  if (replaced != nullptr) {
+    replaced->close();
+  }
+
+  const std::lock_guard<std::mutex> lock(mutex_);
 
   Session session;
   session.user_id = user.id;

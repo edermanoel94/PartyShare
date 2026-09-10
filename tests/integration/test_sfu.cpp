@@ -789,6 +789,71 @@ TEST_F(SfuTest, OneParticipantsScreenReachesTheOthers) {
   EXPECT_EQ(ana.received_video_rtp(), 0U) << "a participant is watching their own screen";
 }
 
+TEST_F(SfuTest, AScreenSharedInOneRoomStaysInThatRoom) {
+  // Two rooms with people in them, both sharing at the same time, which is
+  // what a server with more than one room busy looks like.
+  //
+  // A viewer is given exactly one outbound video track when it joins, under
+  // one SSRC, and everything ever shared in its room is stitched onto that one
+  // series. So a packet from the wrong room is not a second picture the client
+  // could ignore: it lands on the track the client is already decoding, under
+  // the sequence numbers and the clock it is already reading, and what comes
+  // out is neither screen.
+  Participant& ana = add("ana");
+  ASSERT_TRUE(ana.login());
+  ASSERT_TRUE(ana.create_room());
+  const std::string first = ana.created_room_id();
+  ASSERT_TRUE(ana.join(first));
+
+  Participant& bruno = add("bruno");
+  ASSERT_TRUE(bruno.login());
+  ASSERT_TRUE(bruno.join(first));
+
+  Participant& carla = add("carla");
+  ASSERT_TRUE(carla.login());
+  ASSERT_TRUE(carla.create_room());
+  const std::string second = carla.created_room_id();
+  ASSERT_TRUE(carla.join(second));
+
+  Participant& diego = add("diego");
+  ASSERT_TRUE(diego.login());
+  ASSERT_TRUE(diego.join(second));
+
+  ASSERT_TRUE(ana.wait_until_media_connected());
+  ASSERT_TRUE(bruno.wait_until_media_connected());
+  ASSERT_TRUE(carla.wait_until_media_connected());
+  ASSERT_TRUE(diego.wait_until_media_connected());
+  ASSERT_TRUE(wait_until([&] { return ana.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return carla.has_open_outgoing_video_track(); }));
+  ASSERT_TRUE(wait_until([&] { return bruno.incoming_video_track_count() == 1; }));
+  ASSERT_TRUE(wait_until([&] { return diego.incoming_video_track_count() == 1; }));
+
+  // One after the other rather than at once, and that is what makes the
+  // assertion below sound: by the time it runs, every packet either room ever
+  // sent has already been forwarded or dropped, so a count that is still one
+  // room's worth cannot be a count taken too early.
+  constexpr int kPackets = 50;
+  ASSERT_TRUE(ana.send_video(kPackets));
+  ASSERT_TRUE(carla.send_video(kPackets));
+
+  EXPECT_TRUE(wait_until([&] { return bruno.received_video_rtp() > 0; }))
+      << "the screen shared in the first room reached nobody";
+  EXPECT_TRUE(wait_until([&] { return diego.received_video_rtp() > 0; }))
+      << "the screen shared in the second room reached nobody";
+
+  // Read as a ceiling and not as an equality on purpose: a packet lost on the
+  // loopback lowers this count and is not what the test is about, while
+  // anything above the ceiling can only have come from the other room.
+  EXPECT_LE(bruno.received_video_rtp(), static_cast<std::uint64_t>(kPackets))
+      << "a viewer in the first room is being sent the second room's screen";
+  EXPECT_LE(diego.received_video_rtp(), static_cast<std::uint64_t>(kPackets))
+      << "a viewer in the second room is being sent the first room's screen";
+
+  // And neither sharer is watching anything, their own screen included.
+  EXPECT_EQ(ana.received_video_rtp(), 0U);
+  EXPECT_EQ(carla.received_video_rtp(), 0U);
+}
+
 TEST_F(SfuTest, TheSecondSharerReachesTheViewerAsOneContinuousStream) {
   // Ana shares, stops, and Bruno shares instead. Carla watches throughout.
   //

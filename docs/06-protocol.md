@@ -83,6 +83,15 @@ Refused rather than clamped: somebody who asked for a room of twenty and was qui
 The size a room ended up with comes back in `room_created` and in every `room_list` entry, beside how many are inside.
 A room stored before it had a size holds the default, and is not measured against the server's ceiling on the way back in.
 
+An account is in at most one room, and every way out of one is announced to the room the same way: `screen_share_stopped` if the person was sharing, then `user_left`.
+There are four of them, and only two are a message about leaving.
+`leave_room` and the connection dropping are the obvious two.
+`join_room` naming a different room is the third: it leaves the room the account was in as part of walking into the new one, so a client can receive a `user_left` for somebody who never sent `leave_room`.
+A second `authenticate` for the same account is the fourth: it detaches the older connection, which takes that account out of whatever room it was in.
+
+Announcing all four is what keeps the room's own list and everybody else's the same list.
+A departure that said nothing used to leave a participant present as far as every other client was concerned - and holding the one screen share the room allows, which nobody else could then take, for the rest of the room's life.
+
 `authenticate` has to be the first message on the connection.
 Anything else before it is answered with an `error` carrying code `unauthorized`, with one exception: the heartbeat of section 4.6.
 `ping` and `pong` are transport level and are answered normally on a connection that has not authenticated, because the server heartbeats every connection it holds and a pong is the socket reporting itself alive rather than the client asking for anything.

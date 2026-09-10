@@ -547,6 +547,182 @@ TEST_F(HubTest, ADroppedConnectionRemovesTheParticipant) {
   EXPECT_FALSE(hub_.rooms().find(room)->contains(bruno_user.id));
 }
 
+// --- the ways out of a room that nobody announces ----------------------------
+//
+// A participant leaves by protocol::LeaveRoom or by the socket dropping, and
+// both announce the same three things: the room is told with UserLeft, a share
+// still running is released, and the media layer is told to take the session
+// down.
+//
+// There are two more ways out, and neither of them is a message about leaving:
+// the account signing in again from somewhere else, which detaches the old
+// socket, and the account walking straight into a second room, which
+// RoomManager::join answers by quietly leaving the first.
+//
+// What must not come out of either is a participant who is gone as far as
+// their connection is concerned and present as far as the room is concerned:
+// still in everybody's list, still holding the one screen share the room
+// allows, and still the address `broadcast` resolves for that room.
+
+/// The media layer, reduced to what it was told.
+class MediaRecorder final : public dv::server::MediaSignals {
+ public:
+  struct Event {
+    std::string room_id;
+    std::string user_id;
+  };
+
+  void on_participant_joined(const std::string& room_id, const std::string& /*room_name*/,
+                             const dv::models::User& user,
+                             const std::string& /*user_label*/) override {
+    joined.push_back(Event{room_id, user.id});
+  }
+
+  void on_participant_left(const std::string& room_id, const std::string& user_id) override {
+    left.push_back(Event{room_id, user_id});
+  }
+
+  void on_media_signal(const std::string& /*room_id*/, const std::string& /*from_user_id*/,
+                       const Message& /*message*/) override {}
+
+  [[nodiscard]] bool told_left(const std::string& room_id, const std::string& user_id) const {
+    return std::ranges::any_of(left, [&](const Event& event) {
+      return event.room_id == room_id && event.user_id == user_id;
+    });
+  }
+
+  std::vector<Event> joined;
+  std::vector<Event> left;
+};
+
+class HubDepartureTest : public HubTest {
+ protected:
+  HubDepartureTest() { hub_.set_media_signals(&media_); }
+
+  MediaRecorder media_;
+};
+
+TEST_F(HubDepartureTest, ASecondLoginTakesTheAccountOutOfTheRoomItWasIn) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  // Bruno signs in again from somewhere else, which detaches the old socket.
+  const ConnectionId again = connect();
+  ASSERT_TRUE(
+      find<proto::Authenticated>(send(again, proto::Authenticate{"bruno", "password"}), again)
+          .has_value());
+  // And the old socket closing afterwards says nothing either: it has no
+  // identity left to say it about.
+  (void)hub_.on_disconnect(bruno, now_);
+
+  EXPECT_FALSE(hub_.rooms().find(room)->contains(bruno_user.id))
+      << "the account is a participant of a room none of its connections is in";
+}
+
+TEST_F(HubDepartureTest, ASecondLoginTellsTheRoomAndTheMediaLayer) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const ConnectionId again = connect();
+  const auto out = send(again, proto::Authenticate{"bruno", "password"});
+
+  const auto left = find<proto::UserLeft>(out, ana);
+  ASSERT_TRUE(left.has_value()) << "the room was never told the person is gone";
+  EXPECT_EQ(left->user_id, bruno_user.id);
+  EXPECT_TRUE(media_.told_left(room, bruno_user.id))
+      << "the SFU still holds a session for a connection that no longer exists";
+}
+
+TEST_F(HubDepartureTest, ASecondLoginReleasesTheScreenItWasSharing) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+  ASSERT_FALSE(
+      find<proto::ErrorMessage>(send(bruno, proto::ScreenShareStarted{room, bruno_user.id}), bruno)
+          .has_value());
+
+  const ConnectionId again = connect();
+  (void)send(again, proto::Authenticate{"bruno", "password"});
+
+  // The one screen the room allows is not held by somebody whose socket is
+  // gone: Ana, who is still here, has to be able to share.
+  const auto out = send(ana, proto::ScreenShareStarted{room, ana_user.id});
+  const auto error = find<proto::ErrorMessage>(out, ana);
+  EXPECT_FALSE(error.has_value()) << "nobody else can share: "
+                                  << (error ? error->message : std::string{});
+}
+
+TEST_F(HubDepartureTest, AReconnectionWalksBackIntoTheRoomItWasIn) {
+  // What a dropped connection looks like from the server when the heartbeat
+  // has not timed the old socket out yet: the same account authenticates on a
+  // new one, and then rejoins the room it was in, which is the whole point of
+  // reconnecting. It could not, while the account it is signing in as was
+  // still sitting in that room: RoomManager::join answers already_in_room.
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const std::string room = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{room, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{room, bruno_user.id, ""});
+
+  const ConnectionId again = connect();
+  ASSERT_TRUE(
+      find<proto::Authenticated>(send(again, proto::Authenticate{"bruno", "password"}), again)
+          .has_value());
+
+  const auto out = send(again, proto::JoinRoom{room, bruno_user.id, ""});
+  const auto error = find<proto::ErrorMessage>(out, again);
+  EXPECT_FALSE(error.has_value()) << "a reconnection cannot get back into its own room: "
+                                  << (error ? error->code : std::string{});
+  EXPECT_TRUE(find<proto::UserJoined>(out, again).has_value());
+}
+
+TEST_F(HubDepartureTest, WalkingIntoASecondRoomTellsTheFirstOne) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto [carla, carla_user] = login("carla");
+
+  const std::string first = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{first, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{first, bruno_user.id, ""});
+  const std::string second = create_room(carla, carla_user.id);
+
+  // Straight from one room into the other, with no LeaveRoom in between.
+  const auto out = send(bruno, proto::JoinRoom{second, bruno_user.id, ""});
+
+  const auto left = find<proto::UserLeft>(out, ana);
+  ASSERT_TRUE(left.has_value()) << "the room left behind still shows the person";
+  EXPECT_EQ(left->user_id, bruno_user.id);
+  EXPECT_TRUE(media_.told_left(first, bruno_user.id));
+}
+
+TEST_F(HubDepartureTest, WalkingIntoASecondRoomReleasesTheScreenItWasSharing) {
+  const auto [ana, ana_user] = login("ana");
+  const auto [bruno, bruno_user] = login("bruno");
+  const auto [carla, carla_user] = login("carla");
+
+  const std::string first = create_room(ana, ana_user.id);
+  (void)send(ana, proto::JoinRoom{first, ana_user.id, ""});
+  (void)send(bruno, proto::JoinRoom{first, bruno_user.id, ""});
+  const std::string second = create_room(carla, carla_user.id);
+  (void)send(bruno, proto::ScreenShareStarted{first, bruno_user.id});
+
+  const auto out = send(bruno, proto::JoinRoom{second, bruno_user.id, ""});
+
+  // Ana keeps the last frame of a share that has ended, and her own client
+  // refuses to start one while it believes somebody else is sharing.
+  EXPECT_TRUE(find<proto::ScreenShareStopped>(out, ana).has_value())
+      << "the room left behind still believes the screen is being shared";
+  EXPECT_EQ(hub_.rooms().find(first)->screen_sharer(), nullptr);
+}
+
 // --- negotiation relay -------------------------------------------------------
 
 TEST_F(HubTest, AnOfferIsForwardedUntouched) {

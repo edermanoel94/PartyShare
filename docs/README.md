@@ -34,6 +34,7 @@ chapters link to it.
 | 14 | [Release](14-release.md) | Cutting a release, and what each platform produces |
 | 15 | [Post-mortems](15-postmortems.md) | The bugs that cost real time, and what each turned out to be |
 | 16 | [Audio plan](16-audio-plan.md) | Twelve steps, one pull request each, to repair loss and lift the voice and the shared music |
+| 17 | [Design system](17-design-system.md) | Tokens, themes, the component library, and how to add a screen in code or in Qt Designer |
 
 ## Reference
 
@@ -51,7 +52,8 @@ Kept outside the numbered chapters because they are consulted rather than read.
 and chapter 3 for pointing the client at it.
 
 **I want to change it.** Chapter 1, then chapter 2 to build, then chapter 6 if
-the change crosses the wire. Chapter 15 before touching the media layer.
+the change crosses the wire. Chapter 15 before touching the media layer, and
+chapter 17 before touching anything a person looks at.
 
 **I want to operate it.** Chapters 4, 5 and 12, plus chapter 13 for what the
 system does and does not promise.

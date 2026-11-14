@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <dv/config/config.hpp>
@@ -20,12 +21,16 @@
 #include <QSize>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QStyle>
+#include <QTabBar>
 #include <QVBoxLayout>
+#include <QWidget>
 
 #include "audio/microphone_hint.hpp"
 #include "audio/screen_audio_mixer.hpp"
 #include "ui/chimes.hpp"
+#include "ui/theme.hpp"
 #include "video/screen_quality.hpp"
 
 namespace dv::ui {
@@ -287,8 +292,61 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // and the window's own close box all arrive at done() by the same route.
   connect(close, &QPushButton::clicked, this, &QDialog::reject);
 
-  layout->addWidget(audio);
-  layout->addWidget(video);
+  // What the interface itself looks like and how it moves. Its own page, last:
+  // it is the one somebody visits once.
+  auto* appearance = new QGroupBox(this);
+  auto* appearance_form = new QFormLayout(appearance);
+  // The data is the word config.ini uses for each, so nothing is translated
+  // between the box and the file.
+  theme_ = new QComboBox(appearance);
+  theme_->addItem(QStringLiteral("Follow the system"), QStringLiteral("system"));
+  theme_->addItem(QStringLiteral("Light"), QStringLiteral("light"));
+  theme_->addItem(QStringLiteral("Dark"), QStringLiteral("dark"));
+  {
+    const std::string_view current = theme::to_string(theme::mode());
+    theme_->setCurrentIndex(std::max(
+        0, theme_->findData(QString::fromUtf8(current.data(), qsizetype(current.size())))));
+  }
+  animations_ =
+      new QCheckBox(QStringLiteral("Animate pages, panels and notifications"), appearance);
+  animations_->setChecked(theme::motion::enabled());
+  animations_->setToolTip(
+      QStringLiteral("Off, everything simply appears. Worth turning off over a remote desktop, "
+                     "where every frame of a transition crosses the network."));
+  appearance_form->addRow(QStringLiteral("Theme"), theme_);
+  appearance_form->addRow(QStringLiteral("Motion"), animations_);
+
+  // Three pages under a row of tabs, where there used to be one column of
+  // everything. The column had grown to over a thousand pixels - taller than
+  // the screen of most laptops this runs on, with Save below the fold - and a
+  // dialog cannot be scrolled to its own buttons. The tabs are the bare
+  // QTabBar the stylesheet draws as chips; the group boxes lose their titles
+  // to them, and `plain` takes away the margin a title would have stood in.
+  auto* tabs = new QTabBar(this);
+  tabs->setExpanding(false);
+  tabs->setDrawBase(false);
+  auto* pages = new QStackedWidget(this);
+  const auto add_page = [tabs, pages](const QString& title, QGroupBox* box) {
+    box->setTitle(QString{});
+    box->setProperty("plain", true);
+    // Top aligned in a page of its own, so a short page keeps its rows
+    // together under the tabs rather than spread down the height of the
+    // longest one.
+    auto* page = new QWidget(pages);
+    auto* column = new QVBoxLayout(page);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->addWidget(box);
+    column->addStretch();
+    tabs->addTab(title);
+    pages->addWidget(page);
+  };
+  add_page(QStringLiteral("Audio"), audio);
+  add_page(QStringLiteral("Screen"), video);
+  add_page(QStringLiteral("Appearance"), appearance);
+  connect(tabs, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
+
+  layout->addWidget(tabs);
+  layout->addWidget(pages, 1);
   layout->addWidget(note);
   layout->addWidget(storage_);
   layout->addWidget(buttons);
@@ -348,6 +406,8 @@ SettingsDialog::SettingsDialog(client::app::CallSession& session, QWidget* paren
   // and each one replaces the last rather than queueing behind it.
   connect(screen_volume_, &QSlider::valueChanged, this, &SettingsDialog::on_screen_volume_changed);
   connect(room_sounds_, &QCheckBox::toggled, this, &SettingsDialog::on_room_sounds_changed);
+  connect(theme_, &QComboBox::currentIndexChanged, this, &SettingsDialog::on_theme_changed);
+  connect(animations_, &QCheckBox::toggled, this, &SettingsDialog::on_animations_changed);
 }
 
 void SettingsDialog::load_audio_sources() {
@@ -815,6 +875,26 @@ void SettingsDialog::on_room_sounds_changed(bool on) {
   // somebody reaches for because a sound just went off.
   set_chimes_enabled(on);
   stage({{.section = "ui", .key = "room_sounds", .value = on ? "true" : "false"}});
+}
+
+void SettingsDialog::on_theme_changed(int index) {
+  if (index < 0) {
+    return;
+  }
+  const std::string word = theme_->itemData(index).toString().toStdString();
+  // The box only holds the three words the parser knows, so the fallback is
+  // the impossible case answered the way the file's default would be.
+  //
+  // Applied before it is staged, like everything else here: the window this
+  // dialog sits on changes colour under it, which is the only preview of a
+  // theme worth having.
+  theme::set_mode(theme::parse_mode(word).value_or(theme::Mode::System));
+  stage({{.section = "ui", .key = "theme", .value = word}});
+}
+
+void SettingsDialog::on_animations_changed(bool on) {
+  theme::motion::set_enabled(on);
+  stage({{.section = "ui", .key = "animations", .value = on ? "true" : "false"}});
 }
 
 void SettingsDialog::on_auto_bitrate_changed(bool automatic) {

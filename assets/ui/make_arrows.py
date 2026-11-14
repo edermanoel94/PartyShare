@@ -16,13 +16,13 @@ import zlib
 INK = (0x84, 0x89, 0xA0)
 
 
-def png(path, width, height, alpha):
+def png(path, width, height, alpha, ink=INK):
     """Writes an 8-bit greyscale-plus-alpha PNG of one colour."""
     raw = bytearray()
     for y in range(height):
         raw.append(0)  # filter: none
         for x in range(width):
-            raw += bytes(INK) + bytes([alpha(x, y)])
+            raw += bytes(ink) + bytes([alpha(x, y)])
 
     def chunk(tag, data):
         body = tag + data
@@ -79,8 +79,51 @@ def chevron(scale, up):
     return width, height, alpha
 
 
+def check(scale):
+    """The tick inside a ticked check box: two strokes, short then long.
+
+    Sixteen pixels square, which is the box the stylesheet draws, so the image
+    fills the indicator and needs no positioning. White, because it is only
+    ever drawn on the accent colour - in both schemes.
+    """
+    size = 16 * scale
+    thickness = 1.8 * scale
+    over = 4
+
+    def segment_distance(px, py, ax, ay, bx, by):
+        dx, dy = bx - ax, by - ay
+        length = dx * dx + dy * dy
+        t = 0.0 if length == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length))
+        cx, cy = ax + t * dx, ay + t * dy
+        return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+    start = (4.0 * scale, 8.4 * scale)
+    elbow = (6.9 * scale, 11.2 * scale)
+    end = (12.0 * scale, 5.2 * scale)
+
+    def alpha(x, y):
+        hits = 0
+        for sy in range(over):
+            for sx in range(over):
+                px = x + (sx + 0.5) / over
+                py = y + (sy + 0.5) / over
+                near = min(
+                    segment_distance(px, py, start[0], start[1], elbow[0], elbow[1]),
+                    segment_distance(px, py, elbow[0], elbow[1], end[0], end[1]),
+                )
+                if near <= thickness / 2:
+                    hits += 1
+        return round(255 * hits / (over * over))
+
+    return size, size, alpha
+
+
 here = pathlib.Path("assets/ui")
 here.mkdir(parents=True, exist_ok=True)
+
+for scale, suffix in ((1, ""), (2, "@2x"), (3, "@3x")):
+    width, height, alpha = check(scale)
+    png(here / f"check{suffix}.png", width, height, alpha, ink=(0xFF, 0xFF, 0xFF))
 
 for name, up in (("chevron-down", False), ("chevron-up", True)):
     for scale, suffix in ((1, ""), (2, "@2x"), (3, "@3x")):

@@ -1,10 +1,18 @@
 #include "ui/theme.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QEvent>
+#include <QFont>
 #include <QGuiApplication>
+#include <QPainter>
 #include <QPalette>
+#include <QPointer>
+#include <QRectF>
 #include <QString>
 #include <QStyle>
 #include <QStyleHints>
@@ -21,25 +29,37 @@ namespace {
 Colors light() {
   return Colors{
       .window = QColor(0xF3, 0xF4, 0xFA),
+      .chrome = QColor(0xFF, 0xFF, 0xFF),
       .surface = QColor(0xFF, 0xFF, 0xFF),
       .surface_hover = QColor(0xF7, 0xF8, 0xFD),
       .surface_pressed = QColor(0xEC, 0xEE, 0xF8),
+      .surface_raised = QColor(0xFF, 0xFF, 0xFF),
       .border = QColor(0xDF, 0xE1, 0xEC),
       .border_strong = QColor(0xC2, 0xC6, 0xDC),
       .text = QColor(0x1C, 0x1D, 0x29),
-      .muted = QColor(0x6C, 0x70, 0x89),
+      // A shade darker than the #6C7089 it was. That one cleared 4.5:1 on a
+      // surface and fell just short of it on the window, at 4.43 - and the
+      // window is what a page's subtitle and the status bar are written on.
+      .muted = QColor(0x68, 0x6C, 0x85),
       .accent = QColor(0x5B, 0x5B, 0xD6),
       .accent_hover = QColor(0x6B, 0x6B, 0xDE),
       .accent_pressed = QColor(0x4A, 0x4A, 0xC0),
       .accent_soft = QColor(0xE7, 0xE7, 0xFA),
       .on_accent = QColor(0xFF, 0xFF, 0xFF),
+      .accent_text = QColor(0x4A, 0x4A, 0xC0),
       .danger = QColor(0xD1, 0x3A, 0x3A),
       .danger_soft = QColor(0xFC, 0xEC, 0xEC),
-      .warn = QColor(0xB5, 0x66, 0x0A),
+      // Darker than the #B5660A it was, which read at 3.9:1 on its own wash:
+      // enough for an icon, not for the word "full" at the size of a caption.
+      .warn = QColor(0xA5, 0x5C, 0x08),
       .warn_soft = QColor(0xFD, 0xF3, 0xE4),
       .success = QColor(0x2E, 0x7D, 0x32),
+      .success_soft = QColor(0xE6, 0xF4, 0xE7),
+      .info = QColor(0x1D, 0x6F, 0xB8),
+      .info_soft = QColor(0xE5, 0xF0, 0xFA),
       .canvas = QColor(0x14, 0x15, 0x1C),
       .canvas_text = QColor(0x8B, 0x8F, 0xA6),
+      .shadow = QColor(0x1C, 0x1D, 0x29, 0x30),
   };
 }
 
@@ -51,9 +71,11 @@ Colors light() {
 Colors dark() {
   return Colors{
       .window = QColor(0x15, 0x16, 0x1E),
+      .chrome = QColor(0x1A, 0x1B, 0x25),
       .surface = QColor(0x1E, 0x1F, 0x2A),
       .surface_hover = QColor(0x26, 0x28, 0x35),
       .surface_pressed = QColor(0x2E, 0x30, 0x40),
+      .surface_raised = QColor(0x26, 0x28, 0x35),
       .border = QColor(0x2E, 0x30, 0x40),
       .border_strong = QColor(0x45, 0x48, 0x5F),
       .text = QColor(0xE8, 0xE9, 0xF0),
@@ -63,13 +85,18 @@ Colors dark() {
       .accent_pressed = QColor(0x69, 0x69, 0xDB),
       .accent_soft = QColor(0x2A, 0x2B, 0x4B),
       .on_accent = QColor(0xFF, 0xFF, 0xFF),
+      .accent_text = QColor(0xA9, 0xA9, 0xF5),
       .danger = QColor(0xF1, 0x6B, 0x6B),
       .danger_soft = QColor(0x3A, 0x22, 0x25),
       .warn = QColor(0xEB, 0xA9, 0x50),
       .warn_soft = QColor(0x38, 0x2B, 0x1A),
       .success = QColor(0x6F, 0xCF, 0x7A),
+      .success_soft = QColor(0x1F, 0x33, 0x24),
+      .info = QColor(0x6C, 0xB6, 0xF5),
+      .info_soft = QColor(0x1B, 0x2C, 0x3D),
       .canvas = QColor(0x0D, 0x0E, 0x14),
       .canvas_text = QColor(0x74, 0x78, 0x8E),
+      .shadow = QColor(0x00, 0x00, 0x00, 0x70),
   };
 }
 
@@ -85,6 +112,37 @@ Colors& current() {
 /// Unknown counts as light, which is what Qt's own default palette does.
 bool system_is_dark() {
   return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+}
+
+/// What was asked for, which is not the same as what is on screen: System is
+/// an instruction to go and look.
+Mode& chosen_mode() {
+  static Mode chosen = Mode::System;
+  return chosen;
+}
+
+/// Whether `current()` holds the dark filling. Kept rather than worked out by
+/// comparing colours, so that the title bar and the colours cannot disagree.
+bool& dark_in_force() {
+  static bool dark = false;
+  return dark;
+}
+
+bool& animations_enabled() {
+  static bool enabled = true;
+  return enabled;
+}
+
+[[nodiscard]] bool wants_dark(Mode mode) {
+  switch (mode) {
+    case Mode::Light:
+      return false;
+    case Mode::Dark:
+      return true;
+    case Mode::System:
+      break;
+  }
+  return system_is_dark();
 }
 
 /// The stylesheet, with @{name} standing in for a colour.
@@ -692,14 +750,204 @@ QMenu::separator {
 }
 )qss";
 
-QString filled_stylesheet(const Colors& colors) {
-  QString sheet = QString::fromUtf8(kStyleSheet) + QString::fromUtf8(kStyleSheetContinued);
+/// The third part: the type scale as the stylesheet sees it, and the shapes of
+/// the reusable components in ui/components. A literal of its own for the
+/// reason the second one is.
+constexpr const char* kStyleSheetComponents = R"qss(
+/* --- type ---------------------------------------------------------------- */
 
-  const std::array<std::pair<const char*, QColor>, 20> tokens{{
+/* What a label is for, said once where it is made - theme::set_role - rather
+   than a font built by hand beside every label. The sizes are the steps of
+   theme::TextRole. */
+QLabel[role="caption"] {
+  font-size: @{font_caption}pt;
+  color: @{muted};
+}
+QLabel[role="title"] {
+  font-size: @{font_title}pt;
+  font-weight: 600;
+}
+QLabel[role="heading"] {
+  font-size: @{font_heading}pt;
+  font-weight: 600;
+}
+QLabel[role="display"] {
+  font-size: @{font_display}pt;
+  font-weight: 600;
+}
+
+/* A group box that stands under a tab or a heading of its own and so has no
+   title: the margin the title would have stood in goes with it. */
+QGroupBox[plain="true"] {
+  margin-top: 0;
+}
+
+/* --- check boxes --------------------------------------------------------- */
+
+/* Fusion's own box is a bevelled square in the palette's button colour, which
+   beside a rounded field looks like a control from a different program. The
+   tick is an image for the reason the chevrons are: see QComboBox above. */
+QCheckBox {
+  color: @{text};
+  spacing: 8px;
+}
+QCheckBox:disabled {
+  color: @{muted};
+}
+QCheckBox::indicator {
+  width: 16px;
+  height: 16px;
+  border: 1px solid @{border_strong};
+  border-radius: 5px;
+  background: @{surface};
+}
+QCheckBox::indicator:hover {
+  border-color: @{accent};
+}
+QCheckBox::indicator:checked {
+  background: @{accent};
+  border-color: @{accent};
+  image: url(:/ui/check.png);
+}
+QCheckBox::indicator:disabled {
+  background: @{window};
+  border-color: @{border};
+}
+QCheckBox::indicator:checked:disabled {
+  background: @{border_strong};
+  border-color: @{border_strong};
+}
+QCheckBox:focus {
+  outline: none;
+}
+QCheckBox::indicator:focus {
+  border: 2px solid @{accent};
+}
+
+/* --- cards --------------------------------------------------------------- */
+
+/* A plain panel with the surface colour and a hairline: what a QGroupBox is
+   without its title. Card, StatCard and the panels of the room are this. */
+QFrame[card="true"] {
+  background: @{surface};
+  border: 1px solid @{border};
+  border-radius: @{card_radius}px;
+}
+QFrame[card="true"][interactive="true"]:hover {
+  border-color: @{border_strong};
+}
+
+/* --- table rows ---------------------------------------------------------- */
+
+/* Rows rather than cells: ui::set_up_table turns the grid off, and this is
+   the line under each row that replaces it. No line between the columns -
+   the header and the alignment are enough to say where one ends. */
+QTableWidget::item, QTableView::item {
+  border: none;
+  border-bottom: 1px solid @{border};
+  padding: 0 10px;
+}
+QTableWidget::item:hover, QTableView::item:hover {
+  background: @{surface_hover};
+}
+QHeaderView {
+  background: transparent;
+}
+
+/* --- inside a card ------------------------------------------------------- */
+
+/* A list that lives on a card of its own - the people and the conversation
+   in the room's side panel - is on that card's paper already. Its own border
+   and background would be a box inside a box. */
+QListWidget[flat="true"], QListView[flat="true"] {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px;
+}
+
+/* A page that scrolls: the cards of the lobby. The area is a window onto the
+   page and has no edge of its own. */
+QScrollArea {
+  background: transparent;
+  border: none;
+}
+QScrollArea > QWidget > QWidget {
+  background: transparent;
+}
+
+/* A room's code, as a button that copies it: the size of a chip rather than
+   of a button, and in the weight of a fact rather than of an action. The
+   focus rule names the property for the reason the button block does. */
+QPushButton[code="true"] {
+  padding: 3px 10px;
+  border-radius: @{chip_radius}px;
+  color: @{muted};
+  font-weight: 400;
+}
+QPushButton[code="true"]:hover {
+  color: @{text};
+}
+QPushButton[code="true"]:focus {
+  border: 2px solid @{accent};
+  padding: 2px 9px;
+}
+
+/* --- search -------------------------------------------------------------- */
+
+/* The magnifying glass is painted by SearchInput into the left padding. */
+QLineEdit[search="true"] {
+  padding-left: 34px;
+}
+
+/* --- chips --------------------------------------------------------------- */
+
+/* A short fact beside a title: a room code, "sharing", "full". Not a control,
+   so nothing happens under the pointer. */
+QLabel[chip="true"] {
+  background: @{surface_hover};
+  border: 1px solid @{border};
+  border-radius: @{chip_radius}px;
+  padding: 3px 8px;
+  color: @{muted};
+  font-size: @{font_caption}pt;
+  font-weight: 600;
+}
+QLabel[chip="accent"] {
+  background: @{accent_soft};
+  border: 1px solid transparent;
+  border-radius: @{chip_radius}px;
+  padding: 3px 8px;
+  color: @{accent_text};
+  font-size: @{font_caption}pt;
+  font-weight: 600;
+}
+QLabel[chip="warn"] {
+  background: @{warn_soft};
+  border: 1px solid transparent;
+  border-radius: @{chip_radius}px;
+  padding: 3px 8px;
+  color: @{warn};
+  font-size: @{font_caption}pt;
+  font-weight: 600;
+}
+)qss";
+
+QString filled_stylesheet(const Colors& colors) {
+  QString sheet = QString::fromUtf8(kStyleSheet) + QString::fromUtf8(kStyleSheetContinued) +
+                  QString::fromUtf8(kStyleSheetComponents);
+
+  const std::array<std::pair<const char*, QColor>, 26> tokens{{
       {"window", colors.window},
+      {"chrome", colors.chrome},
       {"surface", colors.surface},
       {"surface_hover", colors.surface_hover},
       {"surface_pressed", colors.surface_pressed},
+      {"surface_raised", colors.surface_raised},
+      {"accent_text", colors.accent_text},
+      {"success_soft", colors.success_soft},
+      {"info", colors.info},
+      {"info_soft", colors.info_soft},
       {"border", colors.border},
       {"border_strong", colors.border_strong},
       {"text", colors.text},
@@ -724,6 +972,20 @@ QString filled_stylesheet(const Colors& colors) {
 
   sheet.replace(QStringLiteral("@{card_radius}"), QString::number(kCardRadius));
   sheet.replace(QStringLiteral("@{control_radius}"), QString::number(kControlRadius));
+  sheet.replace(QStringLiteral("@{chip_radius}"), QString::number(kChipRadius));
+
+  // The type scale, in points so that it follows the desktop's text scaling
+  // the way the application font does. One decimal: Qt's stylesheet parser
+  // takes a fractional point size, and 14.4 rounded to 14 is a step of the
+  // scale quietly moved.
+  const auto points = [](TextRole role) {
+    return QString::number(font(role).pointSizeF(), 'f', 1);
+  };
+  sheet.replace(QStringLiteral("@{font_caption}"), points(TextRole::Caption));
+  sheet.replace(QStringLiteral("@{font_body}"), points(TextRole::Body));
+  sheet.replace(QStringLiteral("@{font_title}"), points(TextRole::Title));
+  sheet.replace(QStringLiteral("@{font_heading}"), points(TextRole::Heading));
+  sheet.replace(QStringLiteral("@{font_display}"), points(TextRole::Display));
   return sheet;
 }
 
@@ -769,10 +1031,43 @@ QPalette palette_for(const Colors& colors) {
 }
 
 void install(QApplication& application) {
-  current() = system_is_dark() ? dark() : light();
+  dark_in_force() = wants_dark(chosen_mode());
+  current() = dark_in_force() ? dark() : light();
   QApplication::setPalette(palette_for(current()));
   application.setStyleSheet(filled_stylesheet(current()));
 }
+
+/// Installs the colours again and makes everything already on screen wear
+/// them. The one path for both ways the colours change while the program is
+/// running: the desktop switching scheme, and somebody choosing in Settings.
+void reinstall() {
+  auto* application = qobject_cast<QApplication*>(QCoreApplication::instance());
+  if (application == nullptr) {
+    return;
+  }
+  install(*application);
+
+  // A stylesheet that has already been resolved does not re-resolve on its own
+  // for every widget, and the video canvas paints from the palette rather than
+  // from the sheet.
+  const QWidgetList widgets = QApplication::allWidgets();
+  for (QWidget* widget : widgets) {
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
+    if (widget->isWindow()) {
+      platform_set_title_bar(widget, dark_in_force());
+    }
+  }
+  emit notifier() -> changed();
+}
+
+/// The body size the scale is built on, in points. One more than the nine
+/// Windows hands out: nine points is twelve pixels, which is a size for a
+/// status bar and was being used for everything.
+constexpr qreal kBodyPoints = 10.0;
+/// Each step of the scale is this many times the one below it.
+constexpr qreal kScaleRatio = 1.2;
 
 }  // namespace
 
@@ -780,11 +1075,209 @@ const Colors& colors() {
   return current();
 }
 
+std::optional<Mode> parse_mode(std::string_view text) {
+  if (text == "system") {
+    return Mode::System;
+  }
+  if (text == "light") {
+    return Mode::Light;
+  }
+  if (text == "dark") {
+    return Mode::Dark;
+  }
+  return std::nullopt;
+}
+
+std::string_view to_string(Mode mode) {
+  switch (mode) {
+    case Mode::Light:
+      return "light";
+    case Mode::Dark:
+      return "dark";
+    case Mode::System:
+      break;
+  }
+  return "system";
+}
+
+Mode mode() {
+  return chosen_mode();
+}
+
+void set_mode(Mode mode) {
+  if (chosen_mode() == mode) {
+    return;
+  }
+  chosen_mode() = mode;
+  // Only when the answer actually moved. Dark to System on a dark desktop is a
+  // change of instruction and not of colour, and re-polishing every widget for
+  // it would be a flicker about nothing.
+  if (wants_dark(mode) != dark_in_force()) {
+    reinstall();
+  }
+}
+
+bool is_dark() {
+  return dark_in_force();
+}
+
+QFont font(TextRole role) {
+  QFont font = QApplication::font();
+  // Rounded to the half point. The steps are 8.3, 10, 12, 14.4 and 17.3, and
+  // a font engine asked for 14.4 hints it as it pleases; a half is as fine as
+  // the difference stays visible.
+  const auto step = [](int exponent) {
+    return std::round(kBodyPoints * std::pow(kScaleRatio, exponent) * 2.0) / 2.0;
+  };
+  switch (role) {
+    case TextRole::Caption:
+      // Not step(-1), which is 8.5: under nine points Segoe UI stops being
+      // read and starts being deciphered.
+      font.setPointSizeF(9.0);
+      break;
+    case TextRole::Body:
+      font.setPointSizeF(step(0));
+      break;
+    case TextRole::Label:
+      font.setPointSizeF(step(0));
+      font.setWeight(QFont::DemiBold);
+      break;
+    case TextRole::Title:
+      font.setPointSizeF(step(1));
+      font.setWeight(QFont::DemiBold);
+      break;
+    case TextRole::Heading:
+      font.setPointSizeF(step(2));
+      font.setWeight(QFont::DemiBold);
+      break;
+    case TextRole::Display:
+      font.setPointSizeF(step(3) + 3.0);
+      font.setWeight(QFont::DemiBold);
+      break;
+  }
+  return font;
+}
+
+void set_role(QWidget* label, TextRole role) {
+  const char* name = "";
+  switch (role) {
+    case TextRole::Caption:
+      name = "caption";
+      break;
+    case TextRole::Title:
+      name = "title";
+      break;
+    case TextRole::Heading:
+      name = "heading";
+      break;
+    case TextRole::Display:
+      name = "display";
+      break;
+    case TextRole::Body:
+    case TextRole::Label:
+      // The application font already is the body, and a label's weight comes
+      // from the control it names.
+      break;
+  }
+  label->setProperty("role", QString::fromLatin1(name));
+  // A property is not a repaint: without this a role set after the widget was
+  // first shown changes nothing until something else re-polishes it.
+  label->style()->unpolish(label);
+  label->style()->polish(label);
+}
+
+QColor mix(const QColor& from, const QColor& to, qreal amount) {
+  const qreal weight = std::clamp(amount, 0.0, 1.0);
+  const auto channel = [weight](qreal first, qreal second) {
+    return first + ((second - first) * weight);
+  };
+  return QColor::fromRgbF(static_cast<float>(channel(from.redF(), to.redF())),
+                          static_cast<float>(channel(from.greenF(), to.greenF())),
+                          static_cast<float>(channel(from.blueF(), to.blueF())),
+                          static_cast<float>(channel(from.alphaF(), to.alphaF())));
+}
+
+QColor ink_on(const QColor& background) {
+  // WCAG relative luminance, and the two contrast ratios it gives against a
+  // dark ink and against white. Whichever is larger is the one to write in.
+  const auto linear = [](qreal channel) {
+    return channel <= 0.03928 ? channel / 12.92 : std::pow((channel + 0.055) / 1.055, 2.4);
+  };
+  const qreal luminance = (0.2126 * linear(background.redF())) +
+                          (0.7152 * linear(background.greenF())) +
+                          (0.0722 * linear(background.blueF()));
+  const QColor dark_ink(0x16, 0x10, 0x14);
+  const qreal on_white = 1.05 / (luminance + 0.05);
+  const qreal on_dark = (luminance + 0.05) / 0.06;
+  return on_dark > on_white ? dark_ink : QColor(Qt::white);
+}
+
+namespace motion {
+
+bool enabled() {
+  return animations_enabled();
+}
+
+void set_enabled(bool enabled) {
+  animations_enabled() = enabled;
+}
+
+int duration(int ms) {
+  return animations_enabled() ? ms : 0;
+}
+
+}  // namespace motion
+
+Notifier* notifier() {
+  // Parented to the application, so it goes when the application does and
+  // not at static destruction, after Qt itself has been torn down.
+  static QPointer<Notifier> instance;
+  if (instance.isNull()) {
+    instance = new Notifier(QCoreApplication::instance());
+  }
+  return instance;
+}
+
+bool Notifier::eventFilter(QObject* watched, QEvent* event) {
+  // Every window as it is shown, the dialogs and the menus included: each is
+  // a window of its own to the system, created after apply() ran, and each
+  // would otherwise come up with the desktop's title bar over this program's
+  // colours.
+  if (event->type() == QEvent::Show) {
+    if (auto* widget = qobject_cast<QWidget*>(watched); widget != nullptr && widget->isWindow()) {
+      platform_set_title_bar(widget, dark_in_force());
+    }
+  }
+  return QObject::eventFilter(watched, event);
+}
+
+void paint_shadow(QPainter& painter, const QRectF& box, qreal radius) {
+  // Rings of the shadow colour, each a pixel further out and fainter than the
+  // last, a little lower than the box so the light reads as coming from
+  // above. Eight rounded rectangles: nothing next to a blur, and close enough
+  // to one at the size a shadow is looked at.
+  constexpr int kRings = 8;
+  constexpr qreal kDrop = 3.0;
+  const QColor base = current().shadow;
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  painter.setPen(Qt::NoPen);
+  for (int ring = kRings; ring >= 1; --ring) {
+    QColor colour = base;
+    const qreal fade = 1.0 - (static_cast<qreal>(ring) / (kRings + 1));
+    colour.setAlphaF(static_cast<float>(base.alphaF() * fade * fade * 0.5));
+    painter.setBrush(colour);
+    const QRectF grown = box.adjusted(-ring, -ring + kDrop, ring, ring + kDrop);
+    painter.drawRoundedRect(grown, radius + ring, radius + ring);
+  }
+  painter.restore();
+}
+
 QString stylesheet() {
   return filled_stylesheet(current());
 }
 
-void apply(QApplication& application) {
+void apply(QApplication& application, Mode mode) {
   // Fusion, and not the platform's own style.
   //
   // The native styles on macOS and Windows draw their controls themselves and
@@ -793,22 +1286,24 @@ void apply(QApplication& application) {
   // others. Fusion draws everything from the palette and the stylesheet, which
   // is the only way the same corner radius reaches all three.
   QApplication::setStyle(QStringLiteral("Fusion"));
+
+  // The family the desktop chose, at the size the scale starts from. Before
+  // the stylesheet, which reads the scale back out of font().
+  QFont base = QApplication::font();
+  base.setPointSizeF(kBodyPoints);
+  QApplication::setFont(base);
+
+  chosen_mode() = mode;
   install(application);
+  application.installEventFilter(notifier());
 
   // Somebody switching their desktop to dark in the middle of a call should
-  // not be looking at a white window until they restart.
+  // not be looking at a white window until they restart. Only while the
+  // desktop is what was asked to decide: a mode held in Settings stays held.
   QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &application,
-                   [&application](Qt::ColorScheme /*scheme*/) {
-                     install(application);
-                     // A stylesheet that has already been resolved does not
-                     // re-resolve on its own for every widget, and the video
-                     // canvas paints from the palette rather than from the
-                     // sheet.
-                     const QWidgetList widgets = QApplication::allWidgets();
-                     for (QWidget* widget : widgets) {
-                       widget->style()->unpolish(widget);
-                       widget->style()->polish(widget);
-                       widget->update();
+                   [](Qt::ColorScheme /*scheme*/) {
+                     if (chosen_mode() == Mode::System) {
+                       reinstall();
                      }
                    });
 }

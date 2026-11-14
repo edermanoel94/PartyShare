@@ -52,6 +52,16 @@ else()
   set(dv_attention_sources src/ui/attention_stub.cpp)
 endif()
 
+# The colour of a window's title bar is the system's to draw, and Windows is
+# the one of the three that can be asked to draw it dark while the desktop is
+# light - which is what a theme chosen in Settings needs. See
+# client/src/ui/theme.hpp.
+if(WIN32)
+  set(dv_theme_sources src/ui/theme_windows.cpp)
+else()
+  set(dv_theme_sources src/ui/theme_stub.cpp)
+endif()
+
 # What this process costs the machine, for the metrics window. Reading it is
 # a platform API on every platform; the arithmetic over two readings is not.
 # See client/src/app/process_usage.hpp.
@@ -260,6 +270,7 @@ qt_add_executable(dv_client
   ${dv_client_resources}
   ${dv_sound_sources}
   ${dv_attention_sources}
+  ${dv_theme_sources}
   src/main.cpp
   src/ui/account_delegate.cpp
   src/ui/account_delegate.hpp
@@ -314,7 +325,7 @@ endforeach()
 # The chevrons the stylesheet draws into combo boxes and spin boxes, at the
 # three densities Qt looks for. See assets/ui/make_arrows.py.
 set(dv_client_ui_images)
-foreach(dv_chevron chevron-down chevron-up)
+foreach(dv_chevron chevron-down chevron-up check)
   foreach(dv_density "" "@2x" "@3x")
     list(APPEND dv_client_ui_images
       ${CMAKE_SOURCE_DIR}/assets/ui/${dv_chevron}${dv_density}.png)
@@ -350,7 +361,8 @@ if(WIN32)
   # winmm is PlaySound, which is the whole of the arrival and departure chime.
   # It ships with Windows; nothing is downloaded for this. See
   # client/src/ui/sound.hpp for why it is not QSoundEffect.
-  target_link_libraries(dv_client PRIVATE winmm)
+  # dwmapi is the one call that asks for a dark title bar. Part of Windows too.
+  target_link_libraries(dv_client PRIVATE winmm dwmapi)
 endif()
 
 set_target_properties(dv_client PROPERTIES

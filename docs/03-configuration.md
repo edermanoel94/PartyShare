@@ -194,6 +194,8 @@ understood is the one unacceptable answer.
 | Key | Default | |
 | --- | --- | --- |
 | `room_sounds` | true | The chime when somebody joins or leaves, and the buzz when somebody nudges you. [Chapter 10](10-join-leave-alerts.md) |
+| `theme` | system | `system` follows the desktop's light or dark setting, live; `light` and `dark` hold one. [Chapter 17](17-design-system.md) |
+| `animations` | true | Whether pages, panels and notifications move into place or simply appear. |
 
 The client also asks GitHub whether a newer release exists, and there is no key
 for it: one HTTPS request to one address, five seconds after the window opens

@@ -245,6 +245,19 @@ struct UiConfig {
   /// office is who this switch is for.
   bool room_sounds = true;
 
+  /// Which colours the interface wears: `system` follows the desktop's light
+  /// or dark setting and keeps following it while the program runs, `light`
+  /// and `dark` hold one whatever the desktop says. Text rather than an enum
+  /// for the reason every other choice in this file is: this library may not
+  /// name a type of the interface, which is what turns the word into colours.
+  std::string theme = "system";
+
+  /// Whether pages, panels and notifications move into place or simply appear.
+  /// On by default; off is for somebody the movement bothers, and for a
+  /// machine drawing through a remote desktop, where each frame of a fade is a
+  /// frame sent down the wire.
+  bool animations = true;
+
   /// Retired. The client always asks GitHub whether a newer release exists -
   /// one request to one address, carrying nothing but the version already
   /// written on the window, whose answer only ever changes a line in the

@@ -217,6 +217,11 @@ bool is_noise_suppression_level(std::string_view text) {
   return text == "low" || text == "moderate" || text == "high" || text == "very_high";
 }
 
+/// The three answers `ui.theme` takes.
+bool is_theme(std::string_view text) {
+  return text == "system" || text == "light" || text == "dark";
+}
+
 /// Writes one key into `config`.
 ///
 /// Returns nothing on success, and the reason otherwise. The two failures are
@@ -360,6 +365,10 @@ std::optional<std::string> apply_ini_field(Config& config, std::string_view sect
   } else if (section == "ui") {
     if (key == "room_sounds") {
       understood = as_bool(config.ui.room_sounds);
+    } else if (key == "theme") {
+      understood = is_theme(value) && as_text(config.ui.theme);
+    } else if (key == "animations") {
+      understood = as_bool(config.ui.animations);
     } else if (key == "check_for_updates") {
       understood = as_bool(config.ui.check_for_updates);
     } else {
@@ -702,6 +711,8 @@ Result<Config> parse_json(const std::string& json_text, Config base) {
     if (root.contains("ui")) {
       const json& ui = root.at("ui");
       read_field(ui, "room_sounds", base.ui.room_sounds);
+      read_field(ui, "theme", base.ui.theme);
+      read_field(ui, "animations", base.ui.animations);
       read_field(ui, "check_for_updates", base.ui.check_for_updates);
     }
     if (root.contains("database")) {
@@ -1048,6 +1059,9 @@ std::optional<Error> validate(const Config& config) {
   if (!is_noise_suppression_level(config.audio.voice_gate_level)) {
     return invalid_value("audio.voice_gate_level", "must be low, moderate, high or very_high");
   }
+  if (!is_theme(config.ui.theme)) {
+    return invalid_value("ui.theme", "must be system, light or dark");
+  }
   if (config.screen_audio.mode != "none" && config.screen_audio.mode != "system" &&
       config.screen_audio.mode != "process") {
     return invalid_value("screen_audio.mode", "must be none, system or process");
@@ -1155,7 +1169,10 @@ std::string to_json(const Config& config) {
                       {{"level", config.logging.level},
                        {"file_path", config.logging.file_path},
                        {"log_to_console", config.logging.log_to_console}}},
-                     {"ui", {{"room_sounds", config.ui.room_sounds}}},
+                     {"ui",
+                      {{"room_sounds", config.ui.room_sounds},
+                       {"theme", config.ui.theme},
+                       {"animations", config.ui.animations}}},
                      {"server",
                       {{"bind_address", config.server.bind_address},
                        {"port", config.server.port},

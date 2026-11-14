@@ -275,6 +275,7 @@ if(TARGET dv::client_widgets)
     ui/main.cpp
     ui/test_chat_view.cpp
     ui/test_components.cpp
+    ui/test_table.cpp
     ui/test_theme.cpp
     ui/test_toast.cpp
     ui/test_update.cpp

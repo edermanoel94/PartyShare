@@ -1575,6 +1575,41 @@ void CallSession::handle_signal(protocol::Message message) {
   }
 
   if (const auto* error = std::get_if<protocol::ErrorMessage>(&message)) {
+    // An error that arrives while credentials are waiting for their answer
+    // and nobody is signed in is that answer: the sign-in was refused. The
+    // attempt is over, and what it left behind goes with it.
+    //
+    // It used to leave both. The server refuses a password and keeps the
+    // socket - docs/06-protocol.md, section 4.1 - so nothing ever closed to
+    // clear them, and the session went on holding the refused credentials and
+    // reporting `connecting` for as long as the window stayed open. On the
+    // login screen that was a status bar saying "connecting" under "Wrong
+    // username or password", a Test button answering that the server "is
+    // tested from the sign-in screen, not from a session" - retest_server
+    // takes pending credentials for a session being opened - and a refused
+    // password that would go out again by itself on the next socket to open,
+    // which against a server that counts attempts is how a typo becomes a
+    // lock-out.
+    //
+    // Not while somebody is signed in. The credentials are kept then on
+    // purpose, to authenticate again after a drop without asking for the
+    // password twice, and an error in the middle of a session is about
+    // whatever was just asked for - a full room, a taken name.
+    bool sign_in_refused = false;
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      if (local_user_.id.empty() && !pending_username_.empty()) {
+        pending_username_.clear();
+        pending_password_.clear();
+        sign_in_refused = true;
+      }
+    }
+    if (sign_in_refused) {
+      // Before the error, so that whoever is listening hears "not connecting
+      // any more" and then why: the other order has the reason on screen for
+      // a moment over a state that still says the attempt is running.
+      set_state(State::Idle, "the sign-in was refused");
+    }
     report(Error{.code = error->code, .message = error->message});
     return;
   }

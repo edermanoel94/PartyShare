@@ -13,7 +13,7 @@ class QTimer;
 namespace dv::ui {
 
 /// Asks GitHub whether a release newer than this build has been published, and
-/// says so once, quietly.
+/// says so once.
 ///
 /// What it is for: this program updates by somebody downloading an installer,
 /// so a version that has shipped reaches nobody until they hear about it. Three
@@ -21,11 +21,13 @@ namespace dv::ui {
 /// it is invisible from inside - the protocol has no version negotiation, so
 /// what an old client does with a message it does not know is nothing at all.
 ///
-/// What it deliberately is not: an updater. Nothing is downloaded, nothing is
-/// executed, and nothing is written to disk. The whole result is a link in the
-/// status bar, which is the smallest thing that can carry the news and the
-/// largest thing that can be done without asking somebody's permission to
-/// replace a signed binary on their machine.
+/// What it deliberately is not: an updater. Nothing is downloaded by this
+/// program, nothing is executed, and nothing is written to disk. The whole
+/// result is two addresses - the release's page, and the installer for this
+/// build when the release carries one - and what the window does with them is
+/// ask, and then hand one to the browser. The download is the browser's and
+/// running the installer is the person's, which is as far as this can go
+/// without replacing a signed binary on somebody's machine on its own say.
 ///
 /// Everything here fails silently. A machine with no route to the internet, a
 /// proxy that refuses, a Qt without a TLS backend, GitHub answering 403 because
@@ -67,8 +69,13 @@ class UpdateChecker : public QObject {
   /// is handed to a widget that opens a browser, which is a short enough path
   /// from someone else's bytes to a launched process to be worth checking.
   ///
+  ///
+  /// `installer` is the file that updates this build - the .msi on Windows -
+  /// at the address it downloads from, under the same guarantee. Invalid when
+  /// the release has none for this platform, and then `page` is all there is.
+  ///
   /// Raised at most once per version, however many times the check runs.
-  void update_available(const QString& version, const QUrl& page);
+  void update_available(const QString& version, const QUrl& page, const QUrl& installer);
 
  private slots:
   void check();

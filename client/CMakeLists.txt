@@ -267,8 +267,9 @@ if(APPLE)
 endif()
 
 # The part of the interface that needs no session to exist: the theme, the
-# component library of docs/17-design-system.md, and the two views that draw
-# their own rows. A library of its own for the reason dv_client_core is one:
+# component library of docs/17-design-system.md, the two views that draw
+# their own rows, and the question about a new release with the functions
+# that read one out of GitHub's answer. A library of its own for the reason dv_client_core is one:
 # it is what lets the tests build a widget, press it and look at what it did,
 # without starting the program. See tests/ui.
 #
@@ -305,10 +306,14 @@ qt_add_library(dv_client_widgets STATIC
   src/ui/components/stat_card.hpp
   src/ui/components/toast.cpp
   src/ui/components/toast.hpp
+  src/ui/release_info.cpp
+  src/ui/release_info.hpp
   src/ui/table.cpp
   src/ui/table.hpp
   src/ui/theme.cpp
   src/ui/theme.hpp
+  src/ui/update_dialog.cpp
+  src/ui/update_dialog.hpp
 )
 add_library(dv::client_widgets ALIAS dv_client_widgets)
 

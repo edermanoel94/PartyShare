@@ -22,6 +22,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFont>
@@ -88,6 +89,7 @@
 #include "ui/settings_dialog.hpp"
 #include "ui/theme.hpp"
 #include "ui/update_checker.hpp"
+#include "ui/update_dialog.hpp"
 
 namespace dv::ui {
 namespace {
@@ -194,6 +196,13 @@ constexpr int kRoomCardMinWidth = 240;
 constexpr int kMaxRoomColumns = 4;
 constexpr int kOccupancyBarHeight = 6;
 constexpr int kCreateDialogWidth = 420;
+
+/// The question about a new release. How long after a page arrives it is
+/// asked - leaving a call and being handed a dialog in the same frame reads as
+/// the dialog having caused it - and how long it waits before looking again
+/// when another dialog had the window.
+constexpr int kUpdateSettleMs = 400;
+constexpr int kUpdateRetryMs = 3000;
 
 /// The room. The code chip in the header, the buttons of the floating
 /// controls, how far the controls rest above the bottom of the stage, and how
@@ -2562,7 +2571,7 @@ void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
                                                   "to close it before you can make another."));
 }
 
-void MainWindow::announce_update(const QString& version, const QUrl& page) {
+void MainWindow::announce_update(const QString& version, const QUrl& page, const QUrl& installer) {
   // The whole line is rebuilt rather than appended to, so that a second and
   // newer release arriving while this window is open replaces the first rather
   // than queueing behind it.
@@ -2586,6 +2595,75 @@ void MainWindow::announce_update(const QString& version, const QUrl& page) {
   version_->setOpenExternalLinks(true);
   version_->setToolTip(QStringLiteral("Running PartyShare %1. Version %2 has been published: %3")
                            .arg(QStringLiteral(DV_VERSION), version, page.toString()));
+
+  // And the question. A newer release arriving while the one before it is
+  // still being asked about takes its place: two dialogs about two versions
+  // is one more than anybody can answer.
+  if (update_dialog_ != nullptr) {
+    update_dialog_->reject();
+  }
+  update_version_ = version;
+  update_page_ = page;
+  update_installer_ = installer;
+  update_pending_ = true;
+
+  if (pages_->currentIndex() == kRoomPage) {
+    // In a call the question waits, and this says that it is waiting: a line
+    // that goes away on its own, where the dialog would have had to be
+    // answered by somebody who is talking.
+    notify(ToastKind::Info,
+           QStringLiteral("PartyShare %1 is available. You will be asked about it when you "
+                          "leave the room.")
+               .arg(version));
+    return;
+  }
+  offer_update();
+}
+
+void MainWindow::offer_update() {
+  if (!update_pending_ || pages_->currentIndex() == kRoomPage) {
+    return;
+  }
+  // Somebody is in the middle of another dialog - the settings, a new room, a
+  // new password. A second modal window over the first leaves two things
+  // waiting for an answer and only one of them reachable, so this one comes
+  // back when the first has been dealt with.
+  if (QApplication::activeModalWidget() != nullptr) {
+    QTimer::singleShot(kUpdateRetryMs, this, &MainWindow::offer_update);
+    return;
+  }
+  update_pending_ = false;
+
+  const bool direct = update_installer_.isValid();
+  const QUrl target = direct ? update_installer_ : update_page_;
+
+  auto* dialog = new UpdateDialog(update_version_, QStringLiteral(DV_VERSION), direct, this);
+  // Answered once and then gone: the next release builds its own.
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  connect(dialog, &QDialog::accepted, this, [this, target, direct] {
+    // The platform's "open this" on an address ui::UpdateChecker has already
+    // refused unless it is https on github.com. For the installer that is the
+    // browser starting a download; this program fetches nothing and runs
+    // nothing, and the file is the person's to open.
+    if (!QDesktopServices::openUrl(target)) {
+      notify(ToastKind::Error,
+             QStringLiteral("The browser could not be opened. The link in the status bar leads "
+                            "to the same release."));
+      return;
+    }
+    if (direct) {
+      // The one thing the installer needs and cannot say before it is run:
+      // it replaces the files this window is running from.
+      notify(ToastKind::Info,
+             QStringLiteral("The installer is downloading in your browser. Close PartyShare "
+                            "before you run it."));
+    }
+  });
+  update_dialog_ = dialog;
+  // open() and not exec(): this is reached from a network reply and from a
+  // timer, and a second event loop started inside either would run the call
+  // underneath it from within a slot that has not returned.
+  dialog->open();
 }
 
 void MainWindow::apply_participants(const QStringList& names) {
@@ -3642,6 +3720,13 @@ void MainWindow::go_to_page(int index) {
   // between the lobby's header and the cards that covered the rest. Put back
   // on top here, and again once the fade below has finished with the page.
   toasts_->bring_to_front();
+
+  // A release that was announced during a call has been waiting for this:
+  // any page that is not the room is a moment to ask. Shortly after, so that
+  // the page somebody was sent to is seen before the dialog over it.
+  if (update_pending_ && index != kRoomPage) {
+    QTimer::singleShot(kUpdateSettleMs, this, &MainWindow::offer_update);
+  }
 
   QWidget* page = pages_->widget(index);
   // With animations off the page is simply there, which the stack has already

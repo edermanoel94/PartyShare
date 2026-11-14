@@ -59,6 +59,7 @@ class IconButton;
 class MetricsDialog;
 class ScreenView;
 class StatCard;
+class UpdateDialog;
 /// The interface of section 19 of SPEC.md: three screens and a settings
 /// dialog, over the core built in M2 to M6.
 ///
@@ -101,15 +102,20 @@ class MainWindow : public QMainWindow {
 
   /// A release newer than this build has been published.
   ///
-  /// Turns the version already in the status bar into the sentence "0.1.41 -
-  /// 0.1.42 available", where the second half is a link to the download page.
-  /// Nothing is interrupted and nothing has to be dismissed: this arrives while
-  /// somebody may be in a call, and a call is not the moment to be handed a
-  /// modal window about housekeeping.
+  /// Two things happen. The version already in the status bar becomes the
+  /// sentence "0.1.41 - 0.1.42 available", where the second half is a link to
+  /// the release's page, and that stays for as long as the window does. And
+  /// the person is asked, once, whether to update now - see offer_update for
+  /// when, because this arrives while somebody may be in a call, and a call is
+  /// not the moment to be handed a modal window about housekeeping.
   ///
-  /// Idempotent. ui::UpdateChecker raises this once per version, but calling it
-  /// twice with the same one leaves the same label.
-  void announce_update(const QString& version, const QUrl& page);
+  /// `installer` is the file that updates this build, at the address it
+  /// downloads from, and is what "Update now" opens. Invalid when the release
+  /// has none for this platform; the question is then about opening `page`.
+  ///
+  /// ui::UpdateChecker raises this once per version. Calling it again with a
+  /// newer one replaces both the sentence and the question.
+  void announce_update(const QString& version, const QUrl& page, const QUrl& installer);
 
  protected:
   /// The stage of the room page being resized or pointed at, which is what
@@ -595,6 +601,27 @@ class MainWindow : public QMainWindow {
   /// title bar, or by noticing that the call it belongs to has ended - and a
   /// raw pointer would be left aimed at the space where it was.
   QPointer<MetricsDialog> metrics_dialog_ = nullptr;
+
+  /// Asks whether to update now, if there is a release nobody has been asked
+  /// about yet and this is a moment to ask.
+  ///
+  /// It is not one while the room page is up: the question waits for the call
+  /// to be over, and go_to_page calls this on the way out. Nor while another
+  /// dialog has the window, where it comes back to look a few seconds later.
+  /// Asked once per release: answering "Later" leaves the link in the status
+  /// bar and nothing else, until the program is started again.
+  void offer_update();
+
+  /// The release offer_update has still to ask about, and where it leads.
+  /// `update_pending_` is what says there is one; the rest is only read while
+  /// it is set or while the question is on screen.
+  QString update_version_;
+  QUrl update_page_;
+  QUrl update_installer_;
+  bool update_pending_ = false;
+  /// The question, while it is up. Deleted when it is answered, which is what
+  /// the QPointer is for.
+  QPointer<UpdateDialog> update_dialog_ = nullptr;
 
   /// The jitter buffer's totals at the last metrics report, so that the status
   /// bar can say what share of the last interval was invented rather than a

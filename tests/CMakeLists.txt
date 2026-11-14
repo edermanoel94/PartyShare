@@ -277,6 +277,7 @@ if(TARGET dv::client_widgets)
     ui/test_components.cpp
     ui/test_theme.cpp
     ui/test_toast.cpp
+    ui/test_update.cpp
     ui/ui_test.hpp
   )
   target_include_directories(dv_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)

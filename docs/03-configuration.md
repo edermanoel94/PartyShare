@@ -200,9 +200,12 @@ understood is the one unacceptable answer.
 The client also asks GitHub whether a newer release exists, and there is no key
 for it: one HTTPS request to one address, five seconds after the window opens
 and every six hours after that. It carries nothing but the version already
-written in the status bar, downloads nothing and installs nothing: the whole
-result is that line becoming `0.1.41 · 0.1.42 available`, with a link to the
-release page, and a machine with no route out gets a timeout it never sees.
+written in the status bar, downloads nothing and installs nothing: the result is
+that line becoming `0.1.41 · 0.1.42 available`, with a link to the release page,
+and one question with an **Update now** button that hands the installer's
+address to the browser. A machine with no route out gets a timeout it never
+sees. [Chapter 14](14-release.md#how-anybody-finds-out-there-is-a-new-version)
+has the rest.
 `check_for_updates` was the key behind a box in Settings until 0.1.59; a file
 that still has it loads as before, and a `false` is a warning in the client's
 log saying the line no longer does anything.

@@ -461,6 +461,8 @@ void AdminPanel::fill_accounts(const QStringList& rows) {
   // gets deleted.
   const QString selected = selected_id(users_);
   const theme::Colors& colours = theme::colors();
+  // Every column but the name is sized to its contents. See HeldColumns.
+  const HeldColumns held(users_);
 
   users_->setRowCount(static_cast<int>(rows.size()));
   for (int row = 0; row < rows.size(); ++row) {
@@ -634,6 +636,9 @@ void AdminPanel::fill_sessions() {
   const QString selected = selected_id(sessions_);
   const theme::Colors& colours = theme::colors();
   int online = 0;
+  // The table this was found in: four of its five columns sized to their
+  // contents, and a list that only grows. See HeldColumns.
+  const HeldColumns held(sessions_);
 
   sessions_->setRowCount(static_cast<int>(session_rows_.size()));
   for (int row = 0; row < session_rows_.size(); ++row) {

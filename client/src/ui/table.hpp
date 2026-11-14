@@ -16,6 +16,12 @@ namespace dv::ui {
 /// cannot be sorted on, truncated, or mistaken for something to look at.
 constexpr int kIdRole = Qt::UserRole;
 
+/// Turns `table` into what every listing in the program is: read-only, one
+/// row selected at a time, these headers, no grid, rows tall enough to aim at.
+/// What make_table does to a new table, for a table somebody else made - a
+/// subclass, or one dropped into a form in Qt Designer.
+void set_up_table(QTableWidget* table, const QStringList& headers);
+
 /// A read-only, single-selection, row-selecting table with these headers.
 [[nodiscard]] QTableWidget* make_table(const QStringList& headers, QWidget* parent);
 

@@ -7,14 +7,38 @@
 
 namespace dv::ui {
 
-QTableWidget* make_table(const QStringList& headers, QWidget* parent) {
-  auto* table = new QTableWidget(0, static_cast<int>(headers.size()), parent);
+namespace {
+
+/// How tall a row is. Qt's default follows the font and comes out near thirty
+/// pixels, which is a row to read and a small thing to click.
+constexpr int kRowHeight = 40;
+
+}  // namespace
+
+void set_up_table(QTableWidget* table, const QStringList& headers) {
+  table->setRowCount(0);
+  table->setColumnCount(static_cast<int>(headers.size()));
   table->setHorizontalHeaderLabels(headers);
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setSelectionMode(QAbstractItemView::SingleSelection);
   table->setEditTriggers(QAbstractItemView::NoEditTriggers);
   table->verticalHeader()->setVisible(false);
+  table->verticalHeader()->setDefaultSectionSize(kRowHeight);
   table->horizontalHeader()->setStretchLastSection(true);
+  // Left, like the cells under them. Centred headers over left aligned text
+  // put every heading somewhere other than above its own column.
+  table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  // The header says what the columns are; it is not something to press, and
+  // a section that lights up under the pointer says it is.
+  table->horizontalHeader()->setHighlightSections(false);
+  // Rows, not cells: a line under each row and nothing between the columns.
+  // The stylesheet draws the line. See QTableView::item in ui/theme.cpp.
+  table->setShowGrid(false);
+}
+
+QTableWidget* make_table(const QStringList& headers, QWidget* parent) {
+  auto* table = new QTableWidget(parent);
+  set_up_table(table, headers);
   return table;
 }
 

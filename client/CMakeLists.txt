@@ -266,11 +266,69 @@ if(APPLE)
     MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
+# The part of the interface that needs no session to exist: the theme, the
+# component library of docs/17-design-system.md, and the two views that draw
+# their own rows. A library of its own for the reason dv_client_core is one:
+# it is what lets the tests build a widget, press it and look at what it did,
+# without starting the program. See tests/ui.
+#
+# The components know the theme and nothing else. None of them may include a
+# header from network/ or media/, or from app/ beyond the one pure function
+# the chat view finds links with - what they show is handed to them.
+qt_add_library(dv_client_widgets STATIC
+  ${dv_theme_sources}
+  src/ui/chat_view.cpp
+  src/ui/chat_view.hpp
+  src/ui/components/app_dialog.cpp
+  src/ui/components/app_dialog.hpp
+  src/ui/components/app_header.cpp
+  src/ui/components/app_header.hpp
+  src/ui/components/app_sidebar.cpp
+  src/ui/components/app_sidebar.hpp
+  src/ui/components/avatar.cpp
+  src/ui/components/avatar.hpp
+  src/ui/components/buttons.cpp
+  src/ui/components/buttons.hpp
+  src/ui/components/data_table.cpp
+  src/ui/components/data_table.hpp
+  src/ui/components/empty_state.cpp
+  src/ui/components/empty_state.hpp
+  src/ui/components/floating_bar.cpp
+  src/ui/components/floating_bar.hpp
+  src/ui/components/icon_button.cpp
+  src/ui/components/icon_button.hpp
+  src/ui/components/icons.cpp
+  src/ui/components/icons.hpp
+  src/ui/components/search_input.cpp
+  src/ui/components/search_input.hpp
+  src/ui/components/stat_card.cpp
+  src/ui/components/stat_card.hpp
+  src/ui/components/toast.cpp
+  src/ui/components/toast.hpp
+  src/ui/table.cpp
+  src/ui/table.hpp
+  src/ui/theme.cpp
+  src/ui/theme.hpp
+)
+add_library(dv::client_widgets ALIAS dv_client_widgets)
+
+target_link_libraries(dv_client_widgets PUBLIC
+  dv::client_core
+  Qt6::Widgets
+)
+if(WIN32)
+  # dwmapi is the one call that asks for a dark title bar. Part of Windows;
+  # nothing is downloaded for it. See client/src/ui/theme_windows.cpp.
+  target_link_libraries(dv_client_widgets PRIVATE dwmapi)
+endif()
+
+dv_set_target_warnings(dv_client_widgets)
+dv_enable_sanitizers(dv_client_widgets)
+
 qt_add_executable(dv_client
   ${dv_client_resources}
   ${dv_sound_sources}
   ${dv_attention_sources}
-  ${dv_theme_sources}
   src/main.cpp
   src/ui/account_delegate.cpp
   src/ui/account_delegate.hpp
@@ -279,8 +337,6 @@ qt_add_executable(dv_client
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
   src/ui/attention.hpp
-  src/ui/chat_view.cpp
-  src/ui/chat_view.hpp
   src/ui/chimes.cpp
   src/ui/chimes.hpp
   src/ui/elided_label.cpp
@@ -304,10 +360,6 @@ qt_add_executable(dv_client
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp
   src/ui/settings_dialog.hpp
-  src/ui/table.cpp
-  src/ui/table.hpp
-  src/ui/theme.cpp
-  src/ui/theme.hpp
   src/ui/update_checker.cpp
   src/ui/update_checker.hpp
 )
@@ -353,6 +405,7 @@ qt_add_resources(dv_client "dv_client_assets"
 
 target_link_libraries(dv_client PRIVATE
   dv::client_core
+  dv::client_widgets
   Qt6::Network
   Qt6::Widgets
 )
@@ -361,8 +414,7 @@ if(WIN32)
   # winmm is PlaySound, which is the whole of the arrival and departure chime.
   # It ships with Windows; nothing is downloaded for this. See
   # client/src/ui/sound.hpp for why it is not QSoundEffect.
-  # dwmapi is the one call that asks for a dark title bar. Part of Windows too.
-  target_link_libraries(dv_client PRIVATE winmm dwmapi)
+  target_link_libraries(dv_client PRIVATE winmm)
 endif()
 
 set_target_properties(dv_client PROPERTIES

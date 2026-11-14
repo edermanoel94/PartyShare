@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(partyshare
-  VERSION 0.2.0
+  VERSION 0.2.1
   DESCRIPTION "Screen sharing and voice rooms for small groups"
   LANGUAGES CXX
 )

@@ -10,6 +10,10 @@ it is.
 A version raised by hand in `CMakeLists.txt` skips that step, so whoever raises
 it writes the entry here in the same commit.
 
+## 0.2.1 (2026-11-14)
+
+- The Admin panel no longer freezes for seconds when the Sessions tab comes forward
+
 ## 0.2.0 (2026-11-14)
 
 - A design system for the client: light and dark themes, a new shell, and an update prompt

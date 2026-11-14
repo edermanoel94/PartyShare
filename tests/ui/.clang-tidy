@@ -1,0 +1,15 @@
+# The interface tests, on top of the project configuration two directories up.
+#
+# The same one exemption client/src/ui has, for the same reason: these tests
+# build Qt widgets, and Qt owns a widget through its parent pointer.
+# `new QLineEdit(&form)` hands the field to the form, which deletes it. The
+# check below assumes ownership is expressed with unique_ptr, and against a
+# widget tree it fires on every construction.
+#
+#   cppcoreguidelines-owning-memory
+#     Widgets are owned by their parent, which is Qt's model and not a leak.
+
+InheritParentConfig: true
+
+Checks: >
+  -cppcoreguidelines-owning-memory

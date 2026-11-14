@@ -47,11 +47,47 @@ namespace {
 /// row asks for, where its text is painted, and which URL is under a pixel.
 /// The three disagreeing is what a link that opens when you click beside it
 /// looks like.
-constexpr int kHorizontalPadding = 6;
-constexpr int kVerticalPadding = 3;
+constexpr int kHorizontalPadding = 8;
+constexpr int kVerticalPadding = 6;
 
 [[nodiscard]] QString escaped(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())).toHtmlEscaped();
+}
+
+/// The parts of a line that say who is speaking, and where what they said
+/// starts. `body` is zero for a line that is not of that shape.
+struct Speaker {
+  std::string_view when;
+  std::string_view name;
+  std::size_t body = 0;
+};
+
+/// Reads "[HH:mm] Name: " or "Name: " off the front of a line.
+///
+/// By shape and not by a field handed over separately, because the line is
+/// what crosses from the signaling thread and what the history arrives as. A
+/// name with ": " inside it is cut at the first one, and the cost of that is
+/// a bold run two words short - nothing here decides anything.
+[[nodiscard]] Speaker speaker_of(std::string_view text) {
+  Speaker speaker;
+  std::size_t at = 0;
+  // "[10:51] " is eight bytes, with the bracket closing at the seventh.
+  constexpr std::size_t kStampLength = 8;
+  if (text.size() > kStampLength && text[0] == '[' && text[3] == ':' && text[6] == ']' &&
+      text[7] == ' ') {
+    speaker.when = text.substr(1, 5);
+    at = kStampLength;
+  }
+  const std::size_t colon = text.find(": ", at);
+  // A name is short. A colon a long way into the line is punctuation in a
+  // sentence, not the end of who is speaking.
+  constexpr std::size_t kLongestName = 64;
+  if (colon == std::string_view::npos || colon == at || colon - at > kLongestName) {
+    return {};
+  }
+  speaker.name = text.substr(at, colon - at);
+  speaker.body = colon + 2;
+  return speaker;
 }
 
 /// One chat line as the rich text a row is drawn from.
@@ -68,9 +104,34 @@ constexpr int kVerticalPadding = 3;
   // Both casts matter: QString counts in a signed qsizetype and the vector
   // in an unsigned size_t, so without them the sum is worked out unsigned
   // and narrowed again on the way in.
-  html.reserve(line.size() + (static_cast<qsizetype>(links.size()) * 32));
+  html.reserve(line.size() + (static_cast<qsizetype>(links.size()) * 32) + 96);
 
+  // Who said it and when, on a line of their own above what was said: the
+  // name in a heavier weight, the time quiet beside it. The line arrives as
+  // "[10:51] Bruno: text" - see to_chat_line in ui/main_window.cpp - and is
+  // taken apart here only to be drawn; what is kept on the item, selected and
+  // copied is still that one line, exactly as it arrived.
+  //
+  // The classes are resolved by lay_out's stylesheet at every paint, so the
+  // colours follow the theme rather than being frozen into the row.
   std::size_t at = 0;
+  const Speaker speaker = speaker_of(text);
+  const bool link_in_head = !links.empty() && links.front().begin < speaker.body;
+  // A line that is not somebody speaking - a nudge, a notice from the room -
+  // has no head and is drawn whole, as it always was. So is the rare line
+  // whose "name" the link scanner has claimed part of: the spans below are
+  // offsets into the whole line, and a head cut out from under one of them
+  // would put a link's markup in the wrong place.
+  if (speaker.body > 0 && !link_in_head) {
+    html += QStringLiteral("<span class=\"who\">%1</span>").arg(escaped(speaker.name));
+    if (!speaker.when.empty()) {
+      html +=
+          QStringLiteral("&nbsp;&nbsp;<span class=\"when\">%1</span>").arg(escaped(speaker.when));
+    }
+    html += QStringLiteral("<br>");
+    at = speaker.body;
+  }
+
   for (const client::app::LinkSpan& link : links) {
     html += escaped(text.substr(at, link.begin - at));
     // Escaped twice over: once for the attribute and once for what is shown.
@@ -105,8 +166,17 @@ void lay_out(QTextDocument& document, const QFont& font, const QString& html, in
   // Before setHtml, which is when the sheet is applied. The accent is the same
   // indigo the rest of the interface uses for the thing to press, and it
   // follows the system's light and dark setting with everything else.
-  document.setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }")
-                                    .arg(theme::colors().accent.name()));
+  //
+  // The two classes are the head of a spoken line: see to_html. Set here and
+  // not written into the row, so that a change of theme reaches the lines
+  // already on screen.
+  const theme::Colors& colours = theme::colors();
+  document.setDefaultStyleSheet(
+      QStringLiteral("a { color: %1; text-decoration: underline; }"
+                     ".who { font-weight: 600; }"
+                     ".when { color: %2; font-size: %3pt; }")
+          .arg(colours.accent_text.name(), colours.muted.name())
+          .arg(theme::font(theme::TextRole::Caption).pointSizeF(), 0, 'f', 1));
   document.setHtml(html);
   document.setTextWidth(width);
 }

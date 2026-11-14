@@ -21,29 +21,45 @@
 #include "app/call_session.hpp"
 #include "app/network_quality.hpp"
 #include "app/smoothing.hpp"
+#include "ui/components/toast.hpp"
 #include "ui/notifier.hpp"
 
+class QAbstractButton;
 class QAction;
+class QEvent;
+class QGridLayout;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QProgressBar;
+class QPropertyAnimation;
 class QPushButton;
+class QScrollArea;
 class QSlider;
 class QSpinBox;
 class QSplitter;
 class QStackedWidget;
-class QTableWidget;
+class QTabBar;
 class QTimer;
 class QVBoxLayout;
 
 namespace dv::ui {
 
 class AdminPanel;
+class AppDialog;
+class AppForm;
+class AppHeader;
+class AppSidebar;
+class Avatar;
 class ChatView;
 class ElidedLabel;
+class EmptyState;
+class IconButton;
 class MetricsDialog;
 class ScreenView;
+class StatCard;
+class UpdateDialog;
 /// The interface of section 19 of SPEC.md: three screens and a settings
 /// dialog, over the core built in M2 to M6.
 ///
@@ -86,15 +102,27 @@ class MainWindow : public QMainWindow {
 
   /// A release newer than this build has been published.
   ///
-  /// Turns the version already in the status bar into the sentence "0.1.41 -
-  /// 0.1.42 available", where the second half is a link to the download page.
-  /// Nothing is interrupted and nothing has to be dismissed: this arrives while
-  /// somebody may be in a call, and a call is not the moment to be handed a
-  /// modal window about housekeeping.
+  /// Two things happen. The version already in the status bar becomes the
+  /// sentence "0.1.41 - 0.1.42 available", where the second half is a link to
+  /// the release's page, and that stays for as long as the window does. And
+  /// the person is asked, once, whether to update now - see offer_update for
+  /// when, because this arrives while somebody may be in a call, and a call is
+  /// not the moment to be handed a modal window about housekeeping.
   ///
-  /// Idempotent. ui::UpdateChecker raises this once per version, but calling it
-  /// twice with the same one leaves the same label.
-  void announce_update(const QString& version, const QUrl& page);
+  /// `installer` is the file that updates this build, at the address it
+  /// downloads from, and is what "Update now" opens. Invalid when the release
+  /// has none for this platform; the question is then about opening `page`.
+  ///
+  /// ui::UpdateChecker raises this once per version. Calling it again with a
+  /// newer one replaces both the sentence and the question.
+  void announce_update(const QString& version, const QUrl& page, const QUrl& installer);
+
+ protected:
+  /// The stage of the room page being resized or pointed at, which is what
+  /// places and wakes the call controls floating over it, and the list of
+  /// rooms changing width, which is what lays its cards out again. See
+  /// place_dock and rebuild_room_cards.
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private slots:
   void on_connect();
@@ -130,6 +158,10 @@ class MainWindow : public QMainWindow {
   void on_open_metrics();
   void on_open_administration();
   void on_close_administration();
+  /// Opens the menu behind the badge at the foot of the navigation rail: who
+  /// is signed in, and the two things that are about the account rather than
+  /// about a room - changing the password and signing out.
+  void on_account_menu();
   void on_copy_room_id();
   void on_participant_selected();
   void on_participant_menu(const QPoint& where);
@@ -193,13 +225,19 @@ class MainWindow : public QMainWindow {
   void apply_room_created(const QString& room_id);
   void apply_screen_share(const QString& user_id);
   void apply_kicked(const QString& reason);
-  void apply_forced_mute(const QString& name, const QString& by_name, bool muted);
+  /// `by_us` is whether the administrator who did it is the person at this
+  /// window. It decides how long the notification stays: news of somebody
+  /// else's doing waits to be dismissed, a confirmation of one's own does not.
+  void apply_forced_mute(const QString& name, const QString& by_name, bool muted, bool by_us);
   /// `summary` is models::describe of what is in force now, empty when nothing
   /// is. Strings rather than the struct, for the reason the participant rows
   /// travel as strings: crossing threads with a Qt connection needs a
   /// registered metatype, and this needs none.
+  /// `is_us` is whether the account restricted is this one, and `by_us`
+  /// whether the administrator is - see apply_forced_mute for what that
+  /// changes.
   void apply_restrictions(const QString& name, const QString& by_name, const QString& summary,
-                          const QString& reason, bool is_us);
+                          const QString& reason, bool is_us, bool by_us);
   /// An administrator's message to this account: a box with one button.
   ///
   /// Modal on purpose, which nothing else the server announces is. A
@@ -273,10 +311,55 @@ class MainWindow : public QMainWindow {
   /// "and remember".
   void remember_server_address(const std::string& url);
 
+  /// The navigation rail down the left of the window. Before the pages,
+  /// because refresh_controls shows and hides two of its buttons.
+  void build_sidebar();
   void build_login_page();
   void build_home_page();
   void build_room_page();
   void build_admin_page();
+
+  /// One room of the list as a card: what it is called, its code, how full it
+  /// is, and the button that walks in.
+  [[nodiscard]] QWidget* make_room_card(const QString& id, const QString& name, int count,
+                                        int capacity);
+  /// Lays the cards out again from `room_rows_`, narrowed by what is typed in
+  /// the search box, in as many columns as the page is wide enough for.
+  void rebuild_room_cards();
+  /// Walks into the room `id`, by the same route the Join button takes.
+  void join_room(const QString& id);
+
+  /// Puts the call controls where they belong over the stage: centred, a
+  /// little above its bottom edge, or just below it when they are hidden.
+  void place_dock(bool animated);
+  /// Slides the call controls into the stage or down out of it.
+  void set_dock_shown(bool shown);
+  /// Brings the call controls back and, while somebody else's picture is on
+  /// the stage, starts the clock that will take them away again.
+  void wake_dock();
+
+  /// Whether somebody else's screen is on the stage right now: in a call,
+  /// with a sharer, and the sharer is not us. What the call controls hide
+  /// for, and what a notification must not sit on indefinitely.
+  [[nodiscard]] bool watching_share() const;
+  /// Puts a notification up, telling it whether it is going over a picture
+  /// somebody is watching - which decides how long some kinds stay. See
+  /// toast_lifetime_ms in ui/components/toast.hpp.
+  void notify(ToastKind kind, const QString& text);
+
+  /// Writes how many people are in the room and how many chat lines are
+  /// unread into the two tabs of the side panel.
+  void refresh_side_tabs();
+  /// Puts one face per participant above the side panel's tabs, with a ring
+  /// round whoever is speaking. `entries` are the rows apply_participants
+  /// takes.
+  void refresh_faces(const QStringList& entries);
+  /// Says who is sharing, in the header of the room, or takes the chip away
+  /// when nobody is.
+  void set_sharing_text(const QString& text);
+  /// Writes the round trip to the server into the lobby's Server card, in
+  /// step with the indicator in the status bar.
+  void refresh_server_stat();
   void wire_session();
   void refresh_controls();
   /// Adds one line and keeps the view at the bottom, which is where a
@@ -360,6 +443,15 @@ class MainWindow : public QMainWindow {
 
   client::app::CallSession& session_;
 
+  // The frame every page stands in: the navigation rail on the left, the
+  // pages beside it, and the notifications over the top right corner of
+  // those. See docs/17-design-system.md.
+  QWidget* shell_ = nullptr;
+  AppSidebar* sidebar_ = nullptr;
+  /// The badge at the foot of the rail, and the door to the account menu.
+  Avatar* account_avatar_ = nullptr;
+  ToastHost* toasts_ = nullptr;
+
   QStackedWidget* pages_ = nullptr;
 
   // Login.
@@ -388,7 +480,12 @@ class MainWindow : public QMainWindow {
   std::string remembered_server_;
 
   // Home.
-  QLabel* welcome_ = nullptr;
+  AppHeader* home_header_ = nullptr;
+  StatCard* stat_rooms_ = nullptr;
+  StatCard* stat_people_ = nullptr;
+  StatCard* stat_server_ = nullptr;
+  /// The search box of the lobby, which is also where a room code goes: what
+  /// on_join_room reads. See build_home_page.
   QLineEdit* room_id_ = nullptr;
   /// What the room about to be created is called. Empty is the ordinary case
   /// and not an omission: the server names such a room after its identifier.
@@ -399,10 +496,21 @@ class MainWindow : public QMainWindow {
   QSpinBox* room_capacity_ = nullptr;
   QPushButton* create_button_ = nullptr;
   QPushButton* join_button_ = nullptr;
-  /// Every room that exists, so that arriving here does not require already
-  /// knowing a six character code. See build_home_page.
-  QTableWidget* room_list_ = nullptr;
-  QLabel* rooms_empty_ = nullptr;
+  /// The form a room is made from. Kept open until the server answers, so a
+  /// refusal is read where the name can be changed. See build_home_page.
+  AppDialog* create_dialog_ = nullptr;
+  AppForm* create_form_ = nullptr;
+  /// Every room that exists, a card each, so that arriving here does not
+  /// require already knowing a six character code. See build_home_page.
+  QScrollArea* room_scroll_ = nullptr;
+  QGridLayout* room_grid_ = nullptr;
+  EmptyState* rooms_empty_ = nullptr;
+  /// The last room list, as the rows it arrived in, kept because the cards
+  /// are laid out again from it on every keystroke in the search box and
+  /// every change of width.
+  QStringList room_rows_;
+  /// How many columns the cards were last laid out in.
+  int room_columns_ = 0;
   /// Identifier to name, kept from the last room list.
   ///
   /// The title above a call wants the name, and nothing in the join exchange
@@ -417,32 +525,58 @@ class MainWindow : public QMainWindow {
   QHash<QString, QString> room_people_;
 
   // Room.
-  QLabel* room_title_ = nullptr;
+  /// The room's code, as a button that copies it.
   QPushButton* copy_room_button_ = nullptr;
+  /// "3/5 people", beside the code.
+  QLabel* room_people_label_ = nullptr;
   ScreenView* screen_view_ = nullptr;
   QListWidget* participants_ = nullptr;
   QProgressBar* microphone_level_ = nullptr;
   QSlider* volume_ = nullptr;
   QLabel* volume_label_ = nullptr;
-  QPushButton* mute_button_ = nullptr;
-  QPushButton* share_button_ = nullptr;
-  QPushButton* settings_button_ = nullptr;
-  QPushButton* network_status_button_ = nullptr;
-  /// Shown only to an administrator. See on_open_administration.
-  QPushButton* admin_button_ = nullptr;
-  QPushButton* leave_button_ = nullptr;
+  IconButton* mute_button_ = nullptr;
+  IconButton* share_button_ = nullptr;
+  /// On the navigation rail, so it is reachable from the lobby and the room
+  /// alike. See build_sidebar.
+  IconButton* settings_button_ = nullptr;
+  IconButton* network_status_button_ = nullptr;
+  /// On the navigation rail, and shown only to an administrator. See
+  /// on_open_administration.
+  IconButton* admin_button_ = nullptr;
+  IconButton* leave_button_ = nullptr;
+  /// Who is sharing, as a chip in the room's header. Hidden when nobody is:
+  /// see set_sharing_text.
   QLabel* sharing_label_ = nullptr;
+
+  // The side panel of the room: two tabs, with the faces of everybody in the
+  // room above both. See build_room_page.
+  QTabBar* side_tabs_ = nullptr;
+  QStackedWidget* side_pages_ = nullptr;
+  QHBoxLayout* avatar_strip_ = nullptr;
+  /// The faces above the tabs, by user id, so that a list that arrives five
+  /// times a second moves a ring rather than rebuilding every badge.
+  QHash<QString, Avatar*> faces_;
+  /// "+3", after the last face that fits.
+  QLabel* more_faces_ = nullptr;
+  /// Chat lines that arrived while the People tab was the one showing.
+  int unread_chat_ = 0;
+
+  // The call controls, floating over the stage. See place_dock.
+  QWidget* room_stage_ = nullptr;
+  QTimer* dock_idle_ = nullptr;
+  QPropertyAnimation* dock_slide_ = nullptr;
+  bool dock_shown_ = true;
 
   // Full screen. The parts of the room page that go away for it, and what
   // was true before so that it can be put back. See enter_fullscreen.
   QVBoxLayout* room_column_ = nullptr;
-  QWidget* room_header_ = nullptr;
+  AppHeader* room_header_ = nullptr;
   QSplitter* room_body_ = nullptr;
   QWidget* room_sidebar_ = nullptr;
   QWidget* room_controls_ = nullptr;
-  /// In the header, beside who is sharing; visible only while somebody else
-  /// is. See refresh_controls.
-  QPushButton* fullscreen_button_ = nullptr;
+  /// Among the call controls, beside the share button; visible only while
+  /// somebody else is sharing. See refresh_controls.
+  IconButton* fullscreen_button_ = nullptr;
   /// F11, on the window. Always enabled: outside a share it does nothing.
   QAction* fullscreen_action_ = nullptr;
   /// Esc, on the window, enabled only while full screen so that it never
@@ -467,6 +601,27 @@ class MainWindow : public QMainWindow {
   /// title bar, or by noticing that the call it belongs to has ended - and a
   /// raw pointer would be left aimed at the space where it was.
   QPointer<MetricsDialog> metrics_dialog_ = nullptr;
+
+  /// Asks whether to update now, if there is a release nobody has been asked
+  /// about yet and this is a moment to ask.
+  ///
+  /// It is not one while the room page is up: the question waits for the call
+  /// to be over, and go_to_page calls this on the way out. Nor while another
+  /// dialog has the window, where it comes back to look a few seconds later.
+  /// Asked once per release: answering "Later" leaves the link in the status
+  /// bar and nothing else, until the program is started again.
+  void offer_update();
+
+  /// The release offer_update has still to ask about, and where it leads.
+  /// `update_pending_` is what says there is one; the rest is only read while
+  /// it is set or while the question is on screen.
+  QString update_version_;
+  QUrl update_page_;
+  QUrl update_installer_;
+  bool update_pending_ = false;
+  /// The question, while it is up. Deleted when it is answered, which is what
+  /// the QPointer is for.
+  QPointer<UpdateDialog> update_dialog_ = nullptr;
 
   /// The jitter buffer's totals at the last metrics report, so that the status
   /// bar can say what share of the last interval was invented rather than a
@@ -511,8 +666,8 @@ class MainWindow : public QMainWindow {
   QLineEdit* chat_input_ = nullptr;
   /// Opens a short curated grid. The system picker, which every platform has,
   /// covers everything this one leaves out and works in the same field.
-  QPushButton* chat_emoji_ = nullptr;
-  QPushButton* chat_send_ = nullptr;
+  QAbstractButton* chat_emoji_ = nullptr;
+  QAbstractButton* chat_send_ = nullptr;
 
   // Administration.
   AdminPanel* admin_panel_ = nullptr;

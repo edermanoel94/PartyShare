@@ -143,9 +143,9 @@ way to enumerate accounts.
 ### From the client
 
 An administrator gets a panel: accounts, rooms, sessions, restrictions and the
-audit log, behind the `Admin` button inside a room, beside `Network status`. The
-call carries on while it is open, and `Back` returns to it. The same room offers
-a per-participant menu. Everything takes effect at once, and every change is
+audit log, behind the shield on the navigation rail, from the list of rooms or
+from inside one. A call carries on while it is open, and `Back` or the rail's
+first button returns to it. A room offers a per-participant menu besides. Everything takes effect at once, and every change is
 announced to the room and to the account it is about.
 
 The per-participant menu sends one flag and leaves the rest alone, so silencing
@@ -182,8 +182,8 @@ killed rather than stopped leaves behind and what the next server to start
 closes; `ended` is history. `k`, or the `End session` button, signs out whoever
 the selected row names, after asking for a reason to show them, and only for a
 row that is online - the other two are refused on the spot with a sentence about
-the row. An administrator cannot end their own session from here; that is the
-sign-out button on the home screen.
+the row. An administrator cannot end their own session from here; that is
+`Sign out`, in the menu behind the badge at the foot of the navigation rail.
 
 The `Rooms` tab lists every room with how many people are in it against how
 many it holds. `New room` asks for a name and a size. `Change size` asks for a

@@ -18,7 +18,12 @@ namespace {
 /// splitter: what it holds is a name, four boxes and a few lines, none of
 /// which read better wider, and every pixel it does not take is a column the
 /// table can show.
-constexpr int kPaneWidth = 300;
+///
+/// Wide enough for its two columns of actions side by side, the wider of
+/// which is "Make an administrator" beside "Reset password...". It was 300
+/// while the interface was set in nine points; at the ten of the type scale
+/// those two no longer fitted and the first lost its last two letters.
+constexpr int kPaneWidth = 340;
 
 /// A one pixel rule between the pane's sections. A QFrame with a name the
 /// stylesheet knows, so its colour follows the scheme like every other line.

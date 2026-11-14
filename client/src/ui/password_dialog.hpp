@@ -3,9 +3,9 @@
 #include <QDialog>
 #include <QString>
 
-class QDialogButtonBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
 
 namespace dv::ui {
 
@@ -25,6 +25,13 @@ namespace dv::ui {
 /// They are repeated here because the server's answer costs a round trip and
 /// arrives after the dialog has closed, and "you typed the confirmation wrong"
 /// is worth saying while the person can still see what they typed.
+///
+/// The one screen of the program laid out in Qt Designer, and the pattern for
+/// the next: password_dialog.ui holds the widgets and their wording, and this
+/// class holds what they do. The form asks for its looks by setting the same
+/// dynamic properties the code does - `accent` on the button that answers the
+/// dialog, `role` and `hint` on the labels - so nothing in it is styled by
+/// hand. docs/17-design-system.md walks through making another.
 class PasswordDialog : public QDialog {
   Q_OBJECT
 
@@ -48,7 +55,7 @@ class PasswordDialog : public QDialog {
   QLineEdit* new_ = nullptr;
   QLineEdit* confirm_ = nullptr;
   QLabel* hint_ = nullptr;
-  QDialogButtonBox* buttons_ = nullptr;
+  QPushButton* confirm_button_ = nullptr;
 };
 
 }  // namespace dv::ui

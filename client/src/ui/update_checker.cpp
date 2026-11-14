@@ -16,6 +16,8 @@
 #include <QNetworkRequest>
 #include <QTimer>
 
+#include "ui/release_info.hpp"
+
 namespace dv::ui {
 namespace {
 
@@ -54,21 +56,6 @@ constexpr int kTimeoutMs = 10000;
 /// a captive portal, a proxy serving its own page - cannot be read into memory
 /// unbounded.
 constexpr qint64 kMaxResponseBytes = 256LL * 1024;
-
-/// Whether a link out of the answer may be handed to a browser.
-///
-/// The status bar opens this with QDesktopServices, so it is a string from the
-/// network that ends as an argument to the shell's "open this" call. https and
-/// github.com is the whole of what this feature ever needs, and anything else -
-/// another host, another scheme, `file:`, `javascript:` - is refused in favour
-/// of the releases page, which is where the person was going anyway.
-bool is_safe_release_link(const QUrl& url) {
-  if (!url.isValid() || url.scheme() != QLatin1String("https")) {
-    return false;
-  }
-  const QString host = url.host().toLower();
-  return host == QLatin1String("github.com") || host.endsWith(QLatin1String(".github.com"));
-}
 
 }  // namespace
 
@@ -153,16 +140,25 @@ void UpdateChecker::handle(QNetworkReply* reply) {
   }
   announced_ = version;
 
+  // A link the answer gives and release_info.hpp refuses is replaced by the
+  // releases page, which is where the person was going anyway.
   QUrl page(release.value(QLatin1String("html_url")).toString());
   if (!is_safe_release_link(page)) {
     page = QUrl(QLatin1String(kReleasesPage));
   }
+  // Invalid when the release has no installer for this build - a platform
+  // nothing is packaged for, or a release whose files are still being
+  // attached. That is said once here and not asked again: `announced_` above
+  // means this version is not raised a second time, and the page it falls back
+  // to has the file as soon as there is one.
+  const QUrl installer = find_asset(release, installer_name(version));
 
   // Always at info, and not through report(): a release worth telling somebody
   // about is worth writing down every time it is found, in every build.
   DV_LOG_INFO("Update available: {}, and this is {}. {}", published->to_string(),
-              running.to_string(), page.toString().toStdString());
-  emit update_available(version, page);
+              running.to_string(),
+              (installer.isValid() ? installer : page).toString().toStdString());
+  emit update_available(version, page, installer);
 }
 
 }  // namespace dv::ui

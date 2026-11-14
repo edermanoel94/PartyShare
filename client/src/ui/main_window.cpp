@@ -22,15 +22,18 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QEasingCurve>
+#include <QEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGraphicsOpacityEffect>
-#include <QGroupBox>
+#include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
-#include <QHeaderView>
+#include <QIcon>
 #include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
@@ -43,6 +46,7 @@
 #include <QProgressBar>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -52,7 +56,7 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
-#include <QTableWidget>
+#include <QTabBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -64,6 +68,18 @@
 #include "ui/attention.hpp"
 #include "ui/chat_view.hpp"
 #include "ui/chimes.hpp"
+#include "ui/components/app_dialog.hpp"
+#include "ui/components/app_header.hpp"
+#include "ui/components/app_sidebar.hpp"
+#include "ui/components/avatar.hpp"
+#include "ui/components/buttons.hpp"
+#include "ui/components/empty_state.hpp"
+#include "ui/components/floating_bar.hpp"
+#include "ui/components/icon_button.hpp"
+#include "ui/components/icons.hpp"
+#include "ui/components/search_input.hpp"
+#include "ui/components/stat_card.hpp"
+#include "ui/components/toast.hpp"
 #include "ui/elided_label.hpp"
 #include "ui/emoji_picker.hpp"
 #include "ui/metrics_dialog.hpp"
@@ -71,9 +87,9 @@
 #include "ui/password_dialog.hpp"
 #include "ui/screen_view.hpp"
 #include "ui/settings_dialog.hpp"
-#include "ui/table.hpp"
 #include "ui/theme.hpp"
 #include "ui/update_checker.hpp"
+#include "ui/update_dialog.hpp"
 
 namespace dv::ui {
 namespace {
@@ -152,9 +168,63 @@ constexpr int kLinkOffline = -3;
   return field;
 }
 
-/// How wide the button that opens the emoji picker is, in pixels. Its height
-/// is the row's: see build_room_page.
-constexpr int kEmojiButtonWidth = 36;
+/// The places on the navigation rail. Two, where there are four pages: the
+/// list of rooms and the room are one place, because which of the two is on
+/// screen is decided by whether there is a call and never by a click.
+constexpr int kRoomsDestination = 0;
+constexpr int kAdminDestination = 1;
+
+/// The two tabs of the room's side panel, in the order they are added.
+constexpr int kPeopleTab = 0;
+constexpr int kChatTab = 1;
+
+/// The sign-in card: its width, the mark over the form, the button under it.
+constexpr int kLoginCardWidth = 400;
+constexpr int kLoginMark = 40;
+constexpr int kLoginButtonHeight = 42;
+
+/// The badge at the foot of the rail.
+constexpr int kAccountAvatar = 34;
+
+/// The lobby. The search box stretches between these; a card is never
+/// narrower than its minimum, and the grid never has more columns than this
+/// however wide the window is dragged - past four, a row of rooms is a strip
+/// of labels too far apart to scan.
+constexpr int kSearchMinWidth = 260;
+constexpr int kSearchMaxWidth = 320;
+constexpr int kRoomCardMinWidth = 240;
+constexpr int kMaxRoomColumns = 4;
+constexpr int kOccupancyBarHeight = 6;
+constexpr int kCreateDialogWidth = 420;
+
+/// The question about a new release. How long after a page arrives it is
+/// asked - leaving a call and being handed a dialog in the same frame reads as
+/// the dialog having caused it - and how long it waits before looking again
+/// when another dialog had the window.
+constexpr int kUpdateSettleMs = 400;
+constexpr int kUpdateRetryMs = 3000;
+
+/// The room. The code chip in the header, the buttons of the floating
+/// controls, how far the controls rest above the bottom of the stage, and how
+/// long the pointer has to be still before they leave.
+constexpr int kCodeChipHeight = 30;
+constexpr int kDockButton = 44;
+constexpr int kDockButtonRadius = 12;
+constexpr int kDockLift = 6;
+constexpr int kDockIdleMs = 3000;
+
+/// The side panel of the room: how narrow it may be dragged, the height of
+/// the microphone meter, the row the message field and its buttons share,
+/// the faces above the tabs and how many of them fit before "+N".
+constexpr int kSidePanelMinWidth = 260;
+constexpr int kMeterHeight = 6;
+constexpr int kChatRowHeight = 38;
+constexpr int kFace = 28;
+constexpr int kMaxFaces = 7;
+
+/// How far down from the top of the pages the notifications start: clear of
+/// a page's header, which is where its title and its actions are.
+constexpr int kToastTop = 64;
 
 /// One line of the conversation as it is shown: when it was said, by whom, and
 /// what.
@@ -282,21 +352,49 @@ constexpr int kLevelFrameMs = 16;
 MainWindow::MainWindow(client::app::CallSession& session, QWidget* parent)
     : QMainWindow(parent),
       session_(session),
+      shell_(new QWidget(this)),
       pages_(new QStackedWidget(this)),
       // What the session starts with came from the configuration, so the
       // first sign-in to it has nothing to write down.
       remembered_server_(session.signaling_url()),
       level_timer_(new QTimer(this)) {
   setWindowTitle(QStringLiteral("PartyShare"));
-  setMinimumSize(720, 560);
-  resize(960, 760);
+  setMinimumSize(780, 560);
+  resize(1100, 740);
 
-  setCentralWidget(pages_);
+  // The frame every page stands in: the navigation rail, and the pages beside
+  // it. No margin and no gap, so the rail runs the height of the window and
+  // each page is free to bring its own header up to the top edge.
+  auto* frame = new QHBoxLayout(shell_);
+  frame->setContentsMargins(0, 0, 0, 0);
+  frame->setSpacing(0);
+  build_sidebar();
+  frame->addWidget(sidebar_);
+  frame->addWidget(pages_, 1);
+  setCentralWidget(shell_);
+  // Nothing to navigate before there is somebody signed in. See go_to_page.
+  sidebar_->setVisible(false);
 
   build_login_page();
   build_home_page();
   build_room_page();
   build_admin_page();
+
+  // The notification area: the top of whatever page is up, clear of its
+  // header.
+  toasts_ = new ToastHost(pages_);
+  toasts_->set_margins(QMargins(0, kToastTop, 0, 0));
+
+  // The two things here a change of theme does not reach on its own. The
+  // network indicator is coloured inline, and only when its verdict moves, so
+  // it has to be told that what it believes is on screen no longer is.
+  connect(theme::notifier(), &theme::Notifier::changed, this, [this] {
+    shown_quality_ = -1;
+    shown_link_quality_ = -1;
+    if (state_ != client::app::CallSession::State::InCall) {
+      show_link_quality();
+    }
+  });
 
   status_ = new QLabel(QStringLiteral("disconnected"), this);
   quality_ = new QLabel(QString{}, this);
@@ -397,14 +495,79 @@ void MainWindow::show_login_error(const QString& text) {
   login_error_->setVisible(!text.isEmpty());
 }
 
+void MainWindow::build_sidebar() {
+  sidebar_ = new AppSidebar(shell_);
+
+  // One place for both of the first two pages: the list of rooms while
+  // nobody is in one, the room while somebody is. They are the same answer to
+  // "take me to the call", and the state decides which - see show_page.
+  sidebar_->add_destination(kRoomsDestination, Icon::Rooms, QStringLiteral("Rooms"));
+
+  // Accounts, rooms, restrictions and the audit log. Hidden rather than
+  // disabled from everybody else - a greyed out button that most people can
+  // never use is a permanent reminder of a feature that is not theirs. See
+  // refresh_controls.
+  admin_button_ =
+      sidebar_->add_destination(kAdminDestination, Icon::Shield, QStringLiteral("Administration"));
+  admin_button_->setToolTip(
+      QStringLiteral("Administration: accounts, rooms, restrictions and the audit log. A call "
+                     "carries on behind it."));
+  admin_button_->setVisible(false);
+
+  // Settings is reachable from every page the rail is on, so the microphone
+  // and the monitor can be sorted out before there is anybody on the other
+  // end to hear the result, and changed while there is.
+  settings_button_ = sidebar_->add_action(Icon::Settings, QStringLiteral("Settings"));
+
+  // The account, at the bottom with Settings: both are about this machine or
+  // this person, and neither is what somebody came to a page to do.
+  account_avatar_ = new Avatar(kAccountAvatar, sidebar_);
+  account_avatar_->set_interactive(true);
+  sidebar_->add_footer(account_avatar_);
+
+  connect(sidebar_, &AppSidebar::destination_chosen, this, [this](int destination) {
+    if (destination == kAdminDestination) {
+      on_open_administration();
+      return;
+    }
+    // Back to the call, or to the list of rooms: the same way out of the
+    // administration panel its own Back button takes.
+    on_close_administration();
+  });
+  connect(settings_button_, &IconButton::clicked, this, &MainWindow::on_open_settings);
+  connect(account_avatar_, &Avatar::clicked, this, &MainWindow::on_account_menu);
+}
+
 void MainWindow::build_login_page() {
   auto* page = new QWidget(pages_);
   auto* outer = new QVBoxLayout(page);
   outer->addStretch();
 
-  auto* box = new QGroupBox(QStringLiteral("Sign in"), page);
-  box->setMaximumWidth(420);
-  auto* form = new QFormLayout(box);
+  auto* card = new Card(page);
+  card->setFixedWidth(kLoginCardWidth);
+  card->body()->setContentsMargins(theme::space::kXl, theme::space::kXl, theme::space::kXl,
+                                   theme::space::kXl);
+  card->body()->setSpacing(theme::space::kLg);
+
+  // The program's own mark and name over the form. This is the first thing
+  // anybody sees of it, and a bare form with "Sign in" over it could be the
+  // login of anything.
+  auto* mark = new QLabel(card);
+  mark->setPixmap(QIcon(QStringLiteral(":/partyshare-48.png")).pixmap(kLoginMark, kLoginMark));
+  auto* name = new QLabel(QStringLiteral("PartyShare"), card);
+  theme::set_role(name, theme::TextRole::Heading);
+  auto* tagline = new QLabel(QStringLiteral("Sign in to your server"), card);
+  theme::set_role(tagline, theme::TextRole::Caption);
+  auto* names = new QVBoxLayout();
+  names->setSpacing(0);
+  names->addWidget(name);
+  names->addWidget(tagline);
+  auto* brand = new QHBoxLayout();
+  brand->setSpacing(theme::space::kMd);
+  brand->addWidget(mark);
+  brand->addLayout(names, 1);
+
+  auto* form = new AppForm(card);
 
   // The server first, above the name, because it is the question the other
   // two depend on: a username is only a username somewhere.
@@ -418,40 +581,43 @@ void MainWindow::build_login_page() {
   // and to find the row for it. This field takes the address as it was handed
   // over - app::expand_server_address says what it makes of it - and the
   // button beside it asks the server whether it is there, which was otherwise
-  // a question answered by a failed sign-in. The row in Settings went once
-  // this field existed: an address there could only be adopted at the next
-  // sign-in, which is where this field already is. Settings stays on the home
-  // screen and in the room, where the rest of what it holds is used.
-  server_ = new QLineEdit(box);
+  // a question answered by a failed sign-in.
+  server_ = new QLineEdit(card);
   server_->setPlaceholderText(QStringLiteral("192.168.1.10 or party.example.com"));
   server_->setToolTip(
       QStringLiteral("An IP or a name, with a port after a colon when the server is not on "
                      "8080. ws:// is added; wss://, for a server behind TLS, is typed."));
   server_->setText(
       QString::fromStdString(client::app::display_server_address(session_.signaling_url())));
-  test_server_button_ = new QPushButton(QStringLiteral("Test"), box);
+  test_server_button_ = new QPushButton(QStringLiteral("Test"), card);
   test_server_button_->setToolTip(
       QStringLiteral("Asks the server at this address whether it is there, and how far away."));
 
   auto* server_row = new QHBoxLayout();
+  server_row->setSpacing(theme::space::kSm);
   server_row->addWidget(server_, 1);
   server_row->addWidget(test_server_button_);
 
-  server_hint_ = new QLabel(QString{}, box);
+  server_hint_ = new QLabel(QString{}, card);
   server_hint_->setWordWrap(true);
   server_hint_->setVisible(false);
 
-  username_ = new QLineEdit(box);
+  username_ = new QLineEdit(card);
   username_->setPlaceholderText(QStringLiteral("username"));
-  password_ = new QLineEdit(box);
+  password_ = new QLineEdit(card);
   password_->setEchoMode(QLineEdit::Password);
   password_->setPlaceholderText(QStringLiteral("password"));
-  connect_button_ = new QPushButton(QStringLiteral("Connect"), box);
-  connect_button_->setDefault(true);
-  connect_button_->setProperty("accent", true);
-  connect_button_->setMinimumHeight(40);
 
-  login_error_ = new QLabel(QString{}, box);
+  form->layout_form()->addRow(QStringLiteral("Server"), server_row);
+  form->add_wide(server_hint_);
+  form->add_row(QStringLiteral("Username"), username_);
+  form->add_row(QStringLiteral("Password"), password_);
+
+  connect_button_ = new PrimaryButton(QStringLiteral("Connect"), card);
+  connect_button_->setDefault(true);
+  connect_button_->setMinimumHeight(kLoginButtonHeight);
+
+  login_error_ = new QLabel(QString{}, card);
   login_error_->setWordWrap(true);
   // The colour comes from the theme rather than from a literal here. It used to
   // be a hard coded #c62828, which is legible on a light window and very nearly
@@ -459,16 +625,14 @@ void MainWindow::build_login_page() {
   login_error_->setProperty("error", true);
   login_error_->setVisible(false);
 
-  form->addRow(QStringLiteral("Server"), server_row);
-  form->addRow(server_hint_);
-  form->addRow(QStringLiteral("Username"), username_);
-  form->addRow(QStringLiteral("Password"), password_);
-  form->addRow(connect_button_);
-  form->addRow(login_error_);
+  card->body()->addLayout(brand);
+  card->body()->addWidget(form);
+  card->body()->addWidget(connect_button_);
+  card->body()->addWidget(login_error_);
 
   auto* centred = new QHBoxLayout();
   centred->addStretch();
-  centred->addWidget(box);
+  centred->addWidget(card);
   centred->addStretch();
   outer->addLayout(centred);
   outer->addStretch();
@@ -491,235 +655,502 @@ void MainWindow::build_login_page() {
 
 void MainWindow::build_home_page() {
   auto* page = new QWidget(pages_);
-  auto* outer = new QVBoxLayout(page);
-  outer->addStretch();
+  auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
 
-  welcome_ = new QLabel(QString{}, page);
-  QFont big = welcome_->font();
-  big.setPointSize(big.pointSize() + 4);
-  welcome_->setFont(big);
-  welcome_->setAlignment(Qt::AlignCenter);
+  home_header_ = new AppHeader(page);
+  home_header_->set_title(QStringLiteral("Rooms"));
 
-  auto* box = new QWidget(page);
-  // Wider than it was, because a list of rooms needs room to be a list. The
-  // page held two buttons and a six character field before, and 420 was
-  // generous for that.
-  box->setMaximumWidth(560);
-  auto* column = new QVBoxLayout(box);
+  // One box for both ways of finding a room. Typing narrows the cards below
+  // to the rooms whose name or code has those letters; a code somebody was
+  // sent goes in the same box, and Enter or the button beside it walks in.
+  // They used to be a table and a separate field, and the field stays in
+  // spirit: a list is how you find a room nobody told you about, a code is
+  // still how somebody hands you one particular room.
+  auto* search = new SearchInput(QStringLiteral("Search rooms or paste a code"), page);
+  search->setMinimumWidth(kSearchMinWidth);
+  search->setMaximumWidth(kSearchMaxWidth);
+  room_id_ = search;
 
-  // Somebody arriving here used to need a code before they could go anywhere:
-  // the only way to learn that a room existed was to be told its six
-  // characters. Rooms outlive their participants now, so there is a list to
-  // show, and this is where it belongs.
-  auto* rooms_label = new QLabel(QStringLiteral("Rooms"), box);
-  QFont label_font = rooms_label->font();
-  label_font.setBold(true);
-  rooms_label->setFont(label_font);
+  join_button_ = new SecondaryButton(QStringLiteral("Join"), page);
+  join_button_->setToolTip(QStringLiteral("Join the room whose code is in the box."));
 
-  // The same column order as the administrator's tab, because both are filled
-  // from the same row: identifier, then name, then how many are inside. The
-  // code is a column rather than something hidden because it is what somebody
-  // reads out to invite a person who is not looking at this list.
-  room_list_ =
-      make_table({QStringLiteral("Room"), QStringLiteral("Name"), QStringLiteral("People")}, box);
-  room_list_->setMinimumHeight(160);
-  // The slack goes to Name rather than to the last column, which is what
-  // make_table does by default. A room name runs to 48 bytes now where it used
-  // to be a six character code, and the default widths cut "Reunião de sexta
-  // às 18h" down to "Reunião de sext..." while People kept room for "3/10",
-  // which is as wide as that column ever gets.
-  room_list_->horizontalHeader()->setStretchLastSection(false);
-  room_list_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-  room_list_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  // The one filled button on this page. Creating and joining are both things
+  // somebody came here to do, but only one of them works without first having
+  // been sent a code, so that is the one the eye should land on.
+  auto* create = new PrimaryButton(QStringLiteral("New room"), page);
+  create->set_leading_icon(Icon::Plus);
+  create_button_ = create;
 
-  // A table with no rows is indistinguishable from a table that failed to
-  // load, so the empty case says which one it is.
-  rooms_empty_ = new QLabel(QStringLiteral("No rooms yet. Create the first one."), box);
-  rooms_empty_->setAlignment(Qt::AlignCenter);
-  rooms_empty_->setProperty("hint", true);
+  home_header_->actions()->addWidget(search);
+  home_header_->actions()->addWidget(join_button_);
+  home_header_->actions()->addSpacing(theme::space::kSm);
+  home_header_->actions()->addWidget(create_button_);
 
-  // Above the button rather than behind it in a dialog. Naming a room is
-  // optional, and a modal that opens on every click would make it feel
-  // required; a field somebody can walk straight past says the opposite.
-  room_name_ = new QLineEdit(box);
-  // Short, because the size box beside it takes a third of the width and the
-  // longer wording was being cut off mid-sentence. The rest is in the tooltip.
-  room_name_->setPlaceholderText(QStringLiteral("Room name (optional)"));
-  room_name_->setToolTip(QStringLiteral("Leave it empty and the room is named after its code."));
-  room_name_->setAlignment(Qt::AlignCenter);
-  room_name_->setMinimumHeight(44);
+  auto* content = new QWidget(page);
+  auto* body = new QVBoxLayout(content);
+  body->setContentsMargins(theme::space::kXl, theme::space::kXl, theme::space::kXl,
+                           theme::space::kLg);
+  body->setSpacing(theme::space::kLg);
+
+  // Three numbers across the top: what there is to walk into, how busy it is,
+  // and whether the server is close enough to be worth walking into anything.
+  // The third is the status bar's indicator said large, on the one page where
+  // "is my connection any good" is the question being asked.
+  stat_rooms_ = new StatCard(QStringLiteral("Open rooms"), content);
+  stat_people_ = new StatCard(QStringLiteral("People in rooms"), content);
+  stat_server_ = new StatCard(QStringLiteral("Server"), content);
+  auto* stats = new QHBoxLayout();
+  stats->setSpacing(theme::space::kLg);
+  stats->addWidget(stat_rooms_, 1);
+  stats->addWidget(stat_people_, 1);
+  stats->addWidget(stat_server_, 1);
+
+  auto* rooms_label = new QLabel(QStringLiteral("ROOMS"), content);
+  rooms_label->setProperty("eyebrow", true);
+
+  // Every room that exists, as a card each, so that arriving here does not
+  // require already knowing a six character code. Rooms outlive their
+  // participants, so there is always a list to show.
+  //
+  // Cards in a grid rather than rows in a table: a room is a place to go and
+  // not a record to read, and the thing to do with one - walk in - is a
+  // button on the card instead of a second act after selecting a row.
+  room_scroll_ = new QScrollArea(content);
+  room_scroll_->setFrameShape(QFrame::NoFrame);
+  room_scroll_->setWidgetResizable(true);
+  room_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto* grid_host = new QWidget(room_scroll_);
+  auto* grid_column = new QVBoxLayout(grid_host);
+  grid_column->setContentsMargins(0, 0, 0, 0);
+  room_grid_ = new QGridLayout();
+  room_grid_->setContentsMargins(0, 0, 0, 0);
+  room_grid_->setSpacing(theme::space::kLg);
+  grid_column->addLayout(room_grid_);
+  // Under the grid, so a single row of cards stays at the top at its own
+  // height instead of being stretched down the page.
+  grid_column->addStretch();
+  room_scroll_->setWidget(grid_host);
+  // To lay the cards out again when the width changes by a whole column.
+  room_scroll_->viewport()->installEventFilter(this);
+
+  // A page with no cards is indistinguishable from a page that failed to
+  // load, so the empty case says which one it is - and offers the way out.
+  rooms_empty_ = new EmptyState(
+      Icon::Rooms, QStringLiteral("No rooms yet"),
+      QStringLiteral("Create the first one. Everybody signed in to this server will see it here."),
+      content);
+  QPushButton* create_first = rooms_empty_->add_action(QStringLiteral("New room"));
+  rooms_empty_->setVisible(false);
+
+  body->addLayout(stats);
+  body->addSpacing(theme::space::kSm);
+  body->addWidget(rooms_label);
+  body->addWidget(room_scroll_, 1);
+  body->addWidget(rooms_empty_, 1);
+
+  column->addWidget(home_header_);
+  column->addWidget(content, 1);
+
+  // The form a room is made from, in a dialog of its own. It used to be two
+  // fields above a button on the page; a name and a size are two answers
+  // nobody needs on screen until they have decided to make a room, and the
+  // page is for finding the ones that exist.
+  //
+  // Built once and kept, because the two fields are read by on_create_room
+  // whenever it runs, and because what it is told - a name already taken -
+  // arrives after the click, while the dialog is still up, and is written
+  // into it. See apply_error.
+  create_dialog_ = new AppDialog(QStringLiteral("New room"), this);
+  create_dialog_->set_description(
+      QStringLiteral("Everybody signed in to this server sees the room and can walk in."));
+  create_dialog_->setMinimumWidth(kCreateDialogWidth);
+  create_form_ = new AppForm(create_dialog_);
+
+  room_name_ = new QLineEdit(create_dialog_);
+  room_name_->setPlaceholderText(QStringLiteral("Named after its code if left empty"));
   // No setMaxLength. Qt counts UTF-16 code units and the server counts UTF-8
   // bytes, so a cap of 48 here would still let "Reunião de sexta" through at
   // one length and refuse it at another. The length is checked on the way out
   // instead, with the same predicate the server uses. See on_create_room.
 
-  // How many people the room will hold, beside the name because both are
-  // answers to "what room do you want" and neither is worth a dialog. The
-  // range is what the protocol accepts; the server may allow less and says so
-  // when asked for more, which is rarer than the box getting in the way.
-  room_capacity_ = new QSpinBox(box);
+  // How many people the room will hold. The range is what the protocol
+  // accepts; the server may allow less and says so when asked for more, which
+  // is rarer than the box getting in the way. Kept at what was last chosen
+  // rather than reset after a creation: the name is cleared because it now
+  // belongs to a room, and a size belongs to nobody.
+  room_capacity_ = new QSpinBox(create_dialog_);
   room_capacity_->setRange(models::kMinRoomCapacity, models::kMaxRoomCapacity);
   room_capacity_->setValue(models::kDefaultRoomCapacity);
   room_capacity_->setSuffix(QStringLiteral(" people"));
-  room_capacity_->setAlignment(Qt::AlignCenter);
-  room_capacity_->setMinimumHeight(44);
   room_capacity_->setToolTip(QStringLiteral("How many people the room holds, you included."));
 
-  auto* room_form = new QHBoxLayout();
-  room_form->setContentsMargins(0, 0, 0, 0);
-  room_form->setSpacing(8);
-  room_form->addWidget(room_name_, 1);
-  room_form->addWidget(room_capacity_);
+  create_form_->add_row(QStringLiteral("Name"), room_name_);
+  create_form_->add_row(QStringLiteral("Size"), room_capacity_);
+  create_dialog_->body()->addWidget(create_form_);
+  create_dialog_->add_secondary(QStringLiteral("Cancel"));
+  QPushButton* confirm = create_dialog_->add_primary(QStringLiteral("Create room"));
+  // Not accepted on the click. The room exists when the server says so, and
+  // until then the dialog stays, so that a refusal has somewhere to be read
+  // and the name is still there to be edited rather than retyped.
+  disconnect(confirm, &QPushButton::clicked, create_dialog_, &QDialog::accept);
+  connect(confirm, &QPushButton::clicked, this, &MainWindow::on_create_room);
 
-  create_button_ = new QPushButton(QStringLiteral("Create room"), box);
-  create_button_->setMinimumHeight(44);
-  // The one filled button on this page. Creating and joining are both things
-  // somebody came here to do, but only one of them works without first having
-  // been sent a code, so that is the one the eye should land on.
-  create_button_->setProperty("accent", true);
-
-  room_id_ = new QLineEdit(box);
-  room_id_->setPlaceholderText(QStringLiteral("Room ID, for example 8F42A1"));
-  room_id_->setAlignment(Qt::AlignCenter);
-  room_id_->setMinimumHeight(44);
-
-  join_button_ = new QPushButton(QStringLiteral("Join room"), box);
-  join_button_->setMinimumHeight(44);
-
-  // Settings is reachable from here and not only from inside a room, so the
-  // microphone and the monitor can be sorted out before there is anybody on
-  // the other end to hear the result. It goes with the
-  // account buttons below rather than with the room ones above: all three are
-  // about this machine or this person, none is what somebody came to this
-  // screen to do.
-  auto* settings = new QPushButton(QStringLiteral("Settings"), box);
-  settings->setMinimumHeight(36);
-
-  // The way back to the login screen, and the reason it exists is the server
-  // field on it. A new address is adopted at the next sign-in, and without a
-  // way to sign out, "the next sign-in" would mean closing and reopening the
-  // program - which is the thing a field for the address was added to avoid.
-  // It is also the only way to hand the machine to somebody else without
-  // doing that.
-  // Next to sign out, and for the same reason it sits at the bottom: both are
-  // about the account rather than about a room, and neither is what somebody
-  // came to this screen to do. Offered to everybody, administrators included -
-  // an administrator changing their own password through the account panel
-  // would be using the tool for managing *other* people on themselves.
-  auto* change_password = new QPushButton(QStringLiteral("Change password"), box);
-  change_password->setMinimumHeight(36);
-
-  auto* sign_out = new QPushButton(QStringLiteral("Sign out"), box);
-  sign_out->setMinimumHeight(36);
-
-  column->addWidget(rooms_label);
-  column->addWidget(room_list_, 1);
-  column->addWidget(rooms_empty_);
-  column->addSpacing(12);
-  column->addLayout(room_form);
-  column->addWidget(create_button_);
-  column->addSpacing(16);
-  // The field stays. A list is how you find a room nobody told you about; a
-  // code is still how somebody hands you one particular room, and that is not
-  // the same errand.
-  column->addWidget(room_id_);
-  column->addWidget(join_button_);
-  column->addSpacing(16);
-  column->addWidget(settings);
-  column->addWidget(change_password);
-  column->addWidget(sign_out);
-
-  auto* centred = new QHBoxLayout();
-  centred->addStretch();
-  centred->addWidget(box);
-  centred->addStretch();
-
-  outer->addWidget(welcome_);
-  outer->addSpacing(24);
-  outer->addLayout(centred);
-  outer->addStretch();
-
-  // Selecting writes the code into the field rather than joining, so that the
-  // row you are reading and the room you are about to enter are the same one
-  // even if the list is refreshed underneath you. Entering is the deliberate
-  // second act: a double click, or the button below.
-  connect(room_list_, &QTableWidget::itemSelectionChanged, this, [this] {
-    const QString id = selected_id(room_list_);
-    if (!id.isEmpty()) {
-      room_id_->setText(id);
-    }
-  });
-  connect(room_list_, &QTableWidget::itemDoubleClicked, this, [this](const QTableWidgetItem* item) {
-    if (item == nullptr) {
-      return;
-    }
-    const QString id = selected_id(room_list_);
-    if (!id.isEmpty()) {
-      room_id_->setText(id);
-      on_join_room();
-    }
-  });
-
-  connect(create_button_, &QPushButton::clicked, this, &MainWindow::on_create_room);
-  // Enter in the name field creates, the way Enter in the code field joins.
-  // Typing a name and then reaching for the mouse is the same interruption
-  // either way round.
-  connect(room_name_, &QLineEdit::returnPressed, this, &MainWindow::on_create_room);
+  const auto open_create = [this] {
+    create_form_->show_error(QString{});
+    create_dialog_->open();
+    room_name_->setFocus();
+  };
+  connect(create_button_, &QPushButton::clicked, this, open_create);
+  connect(create_first, &QPushButton::clicked, this, open_create);
   connect(join_button_, &QPushButton::clicked, this, &MainWindow::on_join_room);
   connect(room_id_, &QLineEdit::returnPressed, this, &MainWindow::on_join_room);
-  connect(settings, &QPushButton::clicked, this, &MainWindow::on_open_settings);
-  connect(change_password, &QPushButton::clicked, this, &MainWindow::on_change_password);
-  connect(sign_out, &QPushButton::clicked, this, &MainWindow::on_sign_out);
+  // Every keystroke narrows the cards. textChanged and not textEdited, so a
+  // code this window writes into the box itself is filtered on too - which is
+  // why the two places that write it and then leave the page do so quietly.
+  connect(room_id_, &QLineEdit::textChanged, this, [this] { rebuild_room_cards(); });
 
   pages_->insertWidget(kHomePage, page);
+}
+
+QWidget* MainWindow::make_room_card(const QString& id, const QString& name, int count,
+                                    int capacity) {
+  auto* card = new Card(room_scroll_->widget());
+  card->setProperty("interactive", true);
+  card->setMinimumWidth(kRoomCardMinWidth);
+  card->body()->setSpacing(theme::space::kMd);
+
+  // A room nobody named carries its own identifier as its name, so showing
+  // both would read "8F42A1 / 8F42A1". The code is the title then, and the
+  // line under it says why.
+  const bool named = !name.isEmpty() && name != id;
+  auto* title = new ElidedLabel(card);
+  title->setText(named ? name : id);
+  theme::set_role(title, theme::TextRole::Title);
+  title->setToolTip(named ? name : id);
+
+  // The code stays visible on a named room: it is what somebody reads out to
+  // invite a person who is not looking at this page.
+  auto* code = new QLabel(named ? id : QStringLiteral("no name"), card);
+  if (named) {
+    code->setProperty("chip", true);
+    code->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  } else {
+    code->setProperty("hint", true);
+  }
+
+  // "3 of 10" rather than "3": how many are in says nothing about whether
+  // there is room for one more, and that is the question somebody reading
+  // this is asking. A server from before rooms had sizes sends none, and the
+  // line is a bare count again rather than "3 of 0".
+  const bool full = capacity > 0 && count >= capacity;
+  QString people = capacity > 0 ? QStringLiteral("%1 of %2").arg(count).arg(capacity)
+                                : QStringLiteral("%1 here").arg(count);
+  if (count == 0) {
+    people += QStringLiteral(" · nobody yet");
+  }
+  auto* occupancy = new QLabel(people, card);
+  theme::set_role(occupancy, theme::TextRole::Caption);
+
+  auto* header = new QHBoxLayout();
+  header->setSpacing(theme::space::kSm);
+  header->addWidget(title, 1);
+  if (full) {
+    // The word, not only the colour: a full bar in amber says nothing to
+    // somebody who cannot tell it from the accent.
+    auto* chip = new QLabel(QStringLiteral("full"), card);
+    chip->setProperty("chip", QStringLiteral("warn"));
+    header->addWidget(chip);
+  }
+
+  auto* meta = new QHBoxLayout();
+  meta->setSpacing(theme::space::kSm);
+  meta->addWidget(code);
+  meta->addStretch();
+  meta->addWidget(occupancy);
+
+  card->body()->addLayout(header);
+  card->body()->addLayout(meta);
+
+  if (capacity > 0) {
+    auto* bar = new QProgressBar(card);
+    bar->setRange(0, capacity);
+    bar->setValue(std::min(count, capacity));
+    bar->setTextVisible(false);
+    bar->setFixedHeight(kOccupancyBarHeight);
+    // The meter's own property: filled in the accent rather than the grey a
+    // resting microphone meter wears. See QProgressBar in ui/theme.cpp.
+    bar->setProperty("speaking", !full);
+    card->body()->addWidget(bar);
+  }
+
+  // Enabled on a full room too. The server is what decides, the list can be a
+  // moment old, and a button that refuses before asking would keep somebody
+  // out of a room a person has just left.
+  auto* join = new SecondaryButton(QStringLiteral("Join"), card);
+  card->body()->addWidget(join);
+  connect(join, &QPushButton::clicked, this, [this, id] { join_room(id); });
+  return card;
+}
+
+void MainWindow::rebuild_room_cards() {
+  // Rebuilt wholesale on every answer and every keystroke, because the answer
+  // is the whole list and merging it into what is on screen would be a second
+  // implementation of the truth. Deleted on the next turn of the loop: one of
+  // these cards may own the button whose click is what got us here.
+  while (QLayoutItem* item = room_grid_->takeAt(0)) {
+    if (QWidget* card = item->widget(); card != nullptr) {
+      card->hide();
+      card->deleteLater();
+    }
+    // The layout hands the item over with takeAt, and nothing else frees it.
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    delete item;
+  }
+
+  const QString wanted = room_id_->text().trimmed();
+  const int spacing = room_grid_->spacing();
+  const int columns =
+      std::clamp((room_scroll_->viewport()->width() + spacing) / (kRoomCardMinWidth + spacing), 1,
+                 kMaxRoomColumns);
+  room_columns_ = columns;
+
+  int shown = 0;
+  for (const QString& row : room_rows_) {
+    // Identifier, identifier, name, "3/10", then the size and the count as
+    // bare numbers. See the on_room_list handler in wire_session.
+    const QStringList fields = row.split(QLatin1Char('\t'));
+    const QString id = fields.value(0);
+    const QString name = fields.value(2);
+    if (!wanted.isEmpty() && !id.contains(wanted, Qt::CaseInsensitive) &&
+        !name.contains(wanted, Qt::CaseInsensitive)) {
+      continue;
+    }
+    QWidget* card = make_room_card(id, name, fields.value(5).toInt(), fields.value(4).toInt());
+    room_grid_->addWidget(card, shown / columns, shown % columns);
+    ++shown;
+  }
+  // Equal shares for the columns in use and none for the rest, or a column
+  // left over from a wider window would go on taking a third of the page with
+  // nothing in it.
+  for (int column = 0; column < kMaxRoomColumns; ++column) {
+    room_grid_->setColumnStretch(column, column < columns ? 1 : 0);
+  }
+
+  // Two kinds of nothing, and they are not the same sentence: a server with
+  // no rooms, and rooms the letters in the box ruled out.
+  const bool none_at_all = room_rows_.isEmpty();
+  if (none_at_all) {
+    rooms_empty_->set_title(QStringLiteral("No rooms yet"));
+    rooms_empty_->set_hint(QStringLiteral(
+        "Create the first one. Everybody signed in to this server will see it here."));
+  } else if (shown == 0) {
+    rooms_empty_->set_title(QStringLiteral("No room matches \"%1\"").arg(wanted));
+    rooms_empty_->set_hint(
+        QStringLiteral("If it is a code somebody sent you, press Join to walk in."));
+  }
+  room_scroll_->setVisible(shown > 0);
+  rooms_empty_->setVisible(shown == 0);
+}
+
+void MainWindow::join_room(const QString& id) {
+  {
+    // Quietly: the box is about to be left behind with the page, and
+    // narrowing the cards to this one room on the way out is a flicker.
+    const QSignalBlocker quiet(room_id_);
+    room_id_->setText(id);
+  }
+  on_join_room();
 }
 
 void MainWindow::build_room_page() {
   auto* page = new QWidget(pages_);
   auto* column = new QVBoxLayout(page);
-  room_column_ = column;
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
 
   // The header and the controls are widgets and not bare layouts, because
   // full screen has to hide them and a layout cannot be hidden. See
   // enter_fullscreen.
-  room_header_ = new QWidget(page);
-  auto* header = new QHBoxLayout(room_header_);
-  header->setContentsMargins(0, 0, 0, 0);
-  room_title_ = new QLabel(QString{}, page);
-  QFont bold = room_title_->font();
-  bold.setBold(true);
-  room_title_->setFont(bold);
-  // The only way to read the room code back out from inside a call. The home
-  // page shows it in a QLineEdit, which a person can select and copy; this is a
-  // QLabel, and a label copies nothing. Inviting somebody is exactly the thing
-  // you do from in here, so the code has to be reachable from in here.
-  copy_room_button_ = new QPushButton(QStringLiteral("Copy"), page);
-  copy_room_button_->setToolTip(QStringLiteral("Copy the room code to the clipboard"));
+  room_header_ = new AppHeader(page);
+
+  // The only way to read the room code back out from inside a call, and it is
+  // a button: inviting somebody is exactly the thing you do from in here, and
+  // a label copies nothing.
+  auto* copy = new SecondaryButton(QString{}, page);
+  copy->set_leading_icon(Icon::Copy);
+  copy->setProperty("code", true);
+  copy->setMinimumHeight(kCodeChipHeight);
+  copy->setToolTip(QStringLiteral("Copy the room code to the clipboard"));
+  copy_room_button_ = copy;
   connect(copy_room_button_, &QPushButton::clicked, this, &MainWindow::on_copy_room_id);
 
-  sharing_label_ = new QLabel(QString{}, page);
-  sharing_label_->setProperty("accent", true);
-  header->addWidget(room_title_);
-  header->addWidget(copy_room_button_);
-  header->addStretch();
-  header->addWidget(sharing_label_);
+  room_people_label_ = new QLabel(QString{}, page);
+  theme::set_role(room_people_label_, theme::TextRole::Caption);
 
-  // Beside the sentence that says who is sharing, because it is about the same
-  // picture. Shown only while somebody else is: see refresh_controls.
-  fullscreen_button_ = new QPushButton(QStringLiteral("Full screen"), page);
+  sharing_label_ = new QLabel(QString{}, page);
+  sharing_label_->setProperty("chip", QStringLiteral("accent"));
+  sharing_label_->setVisible(false);
+
+  // Each at its own height in the middle of the bar. A layout stretches what
+  // it is given to the height of the row unless told otherwise, and a chip
+  // sixty pixels tall is a banner.
+  room_header_->beside_title()->addWidget(copy_room_button_, 0, Qt::AlignVCenter);
+  room_header_->beside_title()->addWidget(room_people_label_, 0, Qt::AlignVCenter);
+  room_header_->actions()->addWidget(sharing_label_, 0, Qt::AlignVCenter);
+
+  // The picture, and over it the controls. The stage has no layout for the
+  // controls: they float, placed by place_dock, so that the picture gets the
+  // whole of the stage rather than the stage minus a strip.
+  room_stage_ = new QWidget(page);
+  auto* stage_layout = new QVBoxLayout(room_stage_);
+  stage_layout->setContentsMargins(0, 0, 0, 0);
+  screen_view_ = new ScreenView(room_stage_);
+  stage_layout->addWidget(screen_view_);
+
+  auto* dock = new FloatingBar(room_stage_);
+  room_controls_ = dock;
+  const auto dock_button = [dock](Icon icon) {
+    auto* button = new IconButton(icon, dock);
+    button->set_variant(IconButton::Variant::Tonal);
+    button->set_extent(kDockButton);
+    button->set_corner_radius(kDockButtonRadius);
+    // The focus by Tab and not by a click. The controls stay up for as long
+    // as the keyboard is among them - see the idle timer below - and a click
+    // that left the focus on the button it pressed made that for ever: press
+    // Mute once while watching a film and the controls never left again.
+    // Somebody who tabs to them still holds them there, which is the case
+    // the rule is for.
+    button->setFocusPolicy(Qt::TabFocus);
+    return button;
+  };
+
+  // What each toggle looks like when it is on. Sharing is the good state and
+  // wears the accent; a muted microphone is a warning and wears amber, so the
+  // two are told apart at a glance and not by reading a label.
+  mute_button_ = dock_button(Icon::Microphone);
+  mute_button_->setCheckable(true);
+  mute_button_->set_checked_icon(Icon::MicrophoneOff);
+  mute_button_->set_checked_tone(IconButton::CheckedTone::Warn);
+
+  share_button_ = dock_button(Icon::Screen);
+  share_button_->setCheckable(true);
+  share_button_->set_label(QStringLiteral("Share screen"));
+
+  // Beside the share button, because it is about the same picture. Shown only
+  // while somebody else is sharing: see refresh_controls.
+  fullscreen_button_ = dock_button(Icon::Fullscreen);
   fullscreen_button_->setToolTip(
       QStringLiteral("Watch the shared screen full screen. Esc, F11 or a double click on the "
                      "picture brings the room back."));
+  fullscreen_button_->setAccessibleName(QStringLiteral("Full screen"));
   fullscreen_button_->setVisible(false);
-  header->addWidget(fullscreen_button_);
 
-  screen_view_ = new ScreenView(page);
+  network_status_button_ = dock_button(Icon::Signal);
+  network_status_button_->setToolTip(
+      QStringLiteral("Network status: what the call is carrying, the three measurements behind "
+                     "the network indicator in the status bar, and how much audio had to be "
+                     "concealed."));
+  network_status_button_->setAccessibleName(QStringLiteral("Network status"));
 
-  auto* people = new QGroupBox(QStringLiteral("Participants"), page);
+  // Apart from the rest, behind a rule, and the only one in red: it is the
+  // one control here that ends something.
+  auto* rule = new QFrame(dock);
+  rule->setObjectName(QStringLiteral("rule"));
+  rule->setFixedSize(1, kDockButton - theme::space::kLg);
+
+  leave_button_ = dock_button(Icon::Leave);
+  leave_button_->set_variant(IconButton::Variant::Danger);
+  leave_button_->set_label(QStringLiteral("Leave"));
+
+  dock->row()->addWidget(mute_button_);
+  dock->row()->addWidget(share_button_);
+  dock->row()->addWidget(fullscreen_button_);
+  dock->row()->addWidget(network_status_button_);
+  dock->row()->addWidget(rule);
+  dock->row()->addWidget(leave_button_);
+
+  // The controls get out of the way of a picture somebody is watching: three
+  // seconds without the pointer moving over the stage and they slide down out
+  // of it, and the first movement brings them back. Only while there is a
+  // picture - with nothing shared they have nothing to be in the way of.
+  dock_idle_ = new QTimer(this);
+  dock_idle_->setSingleShot(true);
+  dock_idle_->setInterval(kDockIdleMs);
+  connect(dock_idle_, &QTimer::timeout, this, [this] {
+    // Not from under the pointer, and not from under the keyboard: a control
+    // that leaves while it is being aimed at is a control that dodges.
+    const QWidget* focused = QApplication::focusWidget();
+    const bool in_use = room_controls_->underMouse() ||
+                        (focused != nullptr && room_controls_->isAncestorOf(focused));
+    if (in_use) {
+      dock_idle_->start();
+      return;
+    }
+    set_dock_shown(false);
+  });
+  dock_slide_ = new QPropertyAnimation(room_controls_, "pos", this);
+  // The stage tells us when it is resized and when the pointer moves over it;
+  // the picture has to be asked for moves made with no button down.
+  screen_view_->setMouseTracking(true);
+  room_stage_->installEventFilter(this);
+  screen_view_->installEventFilter(this);
+  room_controls_->installEventFilter(this);
+
+  // The side panel: who is here and what is being said, on one card.
+  auto* side = new Card(page);
+  room_sidebar_ = side;
+  side->body()->setContentsMargins(0, 0, 0, 0);
+  side->body()->setSpacing(0);
+
+  // Two tabs rather than two boxes one above the other. Stacked, the list of
+  // people was capped at 180 pixels to leave the conversation any room, and
+  // the conversation still got what was left; a tab each gives both the whole
+  // height. What must not disappear behind a tab is who is talking - so the
+  // faces stay above both, with a ring round whoever is speaking.
+  side_tabs_ = new QTabBar(side);
+  side_tabs_->setDrawBase(false);
+  side_tabs_->setExpanding(true);
+  side_tabs_->addTab(QStringLiteral("People"));
+  side_tabs_->addTab(QStringLiteral("Chat"));
+  auto* tabs_row = new QHBoxLayout();
+  tabs_row->setContentsMargins(theme::space::kSm, theme::space::kSm, theme::space::kXs, 0);
+  tabs_row->addWidget(side_tabs_);
+
+  auto* faces = new QWidget(side);
+  avatar_strip_ = new QHBoxLayout(faces);
+  avatar_strip_->setContentsMargins(theme::space::kMd, theme::space::kSm, theme::space::kMd,
+                                    theme::space::kXs);
+  avatar_strip_->setSpacing(theme::space::kXs);
+  avatar_strip_->addStretch();
+
+  // Our own microphone, under the faces and on both tabs: "am I being heard"
+  // is asked from the conversation as often as from the list.
+  microphone_level_ = new QProgressBar(side);
+  microphone_level_->setRange(0, kMeterSteps);
+  microphone_level_->setTextVisible(false);
+  microphone_level_->setFixedHeight(kMeterHeight);
+  microphone_level_->setToolTip(QStringLiteral("Your microphone"));
+  auto* meter_row = new QHBoxLayout();
+  meter_row->setContentsMargins(theme::space::kMd, 0, theme::space::kMd, theme::space::kMd);
+  meter_row->addWidget(microphone_level_);
+
+  const auto make_rule = [side] {
+    auto* line = new QFrame(side);
+    line->setObjectName(QStringLiteral("rule"));
+    line->setFixedHeight(1);
+    return line;
+  };
+
+  auto* people = new QWidget(side);
   auto* people_column = new QVBoxLayout(people);
+  people_column->setContentsMargins(theme::space::kSm, theme::space::kSm, theme::space::kSm,
+                                    theme::space::kMd);
+  people_column->setSpacing(theme::space::kSm);
   participants_ = new QListWidget(people);
+  participants_->setProperty("flat", true);
   participants_->setMinimumHeight(120);
-  participants_->setMaximumHeight(180);
   // The name and, beside it, an icon for each thing known about them:
   // microphone, muted, sharing. Words used to follow the name and read like a
   // log line; the icons say the same at a glance and leave the words to the
@@ -729,17 +1160,13 @@ void MainWindow::build_room_page() {
   // administrator, so there is nothing to enable or disable here.
   participants_->setContextMenuPolicy(Qt::CustomContextMenu);
 
-  microphone_level_ = new QProgressBar(people);
-  microphone_level_->setRange(0, kMeterSteps);
-  microphone_level_->setTextVisible(false);
-  microphone_level_->setFixedHeight(8);
-
-  // Stacked and not side by side. The label is a sentence and the sidebar is
-  // 240 pixels wide at its narrowest, so sharing a row left the slider about
+  // Stacked and not side by side. The label is a sentence and the panel is
+  // 260 pixels wide at its narrowest, so sharing a row left the slider about
   // ninety of them: a control too small to aim at, beside a sentence too long
   // to finish.
   auto* volume_column = new QVBoxLayout();
-  volume_column->setSpacing(4);
+  volume_column->setContentsMargins(theme::space::kXs, 0, theme::space::kXs, 0);
+  volume_column->setSpacing(theme::space::kXs);
   volume_label_ = new QLabel(QStringLiteral("Volume: select a participant"), people);
   volume_label_->setProperty("hint", true);
   volume_ = new QSlider(Qt::Horizontal, people);
@@ -750,13 +1177,15 @@ void MainWindow::build_room_page() {
   volume_column->addWidget(volume_label_);
   volume_column->addWidget(volume_);
 
-  people_column->addWidget(microphone_level_);
-  people_column->addWidget(participants_);
+  people_column->addWidget(participants_, 1);
   people_column->addLayout(volume_column);
 
-  auto* chat = new QGroupBox(QStringLiteral("Chat"), page);
+  auto* chat = new QWidget(side);
   auto* chat_column = new QVBoxLayout(chat);
+  chat_column->setContentsMargins(0, 0, 0, 0);
+  chat_column->setSpacing(0);
   chat_view_ = new ChatView(chat);
+  chat_view_->setProperty("flat", true);
   // A message is a paragraph rather than a cell, and a long one has to be
   // readable without a horizontal scrollbar under it. The wrapping itself is
   // ChatView's delegate, not setWordWrap: a view that draws its own rows does
@@ -768,8 +1197,12 @@ void MainWindow::build_room_page() {
   chat_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
   auto* chat_row = new QHBoxLayout();
+  chat_row->setContentsMargins(theme::space::kSm, theme::space::kSm, theme::space::kSm,
+                               theme::space::kSm);
+  chat_row->setSpacing(theme::space::kXs);
   chat_input_ = new QLineEdit(chat);
   chat_input_->setPlaceholderText(QStringLiteral("Message"));
+  chat_input_->setMinimumHeight(kChatRowHeight);
   // A coarse guard and not the rule. The limit is bytes, and this counts
   // characters, so a line of accented text can still be refused by the server
   // at a length this field allowed. It is here to stop a paste of a whole
@@ -777,122 +1210,99 @@ void MainWindow::build_room_page() {
   // limit, and what it answers reaches the same place every other error does.
   chat_input_->setMaxLength(static_cast<int>(models::kMaxChatTextBytes));
 
-  chat_emoji_ = new QPushButton(QStringLiteral("🙂"), chat);
-  chat_emoji_->setToolTip(QStringLiteral("Insert an emoji"));
-  // Narrow, because it sits in a sidebar that is 240 pixels wide at its
-  // narrowest and every pixel it takes is one the message field does not get;
-  // and as tall as the row, which a button is not by default. A QPushButton's
-  // vertical policy is Fixed, so the row's height went to the field and the
-  // Send button while this one kept its own, and the three sat on the same
-  // line at two different heights. Preferred lets the layout stretch it.
-  chat_emoji_->setFixedWidth(kEmojiButtonWidth);
-  chat_emoji_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-  chat_emoji_->setCursor(Qt::PointingHandCursor);
-  // The stylesheet draws it quiet - no border until the pointer is on it, no
-  // padding, the glyph at a size an emoji needs to read as a face - under
-  // `QPushButton[emoji="true"]`. See ui/theme.cpp.
-  chat_emoji_->setProperty("emoji", true);
+  // Opens a short curated grid. The system picker, which every platform has,
+  // covers everything this one leaves out and works in the same field.
+  auto* emoji = new IconButton(Icon::Smile, chat);
+  emoji->set_extent(kChatRowHeight);
+  emoji->setToolTip(QStringLiteral("Insert an emoji"));
+  emoji->setAccessibleName(QStringLiteral("Insert an emoji"));
+  chat_emoji_ = emoji;
 
-  chat_send_ = new QPushButton(QStringLiteral("Send"), chat);
-  chat_send_->setProperty("accent", true);
+  auto* send = new IconButton(Icon::Send, chat);
+  send->set_variant(IconButton::Variant::Accent);
+  send->set_extent(kChatRowHeight);
+  send->setToolTip(QStringLiteral("Send"));
+  send->setAccessibleName(QStringLiteral("Send"));
+  chat_send_ = send;
+
   chat_row->addWidget(chat_input_, 1);
   chat_row->addWidget(chat_emoji_);
   chat_row->addWidget(chat_send_);
 
   chat_column->addWidget(chat_view_, 1);
+  chat_column->addWidget(make_rule());
   chat_column->addLayout(chat_row);
+
+  side_pages_ = new QStackedWidget(side);
+  side_pages_->addWidget(people);
+  side_pages_->addWidget(chat);
+
+  side->body()->addLayout(tabs_row);
+  side->body()->addWidget(faces);
+  side->body()->addLayout(meter_row);
+  side->body()->addWidget(make_rule());
+  side->body()->addWidget(side_pages_, 1);
+
+  // The conversation is what the panel opens on: the faces above it already
+  // say who is here, and the list is one click away.
+  side_tabs_->setCurrentIndex(kChatTab);
+  side_pages_->setCurrentIndex(kChatTab);
+  connect(side_tabs_, &QTabBar::currentChanged, this, [this](int tab) {
+    side_pages_->setCurrentIndex(tab);
+    if (tab == kChatTab) {
+      // Read, as far as this window can tell.
+      unread_chat_ = 0;
+      refresh_side_tabs();
+    }
+  });
 
   // A splitter and not a fixed division, because how much room the conversation
   // deserves is not something this code knows. Somebody reading a long paste
   // wants it wide; somebody watching a screen share wants it out of the way.
-  //
-  // It also fixes a real problem with the fixed version: the sidebar was capped
-  // at 320, so the message field stayed about 150 pixels wide no matter how
-  // large the window got.
-  auto* sidebar_widget = new QWidget(page);
-  auto* sidebar = new QVBoxLayout(sidebar_widget);
-  sidebar->setContentsMargins(0, 0, 0, 0);
-  sidebar->addWidget(people);
-  sidebar->addWidget(chat, 1);
-
   auto* body = new QSplitter(Qt::Horizontal, page);
-  body->addWidget(screen_view_);
-  body->addWidget(sidebar_widget);
-  // Kept, because full screen hides the sidebar and puts it back, and puts the
+  body->addWidget(room_stage_);
+  body->addWidget(side);
+  // Kept, because full screen hides the panel and puts it back, and puts the
   // handle back where the person had dragged it.
   room_body_ = body;
-  room_sidebar_ = sidebar_widget;
 
   // Neither side may be dragged out of existence. A collapsed pane leaves a
   // handle at the very edge of the window as the only way back, which is a
-  // thing to discover rather than a thing to see, and collapsing the sidebar
+  // thing to discover rather than a thing to see, and collapsing the panel
   // takes the participants and the chat with it.
   body->setChildrenCollapsible(false);
-  screen_view_->setMinimumWidth(320);
-  sidebar_widget->setMinimumWidth(240);
+  room_stage_->setMinimumWidth(320);
+  side->setMinimumWidth(kSidePanelMinWidth);
 
-  // Growing the window widens the screen, not the sidebar: the sidebar holds
+  // Growing the window widens the screen, not the panel: the panel holds
   // names and lines of text, and neither reads better for being stretched.
   // Dragging still overrides this, which is the point of the splitter.
   body->setStretchFactor(0, 1);
   body->setStretchFactor(1, 0);
-  body->setSizes({640, 300});
+  body->setSizes({720, 300});
 
-  room_controls_ = new QWidget(page);
-  auto* controls = new QHBoxLayout(room_controls_);
-  controls->setContentsMargins(0, 0, 0, 0);
-  mute_button_ = new QPushButton(QStringLiteral("Mute microphone"), page);
-  mute_button_->setCheckable(true);
-  share_button_ = new QPushButton(QStringLiteral("Share screen"), page);
-  share_button_->setCheckable(true);
-  settings_button_ = new QPushButton(QStringLiteral("Settings"), page);
-  network_status_button_ = new QPushButton(QStringLiteral("Network status"), page);
-  network_status_button_->setToolTip(
-      QStringLiteral("What the call is carrying, the three measurements behind the network "
-                     "indicator in the status bar, and how much audio had to be concealed."));
-  // Accounts, rooms, restrictions and the audit log, reached from inside the
-  // call: what an administrator reaches for is nearly always about somebody
-  // who is in the room with them at that moment. Hidden rather than disabled
-  // from everybody else - a greyed out button that most people can never use
-  // is a permanent reminder of a feature that is not theirs.
-  admin_button_ = new QPushButton(QStringLiteral("Admin"), page);
-  admin_button_->setToolTip(
-      QStringLiteral("Accounts, rooms, restrictions and the audit log. The call carries on "
-                     "behind it."));
-  admin_button_->setVisible(false);
-  leave_button_ = new QPushButton(QStringLiteral("Leave"), page);
-  for (QPushButton* button : {mute_button_, share_button_, settings_button_, network_status_button_,
-                              admin_button_, leave_button_}) {
-    button->setMinimumHeight(38);
-  }
-  // What each toggle looks like when it is on. Sharing is the good state and
-  // wears the accent; a muted microphone is a warning and wears amber.
-  share_button_->setProperty("toggle", QStringLiteral("accent"));
-  mute_button_->setProperty("toggle", QStringLiteral("warn"));
-  leave_button_->setProperty("danger", true);
-  controls->addWidget(mute_button_);
-  controls->addWidget(share_button_);
-  controls->addWidget(settings_button_);
-  controls->addWidget(network_status_button_);
-  controls->addWidget(admin_button_);
-  controls->addStretch();
-  controls->addWidget(leave_button_);
+  // The margin round the picture and the panel lives on a layout of its own,
+  // because full screen takes it away and puts it back. See enter_fullscreen.
+  auto* body_holder = new QWidget(page);
+  room_column_ = new QVBoxLayout(body_holder);
+  room_column_->setContentsMargins(theme::space::kMd, theme::space::kMd, theme::space::kMd,
+                                   theme::space::kXs);
+  room_column_->addWidget(body);
 
   column->addWidget(room_header_);
-  column->addWidget(body, 1);
-  column->addWidget(room_controls_);
+  column->addWidget(body_holder, 1);
 
   connect(participants_, &QListWidget::customContextMenuRequested, this,
           &MainWindow::on_participant_menu);
-  connect(chat_send_, &QPushButton::clicked, this, &MainWindow::on_send_chat);
-  connect(chat_emoji_, &QPushButton::clicked, this, &MainWindow::on_open_emoji_picker);
+  connect(chat_send_, &QAbstractButton::clicked, this, &MainWindow::on_send_chat);
+  connect(chat_emoji_, &QAbstractButton::clicked, this, &MainWindow::on_open_emoji_picker);
   // Return sends, which is what everybody expects of a field next to a Send
   // button and what nobody wants to reach for the mouse for.
   connect(chat_input_, &QLineEdit::returnPressed, this, &MainWindow::on_send_chat);
   // `toggled` and not `clicked`, for the two checkable buttons only.
   //
-  // Qt gives a checkable QPushButton the accessibility role of a check box,
-  // and a check box answers the platform's press action with
+  // Qt gives a checkable button the accessibility role of a check box, and a
+  // check box answers the platform's press action with
   // QAbstractButton::toggle(). That sets the checked state and emits
   // `toggled`; it never emits `clicked`. So a person driving this window with
   // VoiceOver could press "Share screen", watch it light up, and share
@@ -901,9 +1311,9 @@ void MainWindow::build_room_page() {
   // The cost of listening to `toggled` is that refresh_controls() also sets
   // these states, and that would come straight back here as a fresh command.
   // The two setChecked calls there are blocked for exactly that reason.
-  connect(mute_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_mute);
-  connect(share_button_, &QPushButton::toggled, this, &MainWindow::on_toggle_share);
-  connect(fullscreen_button_, &QPushButton::clicked, this, &MainWindow::on_toggle_fullscreen);
+  connect(mute_button_, &QAbstractButton::toggled, this, &MainWindow::on_toggle_mute);
+  connect(share_button_, &QAbstractButton::toggled, this, &MainWindow::on_toggle_share);
+  connect(fullscreen_button_, &QAbstractButton::clicked, this, &MainWindow::on_toggle_fullscreen);
   // A double click on the picture, which is what every video player has
   // taught a hand to do. Both ways: in full screen there is nothing else on
   // the screen to click.
@@ -932,15 +1342,152 @@ void MainWindow::build_room_page() {
   shake_timer_ = new QTimer(this);
   shake_timer_->setInterval(kShakeFrameMs);
   connect(shake_timer_, &QTimer::timeout, this, &MainWindow::animate_shake);
-  connect(settings_button_, &QPushButton::clicked, this, &MainWindow::on_open_settings);
-  connect(network_status_button_, &QPushButton::clicked, this, &MainWindow::on_open_metrics);
-  connect(admin_button_, &QPushButton::clicked, this, &MainWindow::on_open_administration);
-  connect(leave_button_, &QPushButton::clicked, this, &MainWindow::on_leave_room);
+  connect(network_status_button_, &QAbstractButton::clicked, this, &MainWindow::on_open_metrics);
+  connect(leave_button_, &QAbstractButton::clicked, this, &MainWindow::on_leave_room);
   connect(participants_, &QListWidget::itemSelectionChanged, this,
           &MainWindow::on_participant_selected);
   connect(volume_, &QSlider::valueChanged, this, &MainWindow::on_volume_changed);
 
   pages_->insertWidget(kRoomPage, page);
+}
+
+void MainWindow::place_dock(bool animated) {
+  if (room_controls_ == nullptr || room_stage_ == nullptr) {
+    return;
+  }
+  // Its own size first: a label changing - "Share screen" to "Stop sharing" -
+  // or a button appearing changes how wide the bar is.
+  room_controls_->adjustSize();
+  const int left = (room_stage_->width() - room_controls_->width()) / 2;
+  // Resting a little above the bottom edge, or just below it and out of
+  // sight. The stage clips its children, so "below" is simply not drawn.
+  const int rest = room_stage_->height() - room_controls_->height() - kDockLift;
+  const QPoint target(left, dock_shown_ ? rest : room_stage_->height());
+
+  dock_slide_->stop();
+  const int duration = animated ? theme::motion::duration(theme::motion::kBaseMs) : 0;
+  if (duration == 0 || !room_controls_->isVisible()) {
+    room_controls_->move(target);
+    return;
+  }
+  dock_slide_->setDuration(duration);
+  // Arriving slows down and leaving speeds up: the two read as one movement
+  // run in both directions.
+  dock_slide_->setEasingCurve(dock_shown_ ? QEasingCurve::OutCubic : QEasingCurve::InCubic);
+  dock_slide_->setStartValue(room_controls_->pos());
+  dock_slide_->setEndValue(target);
+  dock_slide_->start();
+}
+
+void MainWindow::set_dock_shown(bool shown) {
+  if (dock_shown_ == shown) {
+    return;
+  }
+  dock_shown_ = shown;
+  room_controls_->raise();
+  place_dock(true);
+}
+
+void MainWindow::wake_dock() {
+  set_dock_shown(true);
+  // Only a picture is worth hiding the controls for. With nothing shared the
+  // stage is a sentence on a dark card, and controls that left it would be
+  // controls somebody had to go looking for with nothing gained.
+  if (watching_share()) {
+    dock_idle_->start();
+  } else {
+    dock_idle_->stop();
+  }
+}
+
+bool MainWindow::watching_share() const {
+  const std::string sharer = session_.screen_sharer();
+  return state_ == client::app::CallSession::State::InCall && !sharer.empty() &&
+         sharer != session_.local_user().id;
+}
+
+void MainWindow::notify(ToastKind kind, const QString& text) {
+  // Over a picture only when the picture is what is on screen. A share goes
+  // on behind the administration panel too, and a notification raised there
+  // lands on a page of tables, where waiting to be dismissed costs nothing.
+  const bool over_picture = watching_share() && pages_->currentIndex() == kRoomPage;
+  toasts_->show_toast(kind, text, over_picture);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == room_stage_ && event->type() == QEvent::Resize) {
+    place_dock(false);
+  } else if (watched == room_stage_ || watched == screen_view_ || watched == room_controls_) {
+    const QEvent::Type type = event->type();
+    if (type == QEvent::MouseMove || type == QEvent::Enter || type == QEvent::MouseButtonPress) {
+      wake_dock();
+    }
+  } else if (room_scroll_ != nullptr && watched == room_scroll_->viewport() &&
+             event->type() == QEvent::Resize) {
+    // Laid out again only when the width has changed by a whole column:
+    // every pixel of a drag would otherwise rebuild every card.
+    const int spacing = room_grid_->spacing();
+    const int columns =
+        std::clamp((room_scroll_->viewport()->width() + spacing) / (kRoomCardMinWidth + spacing), 1,
+                   kMaxRoomColumns);
+    if (columns != room_columns_) {
+      rebuild_room_cards();
+    }
+  }
+  return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::refresh_side_tabs() {
+  // Written only when it differs from what the tab already says. This is
+  // called for every list of participants, which arrives several times a
+  // second with the levels in it, and QTabBar lays itself out and repaints
+  // for every setTabText - the same text included.
+  const auto write = [this](int tab, const QString& text) {
+    if (side_tabs_->tabText(tab) != text) {
+      side_tabs_->setTabText(tab, text);
+    }
+  };
+  const int people = participants_->count();
+  write(kPeopleTab,
+        people > 0 ? QStringLiteral("People · %1").arg(people) : QStringLiteral("People"));
+  // How many lines arrived while the list was what was being looked at. A
+  // number and not a dot: the tab is text, and "Chat · 3" needs no legend.
+  write(kChatTab,
+        unread_chat_ > 0 ? QStringLiteral("Chat · %1").arg(unread_chat_) : QStringLiteral("Chat"));
+}
+
+void MainWindow::on_account_menu() {
+  const models::User user = session_.local_user();
+  const bool in_call = state_ == client::app::CallSession::State::InCall;
+
+  QMenu menu(this);
+  menu.setToolTipsVisible(true);
+  // Who this is, first and not clickable: the badge on the rail is one
+  // letter, and this is where the rest of the name is.
+  QAction* who = menu.addAction(
+      QString::fromStdString(user.display_name.empty() ? user.id : user.display_name));
+  who->setEnabled(false);
+  menu.addSeparator();
+
+  // Both end the session - a changed password revokes it - and doing that
+  // from inside a call would drop the call as a side effect of a
+  // settings-shaped action. Leaving the room first is one click, and it is
+  // the click that says the call is meant to end.
+  QAction* change = menu.addAction(QStringLiteral("Change password"));
+  QAction* sign_out = menu.addAction(QStringLiteral("Sign out"));
+  for (QAction* action : {change, sign_out}) {
+    action->setEnabled(!in_call);
+    action->setToolTip(in_call ? QStringLiteral("Leave the room first.") : QString());
+  }
+  connect(change, &QAction::triggered, this, &MainWindow::on_change_password);
+  connect(sign_out, &QAction::triggered, this, &MainWindow::on_sign_out);
+
+  // To the right of the badge and growing upwards from its foot: the badge
+  // is in the bottom left corner of the window, and a menu opened at its own
+  // corner would cover it.
+  const QPoint corner = account_avatar_->mapToGlobal(
+      QPoint(account_avatar_->width() + theme::space::kSm, account_avatar_->height()));
+  menu.exec(QPoint(corner.x(), corner.y() - menu.sizeHint().height()));
 }
 
 void MainWindow::wire_session() {
@@ -1315,9 +1862,13 @@ void MainWindow::wire_session() {
                 by_name = QString::fromStdString(participant.user.display_name);
               }
             }
+            // Whether the administrator is the person at this window. By
+            // identifier and not by the name resolved above: two accounts are
+            // free to carry the same display name.
+            const bool by_us = by_user_id == session_.local_user().id;
             QMetaObject::invokeMethod(this, "apply_forced_mute", Qt::QueuedConnection,
                                       Q_ARG(QString, name), Q_ARG(QString, by_name),
-                                      Q_ARG(bool, muted));
+                                      Q_ARG(bool, muted), Q_ARG(bool, by_us));
           },
       .on_restrictions_changed =
           [this](const std::string& user_id, const models::Restrictions& restrictions,
@@ -1338,11 +1889,13 @@ void MainWindow::wire_session() {
               }
             }
             const bool is_us = user_id == session_.local_user().id;
+            const bool by_us = by_user_id == session_.local_user().id;
             QMetaObject::invokeMethod(
                 this, "apply_restrictions", Qt::QueuedConnection, Q_ARG(QString, name),
                 Q_ARG(QString, by_name),
                 Q_ARG(QString, QString::fromStdString(models::describe(restrictions))),
-                Q_ARG(QString, QString::fromStdString(reason)), Q_ARG(bool, is_us));
+                Q_ARG(QString, QString::fromStdString(reason)), Q_ARG(bool, is_us),
+                Q_ARG(bool, by_us));
           },
   });
 
@@ -1482,6 +2035,12 @@ void MainWindow::return_to_login(const QString& text) {
   // has said it by the time this runs.
   session_.disconnect();
 
+  // Nor do the notifications of the session that just ended. Some of them
+  // wait to be dismissed - an administrator's "restricted Carla" - and left
+  // up they would be the first thing the next person at this machine reads,
+  // over the sign-in card, about a room they were never in.
+  toasts_->dismiss_all();
+
   // The password does not stay in the field for whoever sits down next. The
   // username does, because signing back in as yourself is the ordinary case
   // and a server address that has just been changed is the other one.
@@ -1602,7 +2161,7 @@ void MainWindow::on_leave_room() {
                 QString::fromStdString(left.error().message));
   }
   screen_view_->set_receiving(false);
-  sharing_label_->clear();
+  set_sharing_text(QString{});
   // The conversation belongs to the room that was just left. Leaving it on
   // screen would put one room's messages above the next room's history.
   chat_view_->clear();
@@ -1858,10 +2417,11 @@ void MainWindow::on_copy_room_id() {
   }
   QGuiApplication::clipboard()->setText(room);
 
-  // The status bar rather than the button, for the same reason the mute notice
-  // goes there: a button that renames itself moves what is beside it, and the
-  // status bar is already where this application says what just happened.
-  status_->setText(QStringLiteral("Room code %1 copied").arg(room));
+  // A notification rather than the button changing its own text: a button
+  // that renames itself moves what is beside it. It used to be a line in the
+  // status bar, which stayed there saying "copied" until the state of the
+  // call next changed - long after it had stopped being news.
+  notify(ToastKind::Success, QStringLiteral("Room code %1 copied").arg(room));
 }
 
 void MainWindow::on_participant_selected() {
@@ -1943,10 +2503,14 @@ void MainWindow::apply_state(int state, const QString& detail) {
     show_login_error(describe(QString{}, detail));
   }
 
-  welcome_->setText(
-      user.display_name.empty()
-          ? QStringLiteral("PartyShare")
-          : QStringLiteral("Hello, %1").arg(QString::fromStdString(user.display_name)));
+  const QString name = QString::fromStdString(user.display_name);
+  home_header_->set_subtitle(name.isEmpty() ? QString{} : QStringLiteral("Hello, %1").arg(name));
+  // The badge on the rail is the same person. The identifier when the account
+  // has no name of its own, which is still a better letter than none.
+  account_avatar_->set_name(name.isEmpty() ? QString::fromStdString(user.id) : name);
+  account_avatar_->setToolTip(
+      QStringLiteral("Account: %1").arg(name.isEmpty() ? QString::fromStdString(user.id) : name));
+  account_avatar_->setAccessibleName(QStringLiteral("Account"));
 
   // Again here, and not only where the button was pressed. The metrics arrive
   // through a queued call, so one measured a moment before the call ended can
@@ -1984,10 +2548,18 @@ void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
   // as before it.
   refresh_room_title();
 
-  fill(room_list_, rows);
-  const bool empty = rows.isEmpty();
-  room_list_->setVisible(!empty);
-  rooms_empty_->setVisible(empty);
+  room_rows_ = rows;
+  rebuild_room_cards();
+
+  // The two numbers over the cards, from the same answer: how many rooms
+  // there are, and how many people are in them altogether. The count is the
+  // sixth field, a bare number; see the on_room_list handler.
+  int people = 0;
+  for (const QString& row : rows) {
+    people += row.section(QLatin1Char('\t'), 5, 5).toInt();
+  }
+  stat_rooms_->set_value(QString::number(rows.size()));
+  stat_people_->set_value(QString::number(people));
 
   // Disabled rather than left to be refused on the click. The server answers
   // room_limit_reached either way, and a button that always fails is a worse
@@ -1999,7 +2571,7 @@ void MainWindow::apply_room_list(const QStringList& rows, bool may_create) {
                                                   "to close it before you can make another."));
 }
 
-void MainWindow::announce_update(const QString& version, const QUrl& page) {
+void MainWindow::announce_update(const QString& version, const QUrl& page, const QUrl& installer) {
   // The whole line is rebuilt rather than appended to, so that a second and
   // newer release arriving while this window is open replaces the first rather
   // than queueing behind it.
@@ -2023,6 +2595,75 @@ void MainWindow::announce_update(const QString& version, const QUrl& page) {
   version_->setOpenExternalLinks(true);
   version_->setToolTip(QStringLiteral("Running PartyShare %1. Version %2 has been published: %3")
                            .arg(QStringLiteral(DV_VERSION), version, page.toString()));
+
+  // And the question. A newer release arriving while the one before it is
+  // still being asked about takes its place: two dialogs about two versions
+  // is one more than anybody can answer.
+  if (update_dialog_ != nullptr) {
+    update_dialog_->reject();
+  }
+  update_version_ = version;
+  update_page_ = page;
+  update_installer_ = installer;
+  update_pending_ = true;
+
+  if (pages_->currentIndex() == kRoomPage) {
+    // In a call the question waits, and this says that it is waiting: a line
+    // that goes away on its own, where the dialog would have had to be
+    // answered by somebody who is talking.
+    notify(ToastKind::Info,
+           QStringLiteral("PartyShare %1 is available. You will be asked about it when you "
+                          "leave the room.")
+               .arg(version));
+    return;
+  }
+  offer_update();
+}
+
+void MainWindow::offer_update() {
+  if (!update_pending_ || pages_->currentIndex() == kRoomPage) {
+    return;
+  }
+  // Somebody is in the middle of another dialog - the settings, a new room, a
+  // new password. A second modal window over the first leaves two things
+  // waiting for an answer and only one of them reachable, so this one comes
+  // back when the first has been dealt with.
+  if (QApplication::activeModalWidget() != nullptr) {
+    QTimer::singleShot(kUpdateRetryMs, this, &MainWindow::offer_update);
+    return;
+  }
+  update_pending_ = false;
+
+  const bool direct = update_installer_.isValid();
+  const QUrl target = direct ? update_installer_ : update_page_;
+
+  auto* dialog = new UpdateDialog(update_version_, QStringLiteral(DV_VERSION), direct, this);
+  // Answered once and then gone: the next release builds its own.
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  connect(dialog, &QDialog::accepted, this, [this, target, direct] {
+    // The platform's "open this" on an address ui::UpdateChecker has already
+    // refused unless it is https on github.com. For the installer that is the
+    // browser starting a download; this program fetches nothing and runs
+    // nothing, and the file is the person's to open.
+    if (!QDesktopServices::openUrl(target)) {
+      notify(ToastKind::Error,
+             QStringLiteral("The browser could not be opened. The link in the status bar leads "
+                            "to the same release."));
+      return;
+    }
+    if (direct) {
+      // The one thing the installer needs and cannot say before it is run:
+      // it replaces the files this window is running from.
+      notify(ToastKind::Info,
+             QStringLiteral("The installer is downloading in your browser. Close PartyShare "
+                            "before you run it."));
+    }
+  });
+  update_dialog_ = dialog;
+  // open() and not exec(): this is reached from a network reply and from a
+  // timer, and a second event loop started inside either would run the call
+  // underneath it from within a slot that has not returned.
+  dialog->open();
 }
 
 void MainWindow::apply_participants(const QStringList& names) {
@@ -2113,6 +2754,75 @@ void MainWindow::apply_participants(const QStringList& names) {
   // not heard about any of it. This is also what clears them when whoever was
   // selected has left the room.
   on_participant_selected();
+
+  refresh_faces(names);
+  refresh_side_tabs();
+}
+
+void MainWindow::refresh_faces(const QStringList& entries) {
+  // Updated in place rather than rebuilt. This list arrives several times a
+  // second while somebody is speaking - it carries the levels - and tearing
+  // down and making a row of widgets at that rate is a flicker and a cost for
+  // what is, nearly every time, one ring moving.
+  QSet<QString> present;
+  int placed = 0;
+  int overflow = 0;
+  for (const QString& entry : entries) {
+    const QStringList parts = entry.split(QLatin1Char('\t'));
+    const QString id = parts.value(0);
+    const QString name = parts.value(1);
+    const int state = parts.value(2).toInt();
+    if (placed >= kMaxFaces) {
+      ++overflow;
+      continue;
+    }
+    present.insert(id);
+
+    Avatar* face = faces_.value(id);
+    if (face == nullptr) {
+      face = new Avatar(kFace, room_sidebar_);
+      faces_.insert(id, face);
+    }
+    // In the order of the list, which is the order of the People tab. Before
+    // the stretch and the "+N" that close the row.
+    if (avatar_strip_->indexOf(face) != placed) {
+      avatar_strip_->removeWidget(face);
+      avatar_strip_->insertWidget(placed, face);
+      face->show();
+    }
+    face->set_name(name);
+    const bool muted = (state & kParticipantMuted) != 0;
+    face->set_ring(!muted && (state & kParticipantSpeaking) != 0);
+    // The ring is a colour and a shape; the words are here for whoever hovers
+    // to ask, the same words the list's own tooltip uses.
+    const QString words = describe_participant_state(state);
+    const QString tip = words.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, words);
+    // Only when it says something new: this runs several times a second, and
+    // setting a tooltip is an event sent to the widget whether or not the
+    // words changed.
+    if (face->toolTip() != tip) {
+      face->setToolTip(tip);
+    }
+    ++placed;
+  }
+
+  for (auto it = faces_.begin(); it != faces_.end();) {
+    if (present.contains(it.key())) {
+      ++it;
+      continue;
+    }
+    avatar_strip_->removeWidget(it.value());
+    it.value()->deleteLater();
+    it = faces_.erase(it);
+  }
+
+  if (more_faces_ == nullptr) {
+    more_faces_ = new QLabel(room_sidebar_);
+    theme::set_role(more_faces_, theme::TextRole::Caption);
+    avatar_strip_->addWidget(more_faces_);
+  }
+  more_faces_->setText(QStringLiteral("+%1").arg(overflow));
+  more_faces_->setVisible(overflow > 0);
 }
 
 bool MainWindow::announce_arrivals(const QStringList& names) {
@@ -2220,7 +2930,43 @@ void MainWindow::apply_link(int round_trip_ms, bool connected, bool attempting, 
   show_link_quality();
 }
 
+void MainWindow::refresh_server_stat() {
+  // The same three answers the status bar's indicator gives, said large on
+  // the lobby's card. Worked out from the same two members rather than from
+  // the indicator's text, so the two cannot drift into saying different
+  // things about one measurement.
+  if (link_connected_ == 0) {
+    stat_server_->set_value(QStringLiteral("offline"));
+    stat_server_->set_status(QStringLiteral("not answering"), StatCard::Tone::Poor);
+    return;
+  }
+  if (link_round_trip_ms_ < 0) {
+    stat_server_->set_value(QStringLiteral("–"));
+    stat_server_->set_status(link_connected_ == 1 ? QStringLiteral("online, measuring")
+                                                  : QStringLiteral("looking for it"));
+    return;
+  }
+  const auto measured = client::app::quality_of(std::chrono::milliseconds(link_round_trip_ms_));
+  StatCard::Tone tone = StatCard::Tone::Neutral;
+  switch (measured) {
+    case client::app::NetworkQuality::Good:
+      tone = StatCard::Tone::Good;
+      break;
+    case client::app::NetworkQuality::Fair:
+      tone = StatCard::Tone::Fair;
+      break;
+    case client::app::NetworkQuality::Poor:
+      tone = StatCard::Tone::Poor;
+      break;
+    case client::app::NetworkQuality::Unknown:
+      break;
+  }
+  stat_server_->set_value(QStringLiteral("%1 ms").arg(link_round_trip_ms_));
+  stat_server_->set_status(from_utf8(client::app::to_string(measured)), tone);
+}
+
 void MainWindow::show_link_quality() {
+  refresh_server_stat();
   if (link_connected_ == 0) {
     // The server is not there, or has gone: the socket was refused, or
     // dropped and is being retried. Red, and the filled dot, because this is
@@ -2331,14 +3077,27 @@ void MainWindow::apply_error(const QString& code, const QString& message) {
     show_login_error(text);
     return;
   }
-  QMessageBox::warning(this, QStringLiteral("PartyShare"), text);
+  // While the form for a new room is up, whatever went wrong is about what is
+  // in it, and it is said there - where the name can be changed - rather than
+  // on the page behind a dialog that is in the way of it.
+  if (create_dialog_->isVisible()) {
+    create_form_->show_error(text);
+    return;
+  }
+  // A notification, where this used to be a box with an OK button. A box
+  // stops whatever was being done until it is dismissed, which is a lot to
+  // ask of somebody mid-call for "someone else is already sharing"; a
+  // notification says the same and keeps out of the way. How long it stays is
+  // toast_lifetime_ms's to decide.
+  notify(ToastKind::Error, text);
 }
 
 void MainWindow::apply_room_created(const QString& room_id) {
-  room_id_->setText(room_id);
   // The name belongs to the room that now exists. Left in the field, it would
   // quietly become the name of the next room created from this window.
   room_name_->clear();
+  // The form has its answer, which is what it was kept open for.
+  create_dialog_->accept();
 
   // Not from the administration panel. A persistent room is pre-created there
   // for other people to use later, and joining it would take the administrator
@@ -2351,12 +3110,12 @@ void MainWindow::apply_room_created(const QString& room_id) {
   // Everywhere else, created and entered in one movement. Asking someone to
   // press a second button to walk into the room they just made is a step with
   // no decision in it.
-  on_join_room();
+  join_room(room_id);
 }
 
 void MainWindow::apply_screen_share(const QString& user_id) {
   if (user_id.isEmpty()) {
-    sharing_label_->clear();
+    set_sharing_text(QString{});
     screen_view_->set_placeholder(QStringLiteral("nobody is sharing a screen"));
     // Closed rather than cleared. Whoever was sharing has stopped, or has left
     // the room, and the frames already inside the decoder are still on their
@@ -2370,8 +3129,8 @@ void MainWindow::apply_screen_share(const QString& user_id) {
   const QString name = participant_name(user_id);
 
   const bool is_me = user_id == QString::fromStdString(session_.local_user().id);
-  sharing_label_->setText(is_me ? QStringLiteral("you are sharing")
-                                : QStringLiteral("%1 is sharing").arg(name));
+  set_sharing_text(is_me ? QStringLiteral("You are sharing")
+                         : QStringLiteral("%1 is sharing").arg(name));
 
   // Nobody receives their own screen back, so while you are the one sharing
   // this panel stays empty. Saying that nobody is sharing would be wrong in
@@ -2383,6 +3142,13 @@ void MainWindow::apply_screen_share(const QString& user_id) {
     screen_view_->set_receiving(true);
   }
   refresh_controls();
+}
+
+void MainWindow::set_sharing_text(const QString& text) {
+  sharing_label_->setText(text);
+  // Hidden when there is nothing to say. A chip is a filled shape, and an
+  // empty one is a small coloured lozenge in the header about nothing.
+  sharing_label_->setVisible(!text.isEmpty());
 }
 
 QString MainWindow::participant_name(const QString& user_id) const {
@@ -2431,12 +3197,24 @@ void MainWindow::enter_fullscreen() {
   margins_before_fullscreen_ = room_column_->contentsMargins();
 
   room_header_->hide();
-  room_controls_->hide();
   room_sidebar_->hide();
+  sidebar_->hide();
   statusBar()->hide();
   room_column_->setContentsMargins(0, 0, 0, 0);
   screen_view_->set_edge_to_edge(true);
+  // The call controls stay. They used to go with everything else, which left
+  // Esc as the only thing a person in full screen could do; floating, they
+  // cost the picture nothing - they slide away when the pointer is still and
+  // come back when it moves. See wake_dock.
+  fullscreen_button_->set_icon(Icon::ExitFullscreen);
+  fullscreen_button_->setToolTip(QStringLiteral("Leave full screen (Esc)"));
+  // The focus was in the message field, which has just been hidden, and Qt
+  // hands a hidden widget's focus to the next thing in the tab order - which
+  // is the first of the call controls. Parked on the stage instead: the
+  // controls only stay up while the keyboard is among them on purpose.
+  room_stage_->setFocus(Qt::OtherFocusReason);
   showFullScreen();
+  wake_dock();
 
   leave_fullscreen_action_->setEnabled(true);
   // The one thing that has to be said, said the only way left to say it: the
@@ -2456,12 +3234,19 @@ void MainWindow::leave_fullscreen() {
   // to the person who maximized it.
   setWindowState(before_fullscreen_ & ~Qt::WindowFullScreen);
   statusBar()->show();
+  sidebar_->show();
   room_header_->show();
-  room_controls_->show();
   room_sidebar_->show();
   room_column_->setContentsMargins(margins_before_fullscreen_);
   room_body_->setSizes(splitter_before_fullscreen_);
   screen_view_->set_edge_to_edge(false);
+  fullscreen_button_->set_icon(Icon::Fullscreen);
+  fullscreen_button_->setToolTip(
+      QStringLiteral("Watch the shared screen full screen. Esc, F11 or a double click on the "
+                     "picture brings the room back."));
+  // Back where typing lands in a room, which is where it was taken from.
+  chat_input_->setFocus(Qt::OtherFocusReason);
+  wake_dock();
 }
 
 void MainWindow::shake() {
@@ -2712,6 +3497,13 @@ void MainWindow::append_chat_line(const QString& line) {
   if (was_at_bottom) {
     chat_view_->scrollToBottom();
   }
+
+  // Said on the tab when the conversation is not the tab that is up, so that
+  // looking at the list of people is not a way to miss being spoken to.
+  if (side_tabs_->currentIndex() != kChatTab) {
+    ++unread_chat_;
+    refresh_side_tabs();
+  }
 }
 
 void MainWindow::apply_kicked(const QString& reason) {
@@ -2732,7 +3524,8 @@ void MainWindow::apply_kicked(const QString& reason) {
 }
 
 void MainWindow::apply_restrictions(const QString& name, const QString& by_name,
-                                    const QString& summary, const QString& reason, bool is_us) {
+                                    const QString& summary, const QString& reason, bool is_us,
+                                    bool by_us) {
   // The controls first. Whether the microphone, the share button and the chat
   // box are usable is read off the session, and the session is already in step
   // with the server by the time this runs.
@@ -2742,13 +3535,15 @@ void MainWindow::apply_restrictions(const QString& name, const QString& by_name,
   const QString by = by_name.isEmpty() ? QStringLiteral("an administrator") : by_name;
 
   if (!is_us) {
-    status_->setText(summary.isEmpty()
-                         ? QStringLiteral("%1 lifted the restrictions on %2").arg(by, who)
-                         : QStringLiteral("%1 restricted %2: %3").arg(by, who, summary));
+    // See apply_forced_mute for why the administrator's own copy is plain
+    // news and everybody else's waits.
+    notify(by_us ? ToastKind::Info : ToastKind::Moderation,
+           summary.isEmpty() ? QStringLiteral("%1 lifted the restrictions on %2").arg(by, who)
+                             : QStringLiteral("%1 restricted %2: %3").arg(by, who, summary));
     return;
   }
 
-  // Being told about somebody else is a line on the status bar. Being told
+  // Being told about somebody else is a notification. Being told
   // about yourself is a window, because it is the answer to the question the
   // person is about to ask about a control that stopped working.
   if (summary.isEmpty()) {
@@ -2802,16 +3597,28 @@ void MainWindow::apply_notice_sent(const QString& user_id) {
   // On the interface thread, which is what makes the panel's account list safe
   // to read here. See the callback that queued this.
   const QString to = admin_panel_ != nullptr ? admin_panel_->label_for(user_id) : user_id;
-  status_->setText(QStringLiteral("Message delivered to %1").arg(to));
+  notify(ToastKind::Success, QStringLiteral("Message delivered to %1").arg(to));
 }
 
-void MainWindow::apply_forced_mute(const QString& name, const QString& by_name, bool muted) {
+void MainWindow::apply_forced_mute(const QString& name, const QString& by_name, bool muted,
+                                   bool by_us) {
   refresh_controls();
 
   const QString who = name.isEmpty() ? QStringLiteral("Somebody") : name;
   const QString by = by_name.isEmpty() ? QStringLiteral("an administrator") : by_name;
-  status_->setText(muted ? QStringLiteral("%1 was muted by %2").arg(who, by)
-                         : QStringLiteral("%1 was unmuted by %2").arg(who, by));
+  // A notification of the kind that waits to be dismissed. It used to be a
+  // line in the status bar, which nobody watching a shared screen was looking
+  // at; and it is not allowed to come and go in four seconds either, because
+  // a voice that stops with no explanation on screen reads as a fault in the
+  // call. See toast_lifetime_ms.
+  //
+  // Except on the window of whoever did it. There it is not news, it is the
+  // answer to a click made a moment ago, and an administrator working down a
+  // list would be dismissing one of these for every person on it. Theirs
+  // leaves by itself, like any other confirmation.
+  notify(by_us ? ToastKind::Info : ToastKind::Moderation,
+         muted ? QStringLiteral("%1 was muted by %2").arg(who, by)
+               : QStringLiteral("%1 was unmuted by %2").arg(who, by));
 }
 
 void MainWindow::refresh_room_title() {
@@ -2824,16 +3631,17 @@ void MainWindow::refresh_room_title() {
   // A room nobody named carries its own identifier as its name, so showing
   // both would read "8F42A1 (8F42A1)". The same line covers a name we have not
   // been told yet, which is what the first moments after a join look like.
-  QString title = name.isEmpty() || name == id ? QStringLiteral("Room: %1").arg(id)
-                                               : QStringLiteral("%1 - %2").arg(name, id);
+  room_header_->set_title(name.isEmpty() || name == id ? QStringLiteral("Room %1").arg(id) : name);
+  // The code on its own, on the button that copies it: what is on the button
+  // is exactly what lands on the clipboard.
+  copy_room_button_->setText(id);
   // How many are in and how many fit, from the same list. The list is
-  // broadcast on every arrival, so this is as current as the participant
-  // column below it, and it is the number to read out to somebody asking
-  // whether they can still join.
-  if (const QString people = room_people_.value(id); !people.isEmpty()) {
-    title += QStringLiteral(" · %1 people").arg(people);
-  }
-  room_title_->setText(title);
+  // broadcast on every arrival, so this is as current as the People tab, and
+  // it is the number to read out to somebody asking whether they can still
+  // join.
+  const QString people = room_people_.value(id);
+  room_people_label_->setText(people.isEmpty() ? QString{}
+                                               : QStringLiteral("%1 people").arg(people));
 }
 
 void MainWindow::show_page() {
@@ -2869,16 +3677,62 @@ void MainWindow::go_to_page(int index) {
   }
   pages_->setCurrentIndex(index);
 
+  // The rail belongs to somebody who is signed in: on the sign-in page there
+  // is nowhere to go and nobody to show a badge for. And it says where the
+  // window is now - told here, the one place every change of page passes
+  // through, rather than by the rail's own buttons when they are pressed.
+  sidebar_->setVisible(index != kLoginPage && !fullscreen_);
+  sidebar_->set_current(index == kAdminPage ? kAdminDestination : kRoomsDestination);
+
   // Arriving at the home page asks for the list, which covers both ways of
   // getting here: signing in, and coming back out of a call. The server pushes
   // it after that, whenever a room appears or is closed, so this is the only
   // place that has to ask.
   if (index == kHomePage) {
     (void)session_.list_rooms();
+    // And the box starts empty. It doubles as the filter over the cards, and
+    // the code of the room that was just left would otherwise still be in it,
+    // narrowing the lobby to the one room somebody has just walked out of.
+    room_id_->clear();
+    // And it is where typing lands. Coming out of a room, the focus was in a
+    // message field that has just been hidden, and Qt hands it to whatever
+    // is next in the tab order - which can be a notification still waiting
+    // to be dismissed, one press of the space bar from being sent away
+    // unread.
+    room_id_->setFocus();
+  }
+  if (index == kRoomPage) {
+    // A room is entered on the conversation, with nothing marked unread: the
+    // history that arrives with the join is not news.
+    unread_chat_ = 0;
+    refresh_side_tabs();
+    wake_dock();
+    // Where typing should land in a room is the conversation. Left to Qt the
+    // focus goes to the first thing in the tab order, which is the button
+    // that copies the room code - lit up as though it were the point of the
+    // page, and one press of the space bar from doing something.
+    chat_input_->setFocus();
+  }
+
+  // A notification that waits to be dismissed is still up when the page under
+  // it is replaced, and the page that arrives is drawn after it: what was left
+  // of an administrator's notice from the room was its top edge, showing
+  // between the lobby's header and the cards that covered the rest. Put back
+  // on top here, and again once the fade below has finished with the page.
+  toasts_->bring_to_front();
+
+  // A release that was announced during a call has been waiting for this:
+  // any page that is not the room is a moment to ask. Shortly after, so that
+  // the page somebody was sent to is seen before the dialog over it.
+  if (update_pending_ && index != kRoomPage) {
+    QTimer::singleShot(kUpdateSettleMs, this, &MainWindow::offer_update);
   }
 
   QWidget* page = pages_->widget(index);
-  if (page == nullptr) {
+  // With animations off the page is simply there, which the stack has already
+  // seen to: no effect is made, so none has to be taken off again.
+  const int duration = theme::motion::duration(kPageFadeMs);
+  if (page == nullptr || duration == 0) {
     return;
   }
 
@@ -2887,7 +3741,7 @@ void MainWindow::go_to_page(int index) {
   page->setGraphicsEffect(fade);
 
   auto* animation = new QPropertyAnimation(fade, "opacity", page);
-  animation->setDuration(kPageFadeMs);
+  animation->setDuration(duration);
   animation->setStartValue(0.0);
   animation->setEndValue(1.0);
   animation->setEasingCurve(QEasingCurve::OutCubic);
@@ -2900,7 +3754,13 @@ void MainWindow::go_to_page(int index) {
   // Queued, so the effect is deleted on the next turn of the event loop rather
   // than from inside the signal of the animation that is driving it.
   connect(
-      animation, &QPropertyAnimation::finished, this, [page] { page->setGraphicsEffect(nullptr); },
+      animation, &QPropertyAnimation::finished, this,
+      [this, page] {
+        page->setGraphicsEffect(nullptr);
+        // The effect drew the page from an offscreen copy of itself, over
+        // whatever was in front of it.
+        toasts_->bring_to_front();
+      },
       Qt::QueuedConnection);
 
   animation->start(QAbstractAnimation::DeleteWhenStopped);
@@ -2921,9 +3781,11 @@ void MainWindow::refresh_controls() {
   create_button_->setEnabled(authenticated);
   join_button_->setEnabled(authenticated);
   // The server is what actually decides, and it re-reads the role on every
-  // administrative message. This only decides whether the door is visible,
-  // and the door is in the room.
-  admin_button_->setVisible(in_call && session_.is_admin());
+  // administrative message. This only decides whether the door is visible.
+  // The door is on the rail, so it is there from the list of rooms as well as
+  // from inside one: closing a room nobody is in should not need walking into
+  // another first.
+  admin_button_->setVisible(authenticated && session_.is_admin());
 
   // What an administrator has taken away from this account, which the session
   // keeps in step with the server. The server refuses each of these anyway;
@@ -2939,8 +3801,12 @@ void MainWindow::refresh_controls() {
     const QSignalBlocker blocker(mute_button_);
     mute_button_->setChecked(session_.muted());
   }
-  mute_button_->setText(session_.muted() ? QStringLiteral("Unmute microphone")
-                                         : QStringLiteral("Mute microphone"));
+  // The button is an icon, so its name is what the tooltip and a screen
+  // reader say - and the icon itself changes with the state: a microphone,
+  // or a microphone struck through on amber.
+  const QString mute_name =
+      session_.muted() ? QStringLiteral("Unmute microphone") : QStringLiteral("Mute microphone");
+  mute_button_->setAccessibleName(mute_name);
   // A forced mute is not a button that turned itself off: it is one that will
   // not turn back on. Disabled rather than left clickable and refused, which
   // would leave the microphone looking like it had failed.
@@ -2950,7 +3816,7 @@ void MainWindow::refresh_controls() {
   // be pressed in the lobby would promise a mute the join throws away.
   mute_button_->setEnabled(in_call && !restrictions.muted);
   mute_button_->setToolTip(
-      restrictions.muted ? QStringLiteral("An administrator has muted this account.") : QString());
+      restrictions.muted ? QStringLiteral("An administrator has muted this account.") : mute_name);
 
   const bool sharing = session_.sharing_screen();
   const std::string sharer = session_.screen_sharer();
@@ -2968,7 +3834,8 @@ void MainWindow::refresh_controls() {
     const QSignalBlocker blocker(share_button_);
     share_button_->setChecked(sharing);
   }
-  share_button_->setText(sharing ? QStringLiteral("Stop sharing") : QStringLiteral("Share screen"));
+  share_button_->set_label(sharing ? QStringLiteral("Stop sharing")
+                                   : QStringLiteral("Share screen"));
   share_button_->setToolTip(
       restrictions.screen_share_blocked
           ? QStringLiteral("An administrator has blocked screen sharing for this account.")
@@ -2997,6 +3864,17 @@ void MainWindow::refresh_controls() {
   chat_input_->setPlaceholderText(restrictions.silenced
                                       ? QStringLiteral("An administrator has silenced you")
                                       : QStringLiteral("Message"));
+  // The whole sentence for whoever hovers: the field is as narrow as the
+  // panel, and a placeholder that does not fit is cut at "silenc...".
+  chat_input_->setToolTip(restrictions.silenced
+                              ? QStringLiteral("An administrator has silenced you in the chat.")
+                              : QString());
+
+  // Last, because everything above can change how wide the controls are - a
+  // label, a button appearing - and whether there is a picture for them to
+  // get out of the way of.
+  place_dock(false);
+  wake_dock();
 }
 
 }  // namespace dv::ui

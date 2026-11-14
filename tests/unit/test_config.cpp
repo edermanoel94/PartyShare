@@ -520,6 +520,33 @@ TEST(ConfigIni, ReadsWhetherTheRoomChimeIsOn) {
   EXPECT_TRUE(on.value().ui.room_sounds);
 }
 
+TEST(ConfigIni, ReadsWhichColoursTheInterfaceWears) {
+  // Written by the settings dialog, like the chime above: a build that cannot
+  // read it back is a dark window that turns white at the next launch.
+  EXPECT_EQ(Config{}.ui.theme, "system");
+  for (const char* const word : {"system", "light", "dark"}) {
+    const auto parsed =
+        dv::config::parse_ini(std::string("[ui]\ntheme = ") + word + "\n", Config{});
+    ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+    EXPECT_EQ(parsed.value().ui.theme, word);
+  }
+
+  // A word nobody knows is refused where it is read, not carried as far as the
+  // window and quietly drawn as the default.
+  EXPECT_FALSE(dv::config::parse_ini("[ui]\ntheme = sepia\n", Config{}).ok());
+
+  const auto json = dv::config::parse_json(R"({"ui": {"theme": "dark"}})", Config{});
+  ASSERT_TRUE(json.ok()) << json.error().message;
+  EXPECT_EQ(json.value().ui.theme, "dark");
+}
+
+TEST(ConfigIni, ReadsWhetherTheInterfaceAnimates) {
+  EXPECT_TRUE(Config{}.ui.animations);
+  const auto off = dv::config::parse_ini("[ui]\nanimations = false\n", Config{});
+  ASSERT_TRUE(off.ok()) << off.error().message;
+  EXPECT_FALSE(off.value().ui.animations);
+}
+
 TEST(ConfigIni, AFileThatSwitchedTheUpdateCheckOffStillLoads) {
   // The box in Settings that wrote this key is gone and the check always runs,
   // but a config.ini written while the box existed has to go on loading: a

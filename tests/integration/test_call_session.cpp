@@ -686,6 +686,42 @@ TEST_F(CallSessionTest, AWrongPasswordCanBeFollowedByTheRightOne) {
       << "the right password after a wrong one did not authenticate";
 }
 
+// What a refused password left behind. The server says no and keeps the socket,
+// and the session went on holding the credentials it had been refused with and
+// calling itself "connecting" - for good, since nothing was ever going to
+// answer. Three things followed from that on the login screen, and this is all
+// three: the status bar said "connecting" under an error about a password, the
+// Test button answered "the server is tested from the sign-in screen, not from
+// a session" to somebody looking at the sign-in screen with no session, and
+// the next socket to open - which is the one Test opens - would have sent the
+// refused password again by itself.
+TEST_F(CallSessionTest, ARefusedSignInLeavesNobodySigningIn) {
+  Client& ana = add("ana");
+
+  ASSERT_TRUE(ana.session().connect_and_authenticate("ana", "wrong").ok());
+  ASSERT_TRUE(wait_until([&] { return !ana.errors().empty(); }))
+      << "the session never reported the refusal";
+  EXPECT_EQ(ana.errors().front().code, "unauthorized");
+
+  // The attempt is over, and the session says so.
+  EXPECT_TRUE(wait_until([&] { return ana.last_state() == CallSession::State::Idle; }))
+      << "a refused sign-in was left saying it was still connecting";
+
+  // So the server can be tested, which closes that socket and opens another.
+  ASSERT_TRUE(ana.session().retest_server().ok())
+      << "the Test button was refused after a refused sign-in";
+  ASSERT_TRUE(wait_until([&] {
+    return ana.last_link().connected && ana.last_link().round_trip.has_value();
+  })) << "the retest never reported a round trip on the new socket";
+
+  // And nothing was sent on the new socket but the probe. A second refusal
+  // here would be the wrong password going out again with nobody pressing
+  // anything, which against a server that counts attempts is a lock-out.
+  EXPECT_FALSE(wait_until([&] { return ana.errors().size() > 1; }, 500ms))
+      << "the refused password was sent again when the socket came back";
+  EXPECT_TRUE(ana.session().local_user().id.empty());
+}
+
 TEST_F(CallSessionTest, ProbingBeforeSigningInMeasuresTheServer) {
   // The login screen asks this before anybody has typed anything: is the
   // server there, and how far away is it.

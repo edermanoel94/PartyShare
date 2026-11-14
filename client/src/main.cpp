@@ -277,7 +277,13 @@ int run(int argc, char* argv[]) {
   // Before the first widget exists. A palette installed afterwards reaches
   // every widget only because Qt re-polishes them, and the ones that read a
   // colour in their constructor would already have read the wrong one.
-  dv::ui::theme::apply(application);
+  //
+  // The configuration refused any word but the three before this runs, so the
+  // fallback is the impossible case answered the way the file's default is.
+  dv::ui::theme::motion::set_enabled(config.ui.animations);
+  dv::ui::theme::apply(
+      application,
+      dv::ui::theme::parse_mode(config.ui.theme).value_or(dv::ui::theme::Mode::System));
 
   // Before the first room can be joined, which is the only thing that would
   // ring it. The settings dialog moves this again while the program runs; the
@@ -374,8 +380,8 @@ int run(int argc, char* argv[]) {
                    &dv::ui::MainWindow::announce_update);
   // After show(), and on purpose: nothing about asking GitHub a question may
   // come between starting the program and seeing it. The first request is on a
-  // delay of its own besides, and the answer, if there is one, only ever
-  // rewrites a line in the status bar.
+  // delay of its own besides, and the answer, if there is one, is a line in
+  // the status bar and a question the window asks when nobody is in a call.
   updates.start();
   if (!config.ui.check_for_updates) {
     // The key that used to switch this off is still read, so that a file

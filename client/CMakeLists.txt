@@ -52,6 +52,16 @@ else()
   set(dv_attention_sources src/ui/attention_stub.cpp)
 endif()
 
+# The colour of a window's title bar is the system's to draw, and Windows is
+# the one of the three that can be asked to draw it dark while the desktop is
+# light - which is what a theme chosen in Settings needs. See
+# client/src/ui/theme.hpp.
+if(WIN32)
+  set(dv_theme_sources src/ui/theme_windows.cpp)
+else()
+  set(dv_theme_sources src/ui/theme_stub.cpp)
+endif()
+
 # What this process costs the machine, for the metrics window. Reading it is
 # a platform API on every platform; the arithmetic over two readings is not.
 # See client/src/app/process_usage.hpp.
@@ -256,6 +266,70 @@ if(APPLE)
     MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
+# The part of the interface that needs no session to exist: the theme, the
+# component library of docs/17-design-system.md, the two views that draw
+# their own rows, and the question about a new release with the functions
+# that read one out of GitHub's answer. A library of its own for the reason dv_client_core is one:
+# it is what lets the tests build a widget, press it and look at what it did,
+# without starting the program. See tests/ui.
+#
+# The components know the theme and nothing else. None of them may include a
+# header from network/ or media/, or from app/ beyond the one pure function
+# the chat view finds links with - what they show is handed to them.
+qt_add_library(dv_client_widgets STATIC
+  ${dv_theme_sources}
+  src/ui/chat_view.cpp
+  src/ui/chat_view.hpp
+  src/ui/components/app_dialog.cpp
+  src/ui/components/app_dialog.hpp
+  src/ui/components/app_header.cpp
+  src/ui/components/app_header.hpp
+  src/ui/components/app_sidebar.cpp
+  src/ui/components/app_sidebar.hpp
+  src/ui/components/avatar.cpp
+  src/ui/components/avatar.hpp
+  src/ui/components/buttons.cpp
+  src/ui/components/buttons.hpp
+  src/ui/components/data_table.cpp
+  src/ui/components/data_table.hpp
+  src/ui/components/empty_state.cpp
+  src/ui/components/empty_state.hpp
+  src/ui/components/floating_bar.cpp
+  src/ui/components/floating_bar.hpp
+  src/ui/components/icon_button.cpp
+  src/ui/components/icon_button.hpp
+  src/ui/components/icons.cpp
+  src/ui/components/icons.hpp
+  src/ui/components/search_input.cpp
+  src/ui/components/search_input.hpp
+  src/ui/components/stat_card.cpp
+  src/ui/components/stat_card.hpp
+  src/ui/components/toast.cpp
+  src/ui/components/toast.hpp
+  src/ui/release_info.cpp
+  src/ui/release_info.hpp
+  src/ui/table.cpp
+  src/ui/table.hpp
+  src/ui/theme.cpp
+  src/ui/theme.hpp
+  src/ui/update_dialog.cpp
+  src/ui/update_dialog.hpp
+)
+add_library(dv::client_widgets ALIAS dv_client_widgets)
+
+target_link_libraries(dv_client_widgets PUBLIC
+  dv::client_core
+  Qt6::Widgets
+)
+if(WIN32)
+  # dwmapi is the one call that asks for a dark title bar. Part of Windows;
+  # nothing is downloaded for it. See client/src/ui/theme_windows.cpp.
+  target_link_libraries(dv_client_widgets PRIVATE dwmapi)
+endif()
+
+dv_set_target_warnings(dv_client_widgets)
+dv_enable_sanitizers(dv_client_widgets)
+
 qt_add_executable(dv_client
   ${dv_client_resources}
   ${dv_sound_sources}
@@ -268,8 +342,6 @@ qt_add_executable(dv_client
   src/ui/admin_panel.cpp
   src/ui/admin_panel.hpp
   src/ui/attention.hpp
-  src/ui/chat_view.cpp
-  src/ui/chat_view.hpp
   src/ui/chimes.cpp
   src/ui/chimes.hpp
   src/ui/elided_label.cpp
@@ -288,15 +360,15 @@ qt_add_executable(dv_client
   src/ui/participant_delegate.hpp
   src/ui/password_dialog.cpp
   src/ui/password_dialog.hpp
+  # A Qt Designer form. Listed so it shows in an IDE and so a change to it
+  # rebuilds; AUTOUIC, which qt_standard_project_setup turns on, finds it by
+  # the `#include "ui_password_dialog.h"` in the .cpp beside it.
+  src/ui/password_dialog.ui
   src/ui/sound.hpp
   src/ui/screen_view.cpp
   src/ui/screen_view.hpp
   src/ui/settings_dialog.cpp
   src/ui/settings_dialog.hpp
-  src/ui/table.cpp
-  src/ui/table.hpp
-  src/ui/theme.cpp
-  src/ui/theme.hpp
   src/ui/update_checker.cpp
   src/ui/update_checker.hpp
 )
@@ -314,7 +386,7 @@ endforeach()
 # The chevrons the stylesheet draws into combo boxes and spin boxes, at the
 # three densities Qt looks for. See assets/ui/make_arrows.py.
 set(dv_client_ui_images)
-foreach(dv_chevron chevron-down chevron-up)
+foreach(dv_chevron chevron-down chevron-up check)
   foreach(dv_density "" "@2x" "@3x")
     list(APPEND dv_client_ui_images
       ${CMAKE_SOURCE_DIR}/assets/ui/${dv_chevron}${dv_density}.png)
@@ -342,6 +414,7 @@ qt_add_resources(dv_client "dv_client_assets"
 
 target_link_libraries(dv_client PRIVATE
   dv::client_core
+  dv::client_widgets
   Qt6::Network
   Qt6::Widgets
 )

@@ -71,6 +71,8 @@ class SettingsDialog : public QDialog {
   void on_voice_gate_changed();
   void on_screen_volume_changed(int percent);
   void on_room_sounds_changed(bool on);
+  void on_theme_changed(int index);
+  void on_animations_changed(bool on);
   void on_save();
 
   // Not redundant: the section above is `private slots:`, which Qt's moc
@@ -191,6 +193,11 @@ class SettingsDialog : public QDialog {
   /// Beside the devices rather than under the screen settings, because it is
   /// about what this machine plays and not about what a share carries.
   QCheckBox* room_sounds_ = nullptr;
+  /// Follow the system, light or dark: `[ui] theme`. Applied to every window
+  /// already open the moment it changes. See ui/theme.hpp.
+  QComboBox* theme_ = nullptr;
+  /// `[ui] animations`.
+  QCheckBox* animations_ = nullptr;
   QComboBox* monitor_ = nullptr;
   /// None, everything but this client, or one application.
   QComboBox* screen_audio_ = nullptr;

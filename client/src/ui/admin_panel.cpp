@@ -34,6 +34,7 @@
 #include <QVBoxLayout>
 
 #include "ui/account_delegate.hpp"
+#include "ui/components/app_dialog.hpp"
 #include "ui/table.hpp"
 #include "ui/theme.hpp"
 
@@ -67,6 +68,10 @@ constexpr int kSessionConnectedColumn = 4;
 /// Carried on a session row's first cell beside kIdRole, which holds the
 /// session: the account it belongs to, which is what ending it names, and the
 /// state it was drawn in, which is what decides whether it can be.
+/// How wide the form for a new account opens: room for a username and a
+/// display name to be read back whole before they are sent.
+constexpr int kNewAccountWidth = 400;
+
 constexpr int kSessionUserRole = Qt::UserRole + 4;
 constexpr int kSessionStateRole = Qt::UserRole + 5;
 
@@ -779,9 +784,14 @@ void AdminPanel::on_restrict(const protocol::RestrictUser& change) {
 }
 
 void AdminPanel::on_create_user() {
-  QDialog dialog(this);
-  dialog.setWindowTitle(QStringLiteral("New account"));
-  auto* form = new QFormLayout(&dialog);
+  // The frame every dialog of the program stands in, and a form at the house
+  // spacing inside it. It used to be a bare QDialog with a form layout for
+  // its only layout, which came up as narrow as its longest label plus the
+  // narrowest a field will go - four fields the width of a postage stamp, and
+  // "OK" for a button that makes an account.
+  AppDialog dialog(QStringLiteral("New account"), this);
+  dialog.setMinimumWidth(kNewAccountWidth);
+  auto* form = new AppForm(&dialog);
 
   auto* username = new QLineEdit(&dialog);
   auto* password = new QLineEdit(&dialog);
@@ -791,15 +801,14 @@ void AdminPanel::on_create_user() {
   role->addItem(QStringLiteral("User"));
   role->addItem(QStringLiteral("Administrator"));
 
-  form->addRow(QStringLiteral("Username"), username);
-  form->addRow(QStringLiteral("Password"), password);
-  form->addRow(QStringLiteral("Display name"), display_name);
-  form->addRow(QStringLiteral("Role"), role);
+  form->add_row(QStringLiteral("Username"), username);
+  form->add_row(QStringLiteral("Password"), password);
+  form->add_row(QStringLiteral("Display name"), display_name);
+  form->add_row(QStringLiteral("Role"), role);
+  dialog.body()->addWidget(form);
 
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  form->addRow(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  dialog.add_secondary(QStringLiteral("Cancel"));
+  dialog.add_primary(QStringLiteral("Create account"));
 
   if (dialog.exec() != QDialog::Accepted) {
     return;

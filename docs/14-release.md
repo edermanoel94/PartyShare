@@ -84,16 +84,44 @@ becomes a sentence:
 PartyShare 0.1.41 · 0.1.42 available
 ```
 
-The second half is a link to the release page. That is the entire feature.
-**Nothing is downloaded, nothing is executed, and nothing is written to disk.**
-A program that replaces its own signed binary is a different thing to build and
-a different thing to trust, and this one does not.
+The second half is a link to the release page, and it stays for as long as the
+window does. And the person is asked, once per release:
+
+```text
+PartyShare 0.1.42 is available
+You are running 0.1.41. People in the same room on different versions quietly
+miss what the newer one sends, so it is worth updating before your next call.
+
+                                                    [ Later ]  [ Update now ]
+```
+
+**Update now** hands the browser the address of the installer for this build —
+`partyshare-x.y.z-windows-x64.msi` on Windows, the `.dmg` on macOS — taken from
+the release's own `assets`, by its whole name. The browser downloads it; the
+person runs it. **This program downloads nothing, executes nothing, and writes
+nothing to disk.** A program that replaces its own signed binary is a different
+thing to build and a different thing to trust, and this one does not.
+
+Where the release has no installer for the build — a platform nothing is
+packaged for, or a release whose files are still being attached — the button
+says **Open the download page** instead, and opens the release. It does not
+promise an update and then show a list.
+
+**Later** closes the question and leaves the link. The same release is not asked
+about again until the program is started again.
 
 What it deliberately does not do, and why:
 
-- **It never interrupts.** No dialog, no toast, nothing to dismiss. The news can
-  arrive in the middle of a call, and a call is not the moment to hand somebody
-  a modal window about housekeeping.
+- **It never interrupts a call.** The news can arrive in the middle of one, and
+  a call is not the moment to hand somebody a modal window about housekeeping.
+  In a room it is a notification that leaves by itself, and the question is
+  asked on the way out. Under another dialog — the settings, a new room — it
+  waits for that one to be answered.
+- **It does not take a key meant for something else.** The first check is five
+  seconds after the window opens, which is when somebody is typing a password.
+  The buttons do not answer for the first moment the dialog is up, so the Enter
+  that ends the password is not the answer to a question nobody has read. Esc is
+  not held back.
 - **It says nothing to a build that is ahead of the newest release** — every
   build from `master` after a tag, and every build from a pull request. The
   alternative, treating "different" as "out of date", offers an older version to
@@ -107,10 +135,11 @@ What it deliberately does not do, and why:
   answers "is this even switched on". The ones after it are at `debug`, which
   the preprocessor removes from every build that is not `Debug` — which is why
   the first one cannot be.
-- **It refuses a link that is not `https` on `github.com`.** The URL arrives
-  inside a JSON document from the network and ends as an argument to the
-  platform's "open this", so it is checked where it becomes a link; anything
-  else falls back to the releases page.
+- **It refuses a link that is not `https` on `github.com`.** Both URLs arrive
+  inside a JSON document from the network and end as an argument to the
+  platform's "open this", so they are checked before they are anything else. A
+  release page that fails falls back to the releases page; an installer that
+  fails is treated as no installer.
 
 There is no switch. Until 0.1.59 the Settings dialog had a box for it, writing
 `[ui] check_for_updates` into this user's `config.ini`, and what the switch
@@ -121,7 +150,9 @@ client's log says the line no longer does anything.
 
 The comparison lives in `shared/include/dv/core/version.hpp` and is tested in
 `tests/unit/test_version.cpp`; the request lives in
-`client/src/ui/update_checker.cpp`. The repository name is written out in both
+`client/src/ui/update_checker.cpp`; which file is offered, and the dialog that
+asks, live in `client/src/ui/release_info.cpp` and `update_dialog.cpp` and are
+tested in `tests/ui/test_update.cpp`. The repository name is written out in both
 that file and `tag.yml` — a fork that publishes its own releases changes those
 two lines.
 

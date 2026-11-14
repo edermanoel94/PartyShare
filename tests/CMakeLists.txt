@@ -257,3 +257,54 @@ if(DV_BUILD_CLIENT_MEDIA)
     DISCOVERY_TIMEOUT 60
   )
 endif()
+
+# The interface, as far as it can be tested without a session: the theme, the
+# component library and the two views that draw their own rows, which
+# client/CMakeLists.txt builds as a library for exactly this.
+#
+# Only where the interface is built at all. The sanitizer job leaves it out,
+# because Qt is not built with sanitizers, and this goes with it.
+if(TARGET dv::client_widgets)
+  # Qt's imported targets belong to the directory that found them, which was
+  # client/. Finding them again is what makes Qt6::Widgets a name here; it was
+  # already located, so this costs a lookup.
+  find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+
+  # No gtest_main: a widget needs a QApplication, and ui/main.cpp makes it.
+  add_executable(dv_ui_tests
+    ui/main.cpp
+    ui/test_chat_view.cpp
+    ui/test_components.cpp
+    ui/test_theme.cpp
+    ui/test_toast.cpp
+    ui/test_update.cpp
+    ui/ui_test.hpp
+  )
+  target_include_directories(dv_ui_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
+  target_link_libraries(dv_ui_tests PRIVATE
+    dv::client_widgets
+    Qt6::Widgets
+    GTest::gtest
+    ${DV_LIBATOMIC}
+  )
+  dv_set_target_warnings(dv_ui_tests)
+
+  # One test to ctest, and not one per case through gtest_discover_tests.
+  # Discovery runs the executable to ask it what it holds, at build time, and
+  # on Windows a program that links Qt does not start unless Qt's directory is
+  # on the path - which it is not, on a machine that merely builds. Declared
+  # this way the path can be set for the run, and a build cannot fail for want
+  # of a DLL it only needed in order to list names.
+  add_test(NAME dv_ui_tests COMMAND dv_ui_tests)
+  set_tests_properties(dv_ui_tests PROPERTIES
+    LABELS ui
+    TIMEOUT 120
+    # Nowhere to draw, on purpose: a build machine has no display, and a
+    # developer does not want windows taking the focus. See ui/main.cpp.
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+  )
+  if(WIN32)
+    set_property(TEST dv_ui_tests PROPERTY
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()

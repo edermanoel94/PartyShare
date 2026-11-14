@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QHeaderView>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <Qt>
@@ -8,6 +10,36 @@ class QTableWidget;
 class QWidget;
 
 namespace dv::ui {
+
+/// Holds a table's columns at the widths they have for as long as it lives,
+/// and hands back the ones that were sized to their contents when it goes.
+///
+/// For a refill. Every cell set tells the view that cell changed, the view
+/// asks the header where the cell is, and a header with a column to size to
+/// its contents sizes it first - by reading every row of that column. Set a
+/// cell at a time, a column is read once per cell: 156 sessions held the
+/// window still for eight seconds each time the Sessions tab was opened.
+/// Held, the columns are read once, after the last cell, when the modes come
+/// back and the header sizes them on its next pass.
+///
+/// Only a table that already has its rows pays this. Rows being added leave
+/// the view a layout to do later, and until it does it does not ask where a
+/// changed cell is; a refill of a table the same length leaves it nothing.
+class HeldColumns {
+ public:
+  explicit HeldColumns(QTableWidget* table);
+  ~HeldColumns();
+
+  HeldColumns(const HeldColumns&) = delete;
+  HeldColumns& operator=(const HeldColumns&) = delete;
+  HeldColumns(HeldColumns&&) = delete;
+  HeldColumns& operator=(HeldColumns&&) = delete;
+
+ private:
+  QHeaderView* columns_;
+  /// The mode of every column as the page set it, in column order.
+  QList<QHeaderView::ResizeMode> modes_;
+};
 
 /// Where the identifier of a row lives, the same idea as the participant list.
 ///

@@ -42,7 +42,33 @@ QTableWidget* make_table(const QStringList& headers, QWidget* parent) {
   return table;
 }
 
+HeldColumns::HeldColumns(QTableWidget* table) : columns_(table->horizontalHeader()) {
+  modes_.reserve(columns_->count());
+  for (int column = 0; column < columns_->count(); ++column) {
+    const QHeaderView::ResizeMode mode = columns_->sectionResizeMode(column);
+    modes_.push_back(mode);
+    // Only these. A stretched column is sized from the width that is left,
+    // which costs nothing to work out, and a fixed or interactive one is not
+    // sized at all.
+    if (mode == QHeaderView::ResizeToContents) {
+      columns_->setSectionResizeMode(column, QHeaderView::Interactive);
+    }
+  }
+}
+
+HeldColumns::~HeldColumns() {
+  // Given back as they were. The header does not size a column the moment it
+  // is handed back but on its next pass, once for all of them, which is the
+  // one reading of the rows this whole exercise is for.
+  for (int column = 0; column < modes_.size() && column < columns_->count(); ++column) {
+    if (columns_->sectionResizeMode(column) != modes_.at(column)) {
+      columns_->setSectionResizeMode(column, modes_.at(column));
+    }
+  }
+}
+
 void fill(QTableWidget* table, const QStringList& rows) {
+  const HeldColumns held(table);
   const QString selected =
       table->currentRow() >= 0 && table->item(table->currentRow(), 0) != nullptr
           ? table->item(table->currentRow(), 0)->data(kIdRole).toString()

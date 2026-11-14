@@ -355,6 +355,10 @@ qt_add_executable(dv_client
   src/ui/participant_delegate.hpp
   src/ui/password_dialog.cpp
   src/ui/password_dialog.hpp
+  # A Qt Designer form. Listed so it shows in an IDE and so a change to it
+  # rebuilds; AUTOUIC, which qt_standard_project_setup turns on, finds it by
+  # the `#include "ui_password_dialog.h"` in the .cpp beside it.
+  src/ui/password_dialog.ui
   src/ui/sound.hpp
   src/ui/screen_view.cpp
   src/ui/screen_view.hpp

@@ -1,58 +1,38 @@
 #include "ui/password_dialog.hpp"
 
-#include <QDialogButtonBox>
-#include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QVBoxLayout>
+
+// Written by uic from password_dialog.ui, which is the form itself: the three
+// fields, the sentence over them and the two buttons under them were laid out
+// in Qt Designer and are not repeated here. See docs/17-design-system.md.
+#include "ui_password_dialog.h"
 
 namespace dv::ui {
 
 PasswordDialog::PasswordDialog(QWidget* parent) : QDialog(parent) {
-  setWindowTitle(QStringLiteral("Change password"));
-  setModal(true);
+  // The form's own object is only needed for as long as it takes to build the
+  // widgets, which belong to this dialog from then on. The few this class
+  // talks to afterwards are kept by name; the rest are the form's business.
+  Ui::PasswordDialog form;
+  form.setupUi(this);
+  current_ = form.current;
+  new_ = form.fresh;
+  confirm_ = form.again;
+  hint_ = form.problem;
+  confirm_button_ = form.confirm;
 
-  auto* outer = new QVBoxLayout(this);
-  auto* form = new QFormLayout();
-
-  current_ = new QLineEdit(this);
-  current_->setEchoMode(QLineEdit::Password);
-  new_ = new QLineEdit(this);
-  new_->setEchoMode(QLineEdit::Password);
-  confirm_ = new QLineEdit(this);
-  confirm_->setEchoMode(QLineEdit::Password);
-
-  form->addRow(QStringLiteral("Current password"), current_);
-  form->addRow(QStringLiteral("New password"), new_);
-  form->addRow(QStringLiteral("Repeat new password"), confirm_);
-
-  // Said before the change rather than after it, because it is the part that
-  // surprises people: the other machines they are signed in on stop working,
-  // and so does this one. A sentence here is a decision; the same sentence on
-  // the login screen afterwards is an explanation of something already done.
-  auto* warning = new QLabel(
-      QStringLiteral("Changing the password signs you out everywhere, including here."), this);
-  warning->setWordWrap(true);
-  warning->setProperty("hint", true);
-
-  hint_ = new QLabel(QString{}, this);
-  hint_->setWordWrap(true);
-  hint_->setProperty("hint", true);
-
-  buttons_ = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-  buttons_->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Change password"));
-
-  outer->addLayout(form);
-  outer->addWidget(warning);
-  outer->addWidget(hint_);
-  outer->addWidget(buttons_);
+  // The sentence over the fields is said before the change rather than after
+  // it, because it is the part that surprises people: the other machines they
+  // are signed in on stop working, and so does this one. A sentence here is a
+  // decision; the same sentence on the login screen afterwards is an
+  // explanation of something already done. It is in the form, with the rest
+  // of the wording.
 
   connect(current_, &QLineEdit::textChanged, this, [this] { revalidate(); });
   connect(new_, &QLineEdit::textChanged, this, [this] { revalidate(); });
   connect(confirm_, &QLineEdit::textChanged, this, [this] { revalidate(); });
-  connect(buttons_, &QDialogButtonBox::accepted, this, &QDialog::accept);
-  connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
   revalidate();
 }
@@ -86,7 +66,7 @@ void PasswordDialog::revalidate() {
 
   const bool complete =
       !current.isEmpty() && !fresh.isEmpty() && again == fresh && fresh != current;
-  buttons_->button(QDialogButtonBox::Ok)->setEnabled(complete);
+  confirm_button_->setEnabled(complete);
 
   hint_->setText(problem);
   // Shown but empty, the label still takes its height and the dialog jumps by
